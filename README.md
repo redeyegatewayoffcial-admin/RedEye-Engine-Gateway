@@ -61,8 +61,8 @@ docker compose down -v   # -v removes volumes (full reset)
 
 | Phase | Description                          | Status      |
 |-------|--------------------------------------|-------------|
-| 1     | Docker Compose (Postgres/Redis/CH)   | ✅ Complete  |
-| 2     | Rust Axum proxy → OpenAI             | 🔜 Next      |
-| 3     | Redis rate limiting                  | ⏳ Planned   |
-| 4     | Async ClickHouse telemetry           | ⏳ Planned   |
-| 5     | React dashboard                      | ⏳ Planned   |
+| 1     | Docker Compose (Postgres/Redis/CH)   | ✅ Complete |
+| 2     | Rust Axum proxy → OpenAI             | ✅ Complete |
+| 3     | Redis rate limiting                  | ✅ Complete |
+| 4     | Async ClickHouse telemetry           | ✅ Complete |
+| 5     | React dashboard                      | ✅ Complete |
