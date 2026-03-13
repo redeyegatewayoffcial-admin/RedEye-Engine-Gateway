@@ -1,0 +1,64 @@
+# Phase 2: Rust Axum Proxy
+
+## Setup
+- [x] Initialize `cargo init nexus_gateway` inside `d:\Nexus_AI_Engine`
+- [x] Add all required dependencies to [Cargo.toml](file:///d:/Nexus_AI_Engine/nexus_gateway/Cargo.toml)
+
+## Project Structure
+- [x] Create [src/main.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/main.rs) (Tokio runtime + Axum router bootstrap)
+- [x] Create [src/routes.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/routes.rs) (route definitions)
+- [x] Create [src/handlers.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/handlers.rs) (proxy handler logic)
+- [x] Create [.env](file:///d:/Nexus_AI_Engine/nexus_gateway/.env) with `OPENAI_API_KEY` placeholder
+
+## Core Functionality
+- [x] POST `/v1/chat/completions` endpoint
+- [x] Extract JSON body from incoming request
+- [x] Forward request to OpenAI with API key injected
+- [x] Stream/return response back to client
+
+## Verification
+- [x] `cargo build` succeeds without errors (0 warnings, 0 errors)
+- [x] Health check `/health` → 200 OK ✅
+- [x] Proxy `/v1/chat/completions` → forwarded to OpenAI, 401 (expected with placeholder key) ✅
+
+# Phase 3: Redis Rate Limiting
+
+## Implementation
+- [/] Update [Cargo.toml](file:///d:/Nexus_AI_Engine/nexus_gateway/Cargo.toml) with `redis` and `deadpool-redis`
+- [/] Create [src/middleware/rate_limit.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/middleware/rate_limit.rs) with Lua Fixed Window algorithm
+- [/] Update [src/main.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/main.rs) to initialize connection pool and add to [AppState](file:///d:/Nexus_AI_Engine/nexus_gateway/src/main.rs#24-43)
+- [/] Update [src/routes.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/routes.rs) to apply middleware only to `/v1/chat/completions`
+
+## Verification
+- [x] `cargo build` succeeds
+- [x] Redis container is running via `docker compose`
+- [x] Health check still works
+- [x] First few requests add rate limit headers and proxy successfully
+- [x] Burst requests hit 429 once the limit is exceeded
+
+# Phase 4: Async ClickHouse Logging
+
+## Implementation
+- [x] Reorganize `docker-compose` folder structure for `infra/clickhouse`
+- [x] Create ClickHouse `request_logs` schema `init.sql`
+- [x] Add `CLICKHOUSE_URL` to `.env` and `AppState`
+- [x] Extract context (latency, model, tenant_id) in `handlers.rs`
+- [x] Spin off a detached `tokio::spawn` task to send JSONEachRow inserts over HTTP
+
+## Verification
+- [x] `docker compose up -d clickhouse postgres` succeeds
+- [x] `cargo build` succeeds
+- [x] Gateway runs and handles requests successfully
+- [x] ClickHouse receives logs in real-time (`SELECT * FROM request_logs`)
+
+# Phase 5: React Frontend Dashboard UI
+
+## Implementation
+- [x] Add `tower-http` CORS middleware to Axum
+- [x] Create `GET /v1/admin/metrics` endpoint querying ClickHouse
+- [ ] Scaffold Vite React + Tailwind application
+- [ ] Build intuitive metrics UI
+
+## Verification
+- [x] Axum server runs with new endpoint and CORS
+- [x] React UI dynamically displays ClickHouse data without CORS errors

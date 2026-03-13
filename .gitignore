@@ -1,0 +1,9 @@
+**/node_modules/
+**/target/
+**/dist/
+**/build/
+**/.env
+**/*.exe
+**/*.msi
+**/*.pdb
+mnt/

@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<!-- ===========================================================================
+     NexusAI Policy Engine - ClickHouse Custom Configuration
+     Tuned for a single-node development/staging deployment.
+     =========================================================================== -->
+<clickhouse>
+    <!-- Limit memory to 2GB in dev; raise to 80% of RAM in production -->
+    <max_server_memory_usage_to_ram_ratio>0.5</max_server_memory_usage_to_ram_ratio>
+
+    <!-- Allow async inserts to batch small writes — critical for Phase 4
+         where each request ships a log row. This prevents write amplification. -->
+    <profiles>
+        <default>
+            <async_insert>1</async_insert>
+            <async_insert_threads>4</async_insert_threads>
+            <async_insert_max_data_size>10485760</async_insert_max_data_size>
+            <async_insert_busy_timeout_ms>200</async_insert_busy_timeout_ms>
+        </default>
+    </profiles>
+
+    <!-- Structured logging for easier parsing in production -->
+    <logger>
+        <level>warning</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>500M</size>
+        <count>3</count>
+    </logger>
+</clickhouse>
