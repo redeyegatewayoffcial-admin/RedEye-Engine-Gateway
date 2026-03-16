@@ -20,9 +20,9 @@ impl ClickHouseRepo {
 
     /// Ensures the ClickHouse tables exist (idempotent DDL).
     pub async fn ensure_schema(&self) -> Result<(), String> {
-        let ddl = r#"
-            CREATE DATABASE IF NOT EXISTS RedEye_telemetry;
-
+    let statements = vec![
+        "CREATE DATABASE IF NOT EXISTS RedEye_telemetry;",
+        r#"
             CREATE TABLE IF NOT EXISTS RedEye_telemetry.agent_traces (
                 trace_id UUID, session_id UUID, parent_trace_id Nullable(UUID),
                 tenant_id String, model String, status UInt16, latency_ms UInt32,
@@ -31,7 +31,8 @@ impl ClickHouseRepo {
                 created_at DateTime DEFAULT now()
             ) ENGINE = MergeTree ORDER BY (session_id, created_at)
             TTL created_at + INTERVAL 180 DAY;
-
+        "#,
+        r#"
             CREATE TABLE IF NOT EXISTS RedEye_telemetry.compliance_audit_log (
                 trace_id UUID, session_id UUID, tenant_id String,
                 prompt_content String, response_content String, model String,
@@ -39,11 +40,13 @@ impl ClickHouseRepo {
                 created_at DateTime DEFAULT now()
             ) ENGINE = MergeTree ORDER BY (tenant_id, created_at)
             TTL created_at + INTERVAL 365 DAY;
-        "#;
+        "#,
+    ];
 
+    for stmt in statements {
         let res = self.client
-            .post(self.build_url("multiquery=1"))
-            .body(ddl)
+            .post(&self.url)
+            .body(stmt)
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -53,10 +56,11 @@ impl ClickHouseRepo {
             error!("ClickHouse schema DDL failed: {}", err);
             return Err(err);
         }
-
-        info!("ClickHouse schema verified (agent_traces + compliance_audit_log)");
-        Ok(())
     }
+
+    info!("ClickHouse schema verified (agent_traces + compliance_audit_log)");
+    Ok(())
+}
 
     /// Inserts a trace row into `agent_traces`.
     pub async fn insert_trace(&self, payload: &TraceIngestPayload) -> Result<(), String> {
