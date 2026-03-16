@@ -2,7 +2,14 @@
 name = "redeye_cache"
 version = "0.1.0"
 edition = "2024"
+resolver = "2"
 
+members = [
+    "redeye_gateway",
+    "redeye_cache",
+    "redeye_tracer",
+    "redeye_compliance",
+]
 [dependencies]
 axum = "0.8.8"
 redis = { version = "1.0.5", features = ["tokio-comp", "json", "aio"] }

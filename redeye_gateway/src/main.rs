@@ -41,6 +41,9 @@ async fn main() {
     let tracer_url = std::env::var("TRACER_URL")
         .unwrap_or_else(|_| "http://localhost:8082".to_string());
 
+    let compliance_url = std::env::var("COMPLIANCE_URL")
+        .unwrap_or_else(|_| "http://localhost:8083".to_string());
+
     let cache_url = std::env::var("CACHE_URL")
         .unwrap_or_else(|_| "http://localhost:8081".to_string());
 
@@ -73,6 +76,7 @@ async fn main() {
         rate_limit_window,
         clickhouse_url,
         tracer_url,
+        compliance_url,
     });
 
     let app: Router = api::routes::create_router(state);

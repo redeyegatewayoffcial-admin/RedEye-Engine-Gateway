@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "redeye_gateway",
+    "redeye_cache",
+    "redeye_tracer",
+    "redeye_compliance"
+]
