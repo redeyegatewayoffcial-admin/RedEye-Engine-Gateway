@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Extension, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -28,6 +28,7 @@ pub async fn health_check() -> impl IntoResponse {
 #[instrument(skip(state, body))]
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
+    Extension(trace_ctx): Extension<TraceContext>,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Response, GatewayError> {
@@ -39,14 +40,10 @@ pub async fn chat_completions(
     let raw_prompt = serde_json::to_string(&body).unwrap_or_default();
     let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("application/json");
 
-    // Extract trace context from extensions (injected by trace_context middleware)
-    let trace_ctx = headers.get("x-trace-id")
-        .and_then(|_| None) // We'll get it from extensions instead
-        .unwrap_or_else(|| TraceContext {
-            trace_id: uuid::Uuid::new_v4().to_string(),
-            session_id: headers.get("x-session-id").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string(),
-            parent_trace_id: headers.get("x-parent-trace-id").and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
-        });
+    let is_stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Delegate to use case
     let result = proxy::execute_proxy(
@@ -56,17 +53,36 @@ pub async fn chat_completions(
     // Build Axum response
     let cache_header = if result.cache_hit { "HIT" } else { "MISS" };
 
-    let response = Response::builder()
-        .status(result.status)
-        .header("content-type", &result.content_type)
-        .header("X-Cache", cache_header)
-        .body(Body::from(result.body_bytes))
-        .map_err(|e| {
-            error!(error = %e, "Failed to construct proxy response");
-            GatewayError::ResponseBuild(e.to_string())
-        })?;
+    match result.body {
+        crate::usecases::proxy::ProxyBody::Buffered(body_bytes) => {
+            let response = Response::builder()
+                .status(result.status)
+                .header("content-type", &result.content_type)
+                .header("X-Cache", cache_header)
+                .body(Body::from(body_bytes))
+                .map_err(|e| {
+                    error!(error = %e, "Failed to construct proxy response");
+                    GatewayError::ResponseBuild(e.to_string())
+                })?;
 
-    Ok(response)
+            Ok(response)
+        }
+        crate::usecases::proxy::ProxyBody::Stream(upstream_response) => {
+            let stream = upstream_response.bytes_stream();
+
+            let response = Response::builder()
+                .status(result.status)
+                .header("content-type", &result.content_type)
+                .header("X-Cache", cache_header)
+                .body(Body::from_stream(stream))
+                .map_err(|e| {
+                    error!(error = %e, "Failed to construct streaming proxy response");
+                    GatewayError::ResponseBuild(e.to_string())
+                })?;
+
+            Ok(response)
+        }
+    }
 }
 
 /// GET /v1/admin/metrics

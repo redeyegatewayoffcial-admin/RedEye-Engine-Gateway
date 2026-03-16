@@ -5,11 +5,13 @@ use tracing::info;
 /// Checks the redeye_cache microservice for a semantic cache hit.
 pub async fn lookup_cache(
     client: &Client,
+    cache_base_url: &str,
     tenant_id: &str,
     model: &str,
     raw_prompt: &str,
 ) -> Option<String> {
-    let cache_url = "http://localhost:8081/v1/cache/lookup";
+    let base = cache_base_url.trim_end_matches('/');
+    let cache_url = format!("{}/v1/cache/lookup", base);
     let payload = json!({
         "tenant_id": tenant_id,
         "model": model,
@@ -33,12 +35,14 @@ pub async fn lookup_cache(
 /// Stores a new prompt→response pair in the semantic cache (async, fire-and-forget).
 pub async fn store_in_cache(
     client: &Client,
+    cache_base_url: &str,
     tenant_id: &str,
     model: &str,
     raw_prompt: &str,
     response_content: &str,
 ) {
-    let cache_store_url = "http://localhost:8081/v1/cache/store";
+    let base = cache_base_url.trim_end_matches('/');
+    let cache_store_url = format!("{}/v1/cache/store", base);
     let payload = json!({
         "tenant_id": tenant_id,
         "model": model,

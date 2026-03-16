@@ -41,6 +41,9 @@ async fn main() {
     let tracer_url = std::env::var("TRACER_URL")
         .unwrap_or_else(|_| "http://localhost:8082".to_string());
 
+    let cache_url = std::env::var("CACHE_URL")
+        .unwrap_or_else(|_| "http://localhost:8081".to_string());
+
     let rate_limit_max: u32 = std::env::var("RATE_LIMIT_MAX_REQUESTS")
         .unwrap_or_else(|_| "60".to_string())
         .parse()
@@ -64,6 +67,7 @@ async fn main() {
     let state = Arc::new(AppState {
         http_client,
         openai_api_key,
+        cache_url,
         redis_pool,
         rate_limit_max,
         rate_limit_window,

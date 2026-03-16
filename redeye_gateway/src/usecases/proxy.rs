@@ -11,10 +11,15 @@ use crate::domain::models::{AppState, GatewayError, TraceContext};
 use crate::infrastructure::{cache_client, clickhouse_logger, openai_client};
 
 /// Result of a proxy execution — either a cached response or an upstream response.
+pub enum ProxyBody {
+    Buffered(Vec<u8>),
+    Stream(reqwest::Response),
+}
+
 pub struct ProxyResult {
     pub status: u16,
     pub content_type: String,
-    pub body_bytes: Vec<u8>,
+    pub body: ProxyBody,
     pub cache_hit: bool,
 }
 
@@ -32,7 +37,7 @@ pub async fn execute_proxy(
 
     // ── 1. Semantic Cache Lookup ────────────────────────────────────────────
     if let Some(cached_content) = cache_client::lookup_cache(
-        &state.http_client, tenant_id, model_name, raw_prompt
+        &state.http_client, &state.cache_url, tenant_id, model_name, raw_prompt
     ).await {
         let mock_response = json!({
             "id": "chatcmpl-cached",
@@ -54,7 +59,7 @@ pub async fn execute_proxy(
         return Ok(ProxyResult {
             status: 200,
             content_type: "application/json".to_string(),
-            body_bytes: bytes,
+            body: ProxyBody::Buffered(bytes),
             cache_hit: true,
         });
     }
@@ -74,7 +79,37 @@ pub async fn execute_proxy(
 
     info!(status = upstream_status, "Received response from OpenAI");
 
-    // Buffer the response for telemetry + cache storage
+    let is_streaming = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if is_streaming {
+        let latency_ms = start_time.elapsed().as_millis() as u32;
+
+        // Fire minimal async telemetry for streaming responses (no tokens/cache).
+        fire_async_telemetry(
+            state,
+            tenant_id,
+            model_name,
+            raw_prompt,
+            trace_ctx,
+            upstream_status,
+            latency_ms,
+            0,
+            false,
+            None,
+        );
+
+        return Ok(ProxyResult {
+            status: upstream_status,
+            content_type,
+            body: ProxyBody::Stream(upstream_response),
+            cache_hit: false,
+        });
+    }
+
+    // Buffer the response for telemetry + cache storage (non-streaming)
     let body_bytes = upstream_response.bytes().await.unwrap_or_default().to_vec();
     let latency_ms = start_time.elapsed().as_millis() as u32;
 
@@ -94,7 +129,7 @@ pub async fn execute_proxy(
     Ok(ProxyResult {
         status: upstream_status,
         content_type,
-        body_bytes,
+        body: ProxyBody::Buffered(body_bytes),
         cache_hit: false,
     })
 }
@@ -150,7 +185,7 @@ fn fire_async_telemetry(
 
         // 3c. Cache storage (only on successful non-cached JSON responses)
         if !cache_hit && status_code == 200 && !response_content.is_empty() {
-            cache_client::store_in_cache(&s.http_client, &tid, &model, &prompt, &response_content).await;
+            cache_client::store_in_cache(&s.http_client, &s.cache_url, &tid, &model, &prompt, &response_content).await;
         }
     });
 }
