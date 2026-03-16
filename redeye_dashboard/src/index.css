@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+  --color-redeye-dark: #030712;
+  --color-redeye-panel: #0a0a0f;
+  --color-redeye-accent: #ef4444;
+  --color-redeye-success: #10b981;
+  --color-redeye-error: #ef4444;
+}
+
+@layer base {
+  body {
+    @apply text-slate-200 antialiased min-h-screen overflow-x-hidden;
+    background: radial-gradient(ellipse at top, rgba(127, 29, 29, 0.15), #020617 50%, #000000);
+  }
+}
+
+/* Glassmorphism: Neon Red Cybersecurity */
+.glass-panel {
+  background: rgba(0, 0, 0, 0.40);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.04), 0 4px 30px rgba(0, 0, 0, 0.4);
+  border-radius: 1rem;
+}
+
+.glass-panel:hover {
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+/* Subtle Glow Pulse for Live Indicator */
+@keyframes neon-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(239, 68, 68, 0.6), 0 0 8px rgba(239, 68, 68, 0.3); }
+  50% { box-shadow: 0 0 8px rgba(239, 68, 68, 0.9), 0 0 16px rgba(239, 68, 68, 0.5); }
+}
+
+.neon-dot {
+  animation: neon-pulse 2s ease-in-out infinite;
+}
+
+/* Custom Scrollbar — Red */
+.custom-scrollbar::-webkit-scrollbar { height: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: rgba(239, 68, 68, 0.05); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(239, 68, 68, 0.25); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(239, 68, 68, 0.4); }

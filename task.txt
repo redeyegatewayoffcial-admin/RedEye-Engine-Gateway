@@ -1,14 +1,14 @@
 # Phase 2: Rust Axum Proxy
 
 ## Setup
-- [x] Initialize `cargo init nexus_gateway` inside `d:\Nexus_AI_Engine`
-- [x] Add all required dependencies to [Cargo.toml](file:///d:/Nexus_AI_Engine/nexus_gateway/Cargo.toml)
+- [x] Initialize `cargo init redeye_gateway` inside `d:\redeye_AI_Engine`
+- [x] Add all required dependencies to [Cargo.toml](file:///d:/redeye_AI_Engine/redeye_gateway/Cargo.toml)
 
 ## Project Structure
-- [x] Create [src/main.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/main.rs) (Tokio runtime + Axum router bootstrap)
-- [x] Create [src/routes.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/routes.rs) (route definitions)
-- [x] Create [src/handlers.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/handlers.rs) (proxy handler logic)
-- [x] Create [.env](file:///d:/Nexus_AI_Engine/nexus_gateway/.env) with `OPENAI_API_KEY` placeholder
+- [x] Create [src/main.rs](file:///d:/redeye_AI_Engine/redeye_gateway/src/main.rs) (Tokio runtime + Axum router bootstrap)
+- [x] Create [src/routes.rs](file:///d:/redeye_AI_Engine/redeye_gateway/src/routes.rs) (route definitions)
+- [x] Create [src/handlers.rs](file:///d:/redeye_AI_Engine/redeye_gateway/src/handlers.rs) (proxy handler logic)
+- [x] Create [.env](file:///d:/redeye_AI_Engine/redeye_gateway/.env) with `OPENAI_API_KEY` placeholder
 
 ## Core Functionality
 - [x] POST `/v1/chat/completions` endpoint
@@ -24,10 +24,10 @@
 # Phase 3: Redis Rate Limiting
 
 ## Implementation
-- [/] Update [Cargo.toml](file:///d:/Nexus_AI_Engine/nexus_gateway/Cargo.toml) with `redis` and `deadpool-redis`
-- [/] Create [src/middleware/rate_limit.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/middleware/rate_limit.rs) with Lua Fixed Window algorithm
-- [/] Update [src/main.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/main.rs) to initialize connection pool and add to [AppState](file:///d:/Nexus_AI_Engine/nexus_gateway/src/main.rs#24-43)
-- [/] Update [src/routes.rs](file:///d:/Nexus_AI_Engine/nexus_gateway/src/routes.rs) to apply middleware only to `/v1/chat/completions`
+- [/] Update [Cargo.toml](file:///d:/redeye_AI_Engine/redeye_gateway/Cargo.toml) with `redis` and `deadpool-redis`
+- [/] Create [src/middleware/rate_limit.rs](file:///d:/redeye_AI_Engine/redeye_gateway/src/middleware/rate_limit.rs) with Lua Fixed Window algorithm
+- [/] Update [src/main.rs](file:///d:/redeye_AI_Engine/redeye_gateway/src/main.rs) to initialize connection pool and add to [AppState](file:///d:/redeye_AI_Engine/redeye_gateway/src/main.rs#24-43)
+- [/] Update [src/routes.rs](file:///d:/redeye_AI_Engine/redeye_gateway/src/routes.rs) to apply middleware only to `/v1/chat/completions`
 
 ## Verification
 - [x] `cargo build` succeeds

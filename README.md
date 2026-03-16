@@ -1,4 +1,4 @@
-# NexusAI Policy Engine
+# RedEye Policy Engine
 
 Enterprise AI Gateway for regulated industries — ultra-low-latency Rust reverse proxy
 sitting between your applications and upstream LLM providers.
@@ -6,7 +6,7 @@ sitting between your applications and upstream LLM providers.
 ## Architecture
 
 ```
-[Client App] → [NexusAI Gateway :8080] → [OpenAI / Anthropic]
+[Client App] → [RedEye Gateway :8080] → [OpenAI / Anthropic]
                       │
            ┌──────────┼──────────┐
            ▼          ▼          ▼
@@ -33,23 +33,23 @@ docker compose up -d
 docker compose ps
 
 # 4. Check Postgres schema
-docker exec -it nexusai_postgres psql -U nexusai -d nexusai -c "\dt"
+docker exec -it RedEye_postgres psql -U RedEye -d RedEye -c "\dt"
 
 # 5. Check ClickHouse tables
-docker exec -it nexusai_clickhouse \
-  clickhouse-client -u nexusai --password clickhouse_secret \
-  --query "SHOW TABLES FROM nexusai_telemetry"
+docker exec -it RedEye_clickhouse \
+  clickhouse-client -u RedEye --password clickhouse_secret \
+  --query "SHOW TABLES FROM RedEye_telemetry"
 
 # 6. Ping Redis
-docker exec -it nexusai_redis redis-cli -a redis_secret ping
+docker exec -it RedEye_redis redis-cli -a redis_secret ping
 ```
 
 ### Expected output
 ```
 NAME                  STATUS
-nexusai_postgres      healthy
-nexusai_redis         healthy
-nexusai_clickhouse    healthy
+redeye_postgres      healthy
+redeye_redis         healthy
+redeye_clickhouse    healthy
 ```
 
 ### Tear down

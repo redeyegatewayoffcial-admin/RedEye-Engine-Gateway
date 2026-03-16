@@ -1,0 +1,107 @@
+//! api/handlers.rs — Thin Axum handlers that extract, delegate to use cases, and respond.
+
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+use axum::{
+    body::Body,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
+use tracing::{info, instrument, error};
+
+use crate::domain::models::{AppState, GatewayError, TraceContext};
+use crate::usecases::proxy;
+
+/// GET /health
+pub async fn health_check() -> impl IntoResponse {
+    Json(json!({
+        "status": "ok",
+        "service": "redeye_gateway",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
+/// POST /v1/chat/completions
+#[instrument(skip(state, body))]
+pub async fn chat_completions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Response, GatewayError> {
+    info!("Received chat completion request");
+
+    // Extract metadata
+    let model_name = body.get("model").and_then(|m| m.as_str()).unwrap_or("unknown").to_string();
+    let tenant_id = headers.get("x-tenant-id").and_then(|v| v.to_str().ok()).unwrap_or("anonymous").to_string();
+    let raw_prompt = serde_json::to_string(&body).unwrap_or_default();
+    let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("application/json");
+
+    // Extract trace context from extensions (injected by trace_context middleware)
+    let trace_ctx = headers.get("x-trace-id")
+        .and_then(|_| None) // We'll get it from extensions instead
+        .unwrap_or_else(|| TraceContext {
+            trace_id: uuid::Uuid::new_v4().to_string(),
+            session_id: headers.get("x-session-id").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string(),
+            parent_trace_id: headers.get("x-parent-trace-id").and_then(|v| v.to_str().ok()).map(|s| s.to_string()),
+        });
+
+    // Delegate to use case
+    let result = proxy::execute_proxy(
+        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx,
+    ).await?;
+
+    // Build Axum response
+    let cache_header = if result.cache_hit { "HIT" } else { "MISS" };
+
+    let response = Response::builder()
+        .status(result.status)
+        .header("content-type", &result.content_type)
+        .header("X-Cache", cache_header)
+        .body(Body::from(result.body_bytes))
+        .map_err(|e| {
+            error!(error = %e, "Failed to construct proxy response");
+            GatewayError::ResponseBuild(e.to_string())
+        })?;
+
+    Ok(response)
+}
+
+/// GET /v1/admin/metrics
+#[instrument(skip(state))]
+pub async fn admin_metrics(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, GatewayError> {
+    info!("Fetching live metrics from ClickHouse");
+
+    let query = "
+        SELECT 
+            count() as total_requests,
+            avg(latency_ms) as avg_latency_ms,
+            sum(tokens) as total_tokens,
+            countIf(status = 429) as rate_limited_requests
+        FROM RedEye_telemetry.request_logs
+        FORMAT JSON
+    ";
+
+    let response = state.http_client.post(&state.clickhouse_url).body(query).send().await
+        .map_err(|e| { error!(error = %e, "ClickHouse metrics failed"); GatewayError::Proxy(e) })?;
+
+    if !response.status().is_success() {
+        let err = response.text().await.unwrap_or_default();
+        error!(error = %err, "ClickHouse metrics query failed");
+        return Err(GatewayError::ResponseBuild("Metrics query failed".to_string()));
+    }
+
+    let mut clickhouse_json: Value = response.json().await
+        .map_err(|e| { error!(error = %e, "Failed to parse ClickHouse JSON"); GatewayError::ResponseBuild(e.to_string()) })?;
+
+    let row = clickhouse_json.get_mut("data")
+        .and_then(|data| data.as_array_mut())
+        .and_then(|arr| arr.pop())
+        .unwrap_or_else(|| json!({"total_requests": "0", "avg_latency_ms": 0.0, "total_tokens": "0", "rate_limited_requests": "0"}));
+
+    Ok(Json(row))
+}

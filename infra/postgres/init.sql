@@ -1,5 +1,5 @@
 -- ==============================================================================
--- NexusAI Policy Engine - PostgreSQL Schema
+-- RedEye Policy Engine - PostgreSQL Schema
 -- Runs automatically on first container boot via docker-entrypoint-initdb.d
 -- ==============================================================================
 

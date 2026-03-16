@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!-- ===========================================================================
-     NexusAI Policy Engine - ClickHouse Custom Configuration
+     RedEye Policy Engine - ClickHouse Custom Configuration
      Tuned for a single-node development/staging deployment.
      =========================================================================== -->
 <clickhouse>
