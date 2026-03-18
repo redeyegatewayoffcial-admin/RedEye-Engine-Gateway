@@ -1,46 +1,56 @@
 @import "tailwindcss";
 
+/* ─── Design Tokens ──────────────────────────────────────────────────────── */
 @theme {
-  --color-redeye-dark: #030712;
-  --color-redeye-panel: #0a0a0f;
-  --color-redeye-accent: #ef4444;
-  --color-redeye-success: #10b981;
-  --color-redeye-error: #ef4444;
+  --color-redeye-dark:    #020617;   /* slate-950 */
+  --color-redeye-panel:   #0f172a;   /* slate-900 */
+  --color-redeye-primary: #6366f1;   /* indigo-500 */
+  --color-redeye-success: #10b981;   /* emerald-500 */
+  --color-redeye-danger:  #f43f5e;   /* rose-500 */
 }
 
+/* ─── Dark Mode ──────────────────────────────────────────────────────────── */
+/* Tailwind v4 uses `darkMode: 'class'` semantics via the .dark class on <html> */
+
+/* ─── Base ───────────────────────────────────────────────────────────────── */
 @layer base {
+  html {
+    @apply antialiased;
+  }
   body {
-    @apply text-slate-200 antialiased min-h-screen overflow-x-hidden;
-    background: radial-gradient(ellipse at top, rgba(127, 29, 29, 0.15), #020617 50%, #000000);
+    @apply bg-slate-950 text-slate-200 min-h-screen overflow-x-hidden;
+    background: radial-gradient(ellipse at top, rgba(99, 102, 241, 0.08), #020617 50%, #000000);
   }
 }
 
-/* Glassmorphism: Neon Red Cybersecurity */
+/* ─── Glass Panel — Slate + Indigo ───────────────────────────────────────── */
 .glass-panel {
-  background: rgba(0, 0, 0, 0.40);
+  background: rgba(15, 23, 42, 0.50);
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(239, 68, 68, 0.15);
-  box-shadow: 0 0 15px rgba(239, 68, 68, 0.04), 0 4px 30px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(99, 102, 241, 0.10);
+  box-shadow:
+    0 0 15px rgba(99, 102, 241, 0.04),
+    0 4px 30px rgba(0, 0, 0, 0.4);
   border-radius: 1rem;
 }
 
 .glass-panel:hover {
-  border-color: rgba(239, 68, 68, 0.25);
+  border-color: rgba(99, 102, 241, 0.18);
 }
 
-/* Subtle Glow Pulse for Live Indicator */
+/* ─── Neon pulse — Indigo ────────────────────────────────────────────────── */
 @keyframes neon-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(239, 68, 68, 0.6), 0 0 8px rgba(239, 68, 68, 0.3); }
-  50% { box-shadow: 0 0 8px rgba(239, 68, 68, 0.9), 0 0 16px rgba(239, 68, 68, 0.5); }
+  0%, 100% { box-shadow: 0 0 4px rgba(99, 102, 241, 0.5), 0 0 8px rgba(99, 102, 241, 0.25); }
+  50%       { box-shadow: 0 0 8px rgba(99, 102, 241, 0.8), 0 0 16px rgba(99, 102, 241, 0.45); }
 }
 
 .neon-dot {
   animation: neon-pulse 2s ease-in-out infinite;
 }
 
-/* Custom Scrollbar — Red */
-.custom-scrollbar::-webkit-scrollbar { height: 4px; }
-.custom-scrollbar::-webkit-scrollbar-track { background: rgba(239, 68, 68, 0.05); border-radius: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(239, 68, 68, 0.25); border-radius: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(239, 68, 68, 0.4); }
+/* ─── Custom Scrollbar — Indigo ──────────────────────────────────────────── */
+.custom-scrollbar::-webkit-scrollbar        { height: 4px; width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track  { background: rgba(99, 102, 241, 0.04); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb  { background: rgba(99, 102, 241, 0.20); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.38); }
