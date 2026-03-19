@@ -7,6 +7,7 @@ pub struct AppState {
     pub openai_api_key: String,
     pub cache_url: String,
     pub redis_pool: deadpool_redis::Pool,
+    pub db_pool: sqlx::PgPool,
     pub rate_limit_max: u32,
     pub rate_limit_window: u32,
     pub clickhouse_url: String,

@@ -100,3 +100,52 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
+
+  # ── Authentication API ─────────────────────────────────────────────────────────
+  redeye_auth:
+    build:
+      context: .
+      dockerfile: ./redeye_auth/Dockerfile
+    container_name: redeye_auth
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-RedEye}:${POSTGRES_PASSWORD:-RedEye_secret}@postgres:5432/${POSTGRES_DB:-RedEye}
+      - JWT_SECRET=${JWT_SECRET:-super_secret_jwt_key_that_is_at_least_32_bytes_long}
+      - AES_MASTER_KEY=${AES_MASTER_KEY:-32_byte_long_secret_key_for_aes_gcm!!}
+      - RUST_LOG=info
+    networks:
+      - redeye-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Gateway API ────────────────────────────────────────────────────────────────
+  redeye_gateway:
+    build:
+      context: .
+      dockerfile: ./redeye_gateway/Dockerfile
+    container_name: redeye_gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-RedEye}:${POSTGRES_PASSWORD:-RedEye_secret}@postgres:5432/${POSTGRES_DB:-RedEye}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
+      - CLICKHOUSE_URL=http://${CLICKHOUSE_USER:-RedEye}:${CLICKHOUSE_PASSWORD:-clickhouse_secret}@clickhouse:8123
+      - JWT_SECRET=${JWT_SECRET:-super_secret_jwt_key_that_is_at_least_32_bytes_long}
+      - AES_MASTER_KEY=${AES_MASTER_KEY:-32_byte_long_secret_key_for_aes_gcm!!}
+      - OPENAI_API_KEY=dummy
+      - GATEWAY_PORT=8080
+      - RUST_LOG=info
+    networks:
+      - redeye-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+

@@ -30,6 +30,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup SQLx DB Pool
     let pool = setup_db_pool().await?;
 
+    tracing::info!("Running SQLx database migrations");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("Migration failed: {}", e);
+            e
+        })?;
+
     let state = AppState { db_pool: pool };
 
     let app = create_router(state);

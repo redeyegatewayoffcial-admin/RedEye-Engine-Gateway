@@ -12,9 +12,13 @@ use crate::api::handlers;
 use crate::domain::models::AppState;
 
 pub fn create_router(state: Arc<AppState>) -> Router {
-    // LLM routes with rate limiting
+    // LLM routes with rate limiting and authentication
     let proxy_routes = Router::new()
         .route("/chat/completions", post(handlers::chat_completions))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::api::middleware::auth::auth_middleware,
+        ))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::api::middleware::rate_limit::rate_limit_middleware,

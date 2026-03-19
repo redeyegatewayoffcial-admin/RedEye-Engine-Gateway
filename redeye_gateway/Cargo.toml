@@ -73,3 +73,7 @@ http = "1"
 tokio-stream = "0.1"
 uuid = { version = "1.22.0", features = ["v4"] }
 tower-http = { version = "0.6.8", features = ["cors"] }
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono"] }
+jsonwebtoken = "9"
+aes-gcm = "0.10"
+base64 = "0.22"

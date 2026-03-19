@@ -64,11 +64,19 @@ async fn main() {
         .build()
         .expect("Failed to construct reqwest HTTP client");
 
+    let db_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set");
+        
+    let db_pool = sqlx::PgPool::connect(&db_url)
+        .await
+        .expect("Failed to connect to Postgres DB");
+
     let state = Arc::new(AppState {
         http_client,
         openai_api_key,
         cache_url,
         redis_pool,
+        db_pool,
         rate_limit_max,
         rate_limit_window,
         clickhouse_url,

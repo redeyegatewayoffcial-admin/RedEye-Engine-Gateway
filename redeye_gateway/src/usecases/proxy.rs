@@ -32,6 +32,7 @@ pub async fn execute_proxy(
     raw_prompt: &str,
     accept_header: &str,
     trace_ctx: &TraceContext,
+    dynamic_openai_key: &str,
 ) -> Result<ProxyResult, GatewayError> {
     let start_time = std::time::Instant::now();
 
@@ -66,7 +67,7 @@ pub async fn execute_proxy(
 
     // ── 2. Forward to OpenAI ────────────────────────────────────────────────
     let upstream_response = openai_client::forward_chat_completion(
-        &state.http_client, &state.openai_api_key, body, accept_header,
+        &state.http_client, dynamic_openai_key, body, accept_header,
     ).await?;
 
     let upstream_status = upstream_response.status().as_u16();

@@ -39,6 +39,11 @@ pub async fn chat_completions(
     let tenant_id = headers.get("x-tenant-id").and_then(|v| v.to_str().ok()).unwrap_or("anonymous").to_string();
     let raw_prompt = serde_json::to_string(&body).unwrap_or_default();
     let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("application/json");
+    let dynamic_openai_key = headers.get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or(&state.openai_api_key)
+        .to_string();
 
     let is_stream = body
         .get("stream")
@@ -47,7 +52,7 @@ pub async fn chat_completions(
 
     // Delegate to use case
     let result = proxy::execute_proxy(
-        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx,
+        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx, &dynamic_openai_key
     ).await?;
 
     // Build Axum response
