@@ -64,30 +64,9 @@ pub async fn execute_proxy(
         });
     }
 
-    // ── 1.5. Compliance Redaction & Security Check ─────────────────────────
-    let redact_endpoint = format!("{}/api/v1/compliance/redact", state.compliance_url);
-    let compliance_resp = state.http_client.post(&redact_endpoint)
-        .header("x-trace-id", &trace_ctx.trace_id)
-        .header("x-tenant-id", tenant_id)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| GatewayError::ComplianceFailure(format!("Compliance engine unreachable: {}", e)))?;
-
-    if !compliance_resp.status().is_success() {
-        let status = compliance_resp.status();
-        let err_text = compliance_resp.text().await.unwrap_or_default();
-        return Err(GatewayError::ComplianceFailure(format!("Compliance blocked request ({status}): {err_text}")));
-    }
-
-    let compliance_json: Value = compliance_resp.json().await
-        .map_err(|e| GatewayError::ComplianceFailure(format!("Invalid compliance response: {}", e)))?;
-
-    let sanitized_payload = compliance_json.get("sanitized_payload").unwrap_or(body).clone();
-
     // ── 2. Forward to OpenAI ────────────────────────────────────────────────
     let upstream_response = openai_client::forward_chat_completion(
-        &state.http_client, &state.openai_api_key, &sanitized_payload, accept_header,
+        &state.http_client, &state.openai_api_key, body, accept_header,
     ).await?;
 
     let upstream_status = upstream_response.status().as_u16();

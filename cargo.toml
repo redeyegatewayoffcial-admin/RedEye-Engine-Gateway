@@ -1,9 +1,11 @@
 [workspace]
 resolver = "2"
+default-run = "redeye_gateway"
 
 members = [
     "redeye_gateway",
     "redeye_cache",
     "redeye_tracer",
-    "redeye_compliance"
+    "redeye_compliance",
+    "redeye_auth"
 ]

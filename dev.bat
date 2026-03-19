@@ -5,6 +5,7 @@ start "RedEye Gateway" cmd /k "cargo run --bin redeye_gateway"
 start "RedEye Cache" cmd /k "cargo run --bin redeye_cache"
 start "RedEye Tracer" cmd /k "cargo run --bin redeye_tracer"
 start "RedEye Compliance" cmd /k "cargo run --bin redeye_compliance"
+start "RedEye Auth" cmd /k "cargo run --bin redeye_auth"
 
 default-run = "redeye_gateway"
 

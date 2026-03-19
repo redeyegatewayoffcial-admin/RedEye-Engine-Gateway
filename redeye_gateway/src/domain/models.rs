@@ -11,7 +11,6 @@ pub struct AppState {
     pub rate_limit_window: u32,
     pub clickhouse_url: String,
     pub tracer_url: String,
-    pub compliance_url: String,
 }
 
 /// Trace context propagated through every request.
@@ -33,9 +32,6 @@ pub enum GatewayError {
 
     #[error("Failed to execute internal proxy request: {0}")]
     Proxy(reqwest::Error),
-
-    #[error("Request blocked by Compliance Engine: {0}")]
-    ComplianceFailure(String),
 }
 
 impl axum::response::IntoResponse for GatewayError {
@@ -55,10 +51,6 @@ impl axum::response::IntoResponse for GatewayError {
             GatewayError::Proxy(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "An internal error occurred while communicating with backend cluster services.",
-            ),
-            GatewayError::ComplianceFailure(_) => (
-                StatusCode::FORBIDDEN,
-                "Request was blocked by the security and compliance engine.",
             ),
         };
 
