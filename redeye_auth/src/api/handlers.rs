@@ -27,8 +27,32 @@ pub async fn signup(
     State(state): State<AppState>,
     Json(payload): Json<SignupRequest>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
+    
+    // 1. Check if email already exists
+    let email_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
+        .bind(&payload.email)
+        .fetch_one(&state.db_pool)
+        .await?
+        .get(0);
+        
+    if email_exists {
+        return Err(AppError::Conflict("Email already registered".into()));
+    }
+    
+    // 2. Check if company_name already exists
+    let workspace_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM tenants WHERE name = $1)")
+        .bind(&payload.company_name)
+        .fetch_one(&state.db_pool)
+        .await?
+        .get(0);
+        
+    if workspace_exists {
+        return Err(AppError::Conflict("Workspace name already taken".into()));
+    }
+
     let hashed_pw = hash_password(&payload.password)?;
 
+    // 3. Begin Atomic Transaction
     let mut tx = state.db_pool.begin().await?;
 
     let tenant_id: Uuid = sqlx::query(
@@ -36,15 +60,7 @@ pub async fn signup(
     )
     .bind(&payload.company_name)
     .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| {
-        if let sqlx::Error::Database(db_err) = &e {
-            if db_err.constraint() == Some("tenants_name_key") {
-                return AppError::BadRequest("Company name already exists".into());
-            }
-        }
-        AppError::from(e)
-    })?
+    .await?
     .get("id");
 
     let user_id: Uuid = sqlx::query(
@@ -54,15 +70,7 @@ pub async fn signup(
     .bind(&hashed_pw)
     .bind(tenant_id)
     .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| {
-        if let sqlx::Error::Database(db_err) = &e {
-            if db_err.constraint() == Some("users_email_key") {
-                return AppError::BadRequest("Email already exists".into());
-            }
-        }
-        AppError::from(e)
-    })?
+    .await?
     .get("id");
 
     tx.commit().await?;
