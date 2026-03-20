@@ -4,21 +4,20 @@ use axum::{
     extract::State,
     http::{Request, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 use crate::domain::models::AppState;
-use deadpool_redis::redis::AsyncCommands;
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
 use sha2::{Sha256, Digest};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub tenant_id: String,
@@ -30,14 +29,23 @@ pub async fn auth_middleware(
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // 1. CORS Preflight Bypass
+    if req.method() == axum::http::Method::OPTIONS {
+        return Ok(next.run(req).await);
+    }
+
+    // 2. Public Endpoints Bypass
+    let path = req.uri().path();
+    if path == "/health" || path == "/v1/health" {
+        return Ok(next.run(req).await);
+    }
     
-    // Check for standard JWT auth OR RedEye API Key
+    // 3. Strict Auth & Claims Extraction
     let mut token_opt: Option<(String, bool)> = None; // (token, is_api_key)
     
     if let Some(auth_header) = req.headers().get(axum::http::header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                // Determine if it's a JWT or a red-eye key (assuming JWTs don't start with re_live_)
                 if token.starts_with("re_live_") {
                     token_opt = Some((token.to_string(), true));
                 } else {
@@ -47,7 +55,6 @@ pub async fn auth_middleware(
         }
     }
     
-    // Also check x-api-key header
     if token_opt.is_none() {
         if let Some(api_key_header) = req.headers().get("x-api-key") {
             if let Ok(token) = api_key_header.to_str() {
@@ -60,40 +67,41 @@ pub async fn auth_middleware(
     
     match token_opt {
         Some((token, true)) => handle_api_key(&state, &token, req, next).await,
-        Some((token, false)) => handle_jwt(&state, &token, req, next).await,
+        Some((token, false)) => handle_jwt(&token, req, next).await,
         None => {
-            tracing::warn!("Missing or invalid authentication credentials");
+            tracing::warn!("Missing authentication credentials for {} {}", req.method(), path);
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    }
+}
+
+pub fn verify_jwt(token: &str) -> Result<Claims, StatusCode> {
+    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+    match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    ) {
+        Ok(token_data) => Ok(token_data.claims),
+        Err(e) => {
+            tracing::warn!("JWT verification failed: {}", e);
             Err(StatusCode::UNAUTHORIZED)
         }
     }
 }
 
 async fn handle_jwt(
-    state: &Arc<AppState>,
     token: &str,
     mut req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+    let claims = verify_jwt(token)?;
     
-    let token_data = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
-    ) {
-        Ok(data) => data,
-        Err(e) => {
-            tracing::warn!("Invalid JWT: {}", e);
-            return Err(StatusCode::UNAUTHORIZED);
-        }
-    };
-    
-    let tenant_id = Uuid::parse_str(&token_data.claims.tenant_id).unwrap_or_default();
-    
+    let tenant_id = Uuid::parse_str(&claims.tenant_id).unwrap_or_default();
     req.headers_mut().insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
     
-    // Fetch and inject OpenAI API Key
-    inject_openai_key(state, tenant_id, &mut req).await?;
+    // CRUCIAL: Inject decoded claims into request extensions
+    req.extensions_mut().insert(claims);
     
     Ok(next.run(req).await)
 }
@@ -128,70 +136,18 @@ async fn handle_api_key(
     let tenant_id: Uuid = tenant_row.get("tenant_id");
     req.headers_mut().insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
     
-    // Fetch and inject OpenAI API Key
-    inject_openai_key(state, tenant_id, &mut req).await?;
+    // Inject synthetic claims into extensions for API keys
+    req.extensions_mut().insert(Claims {
+        sub: "api_key".to_string(),
+        tenant_id: tenant_id.to_string(),
+        exp: 0, // Not applicable for API keys
+    });
     
     Ok(next.run(req).await)
 }
 
-async fn inject_openai_key(state: &Arc<AppState>, tenant_id: Uuid, req: &mut Request<Body>) -> Result<(), StatusCode> {
-    let redis_key = format!("tenant_openai_key:{}", tenant_id);
-    
-    // Check Redis first
-    if let Ok(mut conn) = state.redis_pool.get().await {
-        if let Ok(cached_key) = conn.get::<_, String>(&redis_key).await {
-            req.headers_mut().insert(
-                axum::http::header::AUTHORIZATION,
-                format!("Bearer {}", cached_key).parse().unwrap() // overwrite JWT with cached OpenAI key
-            );
-            return Ok(());
-        }
-    }
-
-    // Cache Miss, check DB
-    let row = sqlx::query("SELECT encrypted_api_key FROM llm_routes WHERE tenant_id = $1 AND is_default = true")
-        .bind(tenant_id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error fetching openai key: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        
-    let tenant_row = match row {
-        Some(r) => r,
-        None => {
-            tracing::warn!("Tenant not found or onboarding not complete");
-            return Err(StatusCode::FORBIDDEN);
-        }
-    };
-    
-    let encrypted_data: Option<Vec<u8>> = tenant_row.get(0);
-    
-    if let Some(encrypted_bytes) = encrypted_data {
-        match decrypt_api_key(&encrypted_bytes) {
-            Ok(openai_key) => {
-                // Set in Redis with 300s TTL (5 minutes)
-                if let Ok(mut conn) = state.redis_pool.get().await {
-                    let _: Result<(), _> = conn.set_ex(&redis_key, &openai_key, 300).await;
-                }
-
-                req.headers_mut().insert(
-                    axum::http::header::AUTHORIZATION,
-                    format!("Bearer {}", openai_key).parse().unwrap() 
-                );
-                Ok(())
-            },
-            Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    } else {
-        tracing::warn!("No OpenAI key found for tenant");
-        Err(StatusCode::FORBIDDEN)
-    }
-}
-
 // Duplicated decryption logic since gateway is a separate crate
-fn decrypt_api_key(encrypted_data: &[u8]) -> Result<String, ()> {
+pub fn decrypt_api_key(encrypted_data: &[u8]) -> Result<String, ()> {
     let master_key = std::env::var("AES_MASTER_KEY").map_err(|_| ())?;
     if master_key.len() != 32 || encrypted_data.len() < 12 {
         return Err(());

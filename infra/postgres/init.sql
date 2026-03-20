@@ -58,12 +58,15 @@ CREATE TABLE IF NOT EXISTS rate_limit_policies (
 CREATE TABLE IF NOT EXISTS llm_routes (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    provider        TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic')),
+    provider        TEXT NOT NULL CHECK (provider IN ('openai', 'gemini', 'groq', 'anthropic')),
     model           TEXT NOT NULL,             -- e.g. "gpt-4o", "claude-sonnet-4-20250514"
     is_default      BOOLEAN NOT NULL DEFAULT FALSE,
     encrypted_api_key BYTEA,                  -- AES-256-GCM encrypted upstream API key
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Unique constraint per tenant+provider for UPSERT support
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_routes_tenant_provider ON llm_routes(tenant_id, provider);
 
 -- ── Seed Data (Development) ───────────────────────────────────────────────────
 INSERT INTO tenants (id, name) VALUES

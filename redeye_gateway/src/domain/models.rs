@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone)]
 pub struct AppState {
     pub http_client: reqwest::Client,
-    pub openai_api_key: String,
     pub cache_url: String,
     pub redis_pool: deadpool_redis::Pool,
     pub db_pool: sqlx::PgPool,

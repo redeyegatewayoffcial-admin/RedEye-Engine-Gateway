@@ -1,6 +1,6 @@
-use axum::{extract::State, Json, http::{HeaderMap, HeaderValue, header::SET_COOKIE}};
+use axum::{extract::{State, Extension}, Json, http::{HeaderMap, HeaderValue, header::SET_COOKIE}};
 use serde::{Deserialize, Serialize};
-use crate::{AppState, error::AppError, infrastructure::security::{hash_password, verify_password, generate_jwt, encrypt_api_key, generate_redeye_api_key, verify_jwt, generate_refresh_token}};
+use crate::{AppState, error::AppError, infrastructure::security::{hash_password, verify_password, generate_jwt, encrypt_api_key, generate_redeye_api_key, verify_jwt, generate_refresh_token, Claims}};
 use uuid::Uuid;
 use sqlx::Row;
 
@@ -207,32 +207,34 @@ pub async fn refresh(
 // --- POST /v1/auth/onboard ---
 #[derive(Deserialize)]
 pub struct OnboardRequest {
-    pub openai_api_key: String,
+    pub provider: String,
+    pub api_key: String,
     pub workspace_name: Option<String>,
 }
 
 pub async fn onboard(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    Extension(claims): Extension<Claims>,
     Json(payload): Json<OnboardRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
     
-    // Extract JWT from Authorization header
-    let auth_header = headers.get(axum::http::header::AUTHORIZATION)
-        .and_then(|val| val.to_str().ok())
-        .and_then(|val| val.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("Missing or invalid Authorization header".into()))?;
-
-    let claims = verify_jwt(auth_header)?;
-
     let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
         AppError::Internal("Invalid tenant ID in token".into())
     })?;
     
     let user_id = Uuid::parse_str(&claims.sub).unwrap_or_default();
 
-    // Encrypt OpenAI API key
-    let encrypted_key = encrypt_api_key(&payload.openai_api_key)?;
+    // Validate the API key against the provider
+    let is_valid = crate::infrastructure::llm_validator::validate_api_key(&payload.provider, &payload.api_key)
+        .await
+        .map_err(|e| AppError::Internal(e))?;
+
+    if !is_valid {
+        return Err(AppError::BadRequest("Invalid API Key".into()));
+    }
+
+    // Encrypt the validated API key
+    let encrypted_key = encrypt_api_key(&payload.api_key)?;
     let redeye_api_key = generate_redeye_api_key();
     let key_hash = crate::infrastructure::security::hash_api_key(&redeye_api_key);
 
@@ -255,25 +257,17 @@ pub async fn onboard(
     .execute(&mut *tx)
     .await?;
 
-    // Update LLM_ROUTES with encrypted API key
-    let update_res = sqlx::query(
-        "UPDATE llm_routes SET encrypted_api_key = $1 WHERE tenant_id = $2 AND is_default = true"
+    // UPSERT into LLM_ROUTES (supports multiple providers per tenant)
+    sqlx::query(
+        "INSERT INTO llm_routes (tenant_id, provider, model, is_default, encrypted_api_key)
+         VALUES ($1, $2, 'default', true, $3)
+         ON CONFLICT (tenant_id, provider) DO UPDATE SET encrypted_api_key = $3"
     )
-    .bind(&encrypted_key)
     .bind(tenant_id)
+    .bind(&payload.provider)
+    .bind(&encrypted_key)
     .execute(&mut *tx)
     .await?;
-
-    // If zero rows were updated, they might not have a default route, insert fallback
-    if update_res.rows_affected() == 0 {
-        sqlx::query(
-            "INSERT INTO llm_routes (tenant_id, provider, model, is_default, encrypted_api_key) VALUES ($1, 'openai', 'gpt-4o', true, $2)"
-        )
-        .bind(tenant_id)
-        .bind(&encrypted_key)
-        .execute(&mut *tx)
-        .await?;
-    }
 
     tx.commit().await?;
     
@@ -299,13 +293,19 @@ pub async fn onboard(
         .await?
         .get("email");
 
+    // Note: In onboard, we don't have the Bearer token handy since it was stripped by middleware.
+    // However, for onboarding response, the dashboard might expect the token to be returned to stay logged in.
+    // We can potentially re-issue or just skip it if the dashboard doesn't strictly need it here.
+    // Given AuthResponse REQUIRES token, let's re-generate it.
+    let token = generate_jwt(user_id, tenant_id)?;
+
     Ok(Json(AuthResponse {
         id: user_id,
         email,
         tenant_id,
         workspace_name: final_workspace_name,
         onboarding_complete: true,
-        token: auth_header.to_string(),
+        token,
         redeye_api_key: Some(redeye_api_key),
     }))
 }

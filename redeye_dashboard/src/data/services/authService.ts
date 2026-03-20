@@ -78,7 +78,8 @@ export const authService: IAuthUseCaseExtended = {
   async completeOnboarding(
     _userId: string,
     workspaceName: string,
-    openAiApiKey: string,
+    provider: string,
+    apiKey: string,
   ): Promise<User> {
     const token = localStorage.getItem('re_token') || '';
     const res = await fetch(`${BASE_URL}/onboard`, {
@@ -88,13 +89,15 @@ export const authService: IAuthUseCaseExtended = {
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
-        openai_api_key: openAiApiKey,
+        provider,
+        api_key: apiKey,
         workspace_name: workspaceName,
       })
     });
     
     if (!res.ok) {
-       throw new Error(`HTTP ${res.status}`);
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(text || `HTTP ${res.status}`);
     }
     const data = await res.json() as AuthResponse;
     if (data.token) {

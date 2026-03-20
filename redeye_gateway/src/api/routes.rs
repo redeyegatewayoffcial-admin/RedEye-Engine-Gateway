@@ -26,7 +26,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     // Admin routes
     let admin_routes = Router::new()
-        .route("/metrics", get(handlers::admin_metrics));
+        .route("/metrics", get(handlers::admin_metrics))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::api::middleware::auth::auth_middleware,
+        ));
 
     // CORS for React dashboard
     let cors = CorsLayer::new()

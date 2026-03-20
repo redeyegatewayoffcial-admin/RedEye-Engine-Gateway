@@ -16,7 +16,7 @@ interface AuthContextValue {
   user: User | null;
   login(email: string, password: string): Promise<void>;
   signup(email: string, password: string): Promise<void>;
-  completeOnboarding(workspaceName: string, openAiApiKey: string): Promise<User>;
+  completeOnboarding(workspaceName: string, provider: string, apiKey: string): Promise<User>;
   logout(): void;
 }
 
@@ -36,12 +36,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const completeOnboarding = useCallback(
-    async (workspaceName: string, openAiApiKey: string) => {
+    async (workspaceName: string, provider: string, apiKey: string) => {
       if (!user) throw new Error('Not authenticated');
       const updated = await authService.completeOnboarding(
         user.id,
         workspaceName,
-        openAiApiKey,
+        provider,
+        apiKey,
       );
       setUser(updated);
       return updated;
@@ -52,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     localStorage.removeItem('re_token');
     setUser(null);
+    window.location.href = '/login';
   }, []);
 
   return (

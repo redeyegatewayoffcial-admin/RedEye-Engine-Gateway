@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::domain::models::{AppState, GatewayError, TraceContext};
+use sqlx::Row;
 use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 
 /// Result of a proxy execution — either a cached response or an upstream response.
@@ -32,7 +33,6 @@ pub async fn execute_proxy(
     raw_prompt: &str,
     accept_header: &str,
     trace_ctx: &TraceContext,
-    dynamic_api_key: &str,
 ) -> Result<ProxyResult, GatewayError> {
     let start_time = std::time::Instant::now();
 
@@ -40,6 +40,7 @@ pub async fn execute_proxy(
     if let Some(cached_content) = cache_client::lookup_cache(
         &state.http_client, &state.cache_url, tenant_id, model_name, raw_prompt
     ).await {
+        // ... (cache implementation remains same) ...
         let mock_response = json!({
             "id": "chatcmpl-cached",
             "object": "chat.completion",
@@ -51,7 +52,6 @@ pub async fn execute_proxy(
 
         let bytes = serde_json::to_vec(&mock_response).unwrap_or_default();
 
-        // Fire async telemetry even for cache hits
         fire_async_telemetry(
             state, tenant_id, model_name, raw_prompt, trace_ctx,
             200, start_time.elapsed().as_millis() as u32, 0, true, None,
@@ -65,9 +65,58 @@ pub async fn execute_proxy(
         });
     }
 
-    // ── 2. Forward to Universal LLM Router ──────────────────────────────────
+    // ── 2. Determine Provider and API Key ──────────────────────────────────
+    let provider = llm_router::LlmProvider::detect(model_name);
+    let provider_str = provider.as_str();
+    
+    let redis_key = format!("tenant_provider_key:{}:{}", tenant_id, provider_str);
+    
+    let mut api_key = None;
+
+    // Check Redis first
+    if let Ok(mut conn) = state.redis_pool.get().await {
+        use deadpool_redis::redis::AsyncCommands;
+        if let Ok(cached_key) = conn.get::<_, String>(&redis_key).await {
+            api_key = Some(cached_key);
+        }
+    }
+
+    if api_key.is_none() {
+        // Cache Miss, check DB
+        let row = sqlx::query("SELECT encrypted_api_key FROM llm_routes WHERE tenant_id = $1 AND provider = $2")
+            .bind(uuid::Uuid::parse_str(tenant_id).unwrap_or_default())
+            .bind(provider_str)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error fetching provider key: {}", e);
+                GatewayError::ResponseBuild("Internal server error".into())
+            })?;
+            
+        if let Some(r) = row {
+            let encrypted_data: Vec<u8> = r.get(0);
+            if let Ok(decrypted) = crate::api::middleware::auth::decrypt_api_key(&encrypted_data) {
+                // Set in Redis with 300s TTL (5 minutes)
+                if let Ok(mut conn) = state.redis_pool.get().await {
+                    use deadpool_redis::redis::AsyncCommands;
+                    let _: Result<(), _> = conn.set_ex(&redis_key, &decrypted, 300).await;
+                }
+                api_key = Some(decrypted);
+            }
+        }
+    }
+
+    let resolved_key = match api_key {
+        Some(k) => k,
+        None => {
+            tracing::warn!(tenant_id = %tenant_id, provider = provider_str, "Provider API key not configured");
+            return Err(GatewayError::ResponseBuild("Provider API key not configured".into()));
+        }
+    };
+
+    // ── 3. Forward to Universal LLM Router ──────────────────────────────────
     let upstream_response = llm_router::route_chat_completion(
-        &state.http_client, dynamic_api_key, body, accept_header,
+        &state.http_client, &resolved_key, body, accept_header,
     ).await?;
 
     let upstream_status = upstream_response.status().as_u16();
@@ -78,7 +127,7 @@ pub async fn execute_proxy(
         .unwrap_or("application/json")
         .to_string();
 
-    info!(status = upstream_status, "Received response from upstream LLM provider");
+    info!(status = upstream_status, provider = provider_str, "Received response from upstream LLM provider");
 
     let is_streaming = body
         .get("stream")
@@ -88,7 +137,6 @@ pub async fn execute_proxy(
     if is_streaming {
         let latency_ms = start_time.elapsed().as_millis() as u32;
 
-        // Fire minimal async telemetry for streaming responses (no tokens/cache).
         fire_async_telemetry(
             state,
             tenant_id,
@@ -120,7 +168,6 @@ pub async fn execute_proxy(
         .and_then(|v| v["usage"]["total_tokens"].as_u64())
         .unwrap_or(0) as u32;
 
-    // ── 3. Fire async telemetry ─────────────────────────────────────────────
     fire_async_telemetry(
         state, tenant_id, model_name, raw_prompt, trace_ctx,
         upstream_status, latency_ms, tokens, false,

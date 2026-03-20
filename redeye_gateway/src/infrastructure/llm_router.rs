@@ -11,7 +11,6 @@
 //!   • "claude-*"                    → Anthropic (OpenAI-compat endpoint)
 //!   • anything else                 → OpenAI (safe default)
 
-use reqwest::Client;
 use serde_json::Value;
 use tracing::{info, error};
 
@@ -36,20 +35,29 @@ impl LlmProvider {
     /// Detect provider from model name string.
     pub fn detect(model: &str) -> Self {
         let m = model.to_lowercase();
-        if m.starts_with("gemini") {
+        if m.starts_with("gemini-") {
             LlmProvider::Gemini
         } else if m.starts_with("llama")
             || m.starts_with("mixtral")
-            || m.starts_with("whisper")
-            || m.starts_with("deepseek")
-            || m.starts_with("qwen")
         {
             LlmProvider::Groq
-        } else if m.starts_with("claude") {
+        } else if m.starts_with("claude-") {
             LlmProvider::Anthropic
-        } else {
-            // Default: OpenAI (covers gpt-*, o1-*, o3-*, etc.)
+        } else if m.starts_with("gpt-") || m.starts_with("o1-") {
             LlmProvider::OpenAI
+        } else {
+            // Default: OpenAI
+            LlmProvider::OpenAI
+        }
+    }
+
+    /// Returns the lowercase string identifier for the provider (matches DB).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LlmProvider::OpenAI => "openai",
+            LlmProvider::Gemini => "gemini",
+            LlmProvider::Groq => "groq",
+            LlmProvider::Anthropic => "anthropic",
         }
     }
 
@@ -77,16 +85,13 @@ impl LlmProvider {
 /// Routes and forwards a chat completion request to the correct LLM provider.
 /// The `api_key` comes from the decrypted tenant key stored in `llm_routes`.
 pub async fn route_chat_completion(
-    client: &Client,
+    client: &reqwest::Client,
     api_key: &str,
     body: &Value,
     accept_header: &str,
 ) -> Result<reqwest::Response, GatewayError> {
     // Extract model from request body
-    let model = body
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("gpt-4o");
+    let model = extract_model(body);
 
     let provider = LlmProvider::detect(model);
     let endpoint = format!("{}/chat/completions", provider.base_url());
@@ -98,11 +103,26 @@ pub async fn route_chat_completion(
         "Routing request to LLM provider"
     );
 
-    let response = client
-        .post(&endpoint)
-        .header("Authorization", format!("Bearer {}", api_key))
+    let mut request = client.post(&endpoint)
         .header("Content-Type", "application/json")
-        .header("Accept", accept_header)
+        .header("Accept", accept_header);
+
+    // Inject Auth based on provider
+    request = match provider {
+        LlmProvider::OpenAI | LlmProvider::Groq => {
+            request.header("Authorization", format!("Bearer {}", api_key))
+        }
+        LlmProvider::Gemini => {
+            request.header("x-goog-api-key", api_key)
+        }
+        LlmProvider::Anthropic => {
+            request
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+        }
+    };
+
+    let response = request
         .json(body)
         .send()
         .await

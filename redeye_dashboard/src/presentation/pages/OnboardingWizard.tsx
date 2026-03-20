@@ -15,7 +15,8 @@ export function OnboardingWizard() {
 
   const [step, setStep] = useState<Step>(1);
   const [workspaceName, setWorkspaceName] = useState('');
-  const [openAiApiKey, setOpenAiApiKey] = useState('');
+  const [provider, setProvider] = useState('openai');
+  const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [generatedRedEyeKey, setGeneratedRedEyeKey] = useState<string | null>(null);
@@ -29,11 +30,11 @@ export function OnboardingWizard() {
 
   async function handleFinish(e: FormEvent) {
     e.preventDefault();
-    if (!openAiApiKey.trim()) return;
+    if (!apiKey.trim()) return;
     setError(null);
     setLoading(true);
     try {
-      const user = await completeOnboarding(workspaceName.trim(), openAiApiKey.trim());
+      const user = await completeOnboarding(workspaceName.trim(), provider, apiKey.trim());
       if (user.redeyeApiKey) {
         setGeneratedRedEyeKey(user.redeyeApiKey);
         setStep(3);
@@ -46,6 +47,13 @@ export function OnboardingWizard() {
       setLoading(false);
     }
   }
+
+  const providerLabels: Record<string, string> = {
+    openai: 'OpenAI',
+    gemini: 'Google Gemini',
+    groq: 'Groq',
+    anthropic: 'Anthropic',
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4">
@@ -103,18 +111,31 @@ export function OnboardingWizard() {
         {step === 2 && (
           <div className="glass-panel bg-slate-900/50 border border-slate-800 p-8">
             <KeyRound className="w-7 h-7 text-indigo-400 mb-4" />
-            <h1 className="text-xl font-bold text-slate-50 mb-1">Connect your OpenAI key</h1>
+            <h1 className="text-xl font-bold text-slate-50 mb-1">Connect your LLM provider</h1>
             <p className="text-sm text-slate-400 mb-7">
               Your key is stored encrypted and never logged in plaintext.
             </p>
             <form onSubmit={handleFinish} className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-300">Provider</label>
+                <select
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value)}
+                  className="w-full rounded-lg bg-slate-950/70 border border-slate-800 px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors appearance-none"
+                >
+                  {Object.entries(providerLabels).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </div>
+
               <input
                 type="password"
                 required
                 autoFocus
-                value={openAiApiKey}
-                onChange={(e) => setOpenAiApiKey(e.target.value)}
-                placeholder="sk-••••••••••••••••"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="Paste your API key"
                 className="w-full rounded-lg bg-slate-950/70 border border-slate-800 px-3 py-2.5 text-sm text-slate-100 font-mono placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
               />
 

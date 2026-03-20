@@ -96,7 +96,7 @@ pub fn decrypt_api_key(encrypted_data: &[u8]) -> Result<String, AppError> {
     })
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String, // User ID
     pub tenant_id: String,

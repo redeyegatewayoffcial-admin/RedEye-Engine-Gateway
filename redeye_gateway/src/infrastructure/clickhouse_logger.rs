@@ -4,16 +4,16 @@ use tracing::{debug, error};
 
 /// Fires an async ClickHouse JSONEachRow insert for request telemetry.
 pub async fn log_request(
-    client: &Client,
+    client: &reqwest::Client,
     clickhouse_url: &str,
     tenant_id: &str,
-    trace_id: &str,
-    session_id: &str,
+    _trace_id: &str,
+    _session_id: &str,
     status_code: u16,
     latency_ms: u32,
     model: &str,
     tokens: u32,
-    cache_hit: bool,
+    _cache_hit: bool,
 ) {
     let log_entry = json!({
         "id": uuid::Uuid::new_v4().to_string(),

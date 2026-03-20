@@ -24,8 +24,6 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
-    let openai_api_key = std::env::var("OPENAI_API_KEY")
-        .expect("OPENAI_API_KEY must be set");
 
     let port: u16 = std::env::var("GATEWAY_PORT")
         .unwrap_or_else(|_| "8080".to_string())
@@ -73,7 +71,6 @@ async fn main() {
 
     let state = Arc::new(AppState {
         http_client,
-        openai_api_key,
         cache_url,
         redis_pool,
         db_pool,

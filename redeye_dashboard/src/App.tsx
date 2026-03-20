@@ -33,16 +33,27 @@ interface Metrics {
 }
 
 function DashboardIndex() {
+  const { isAuthenticated } = useAuth();
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [chartData, setChartData] = useState<{ time: string; requests: number; latency: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Pause polling if the user is not authenticated
+    if (!isAuthenticated) return;
+
     let alive = true;
 
     const fetchMetrics = async () => {
       try {
-        const res = await fetch('http://localhost:8080/v1/admin/metrics');
+        const token = localStorage.getItem('re_token');
+        if (!token) return; // Safety check
+
+        const res = await fetch('http://localhost:8080/v1/admin/metrics', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: Metrics = await res.json();
         if (!alive) return;
@@ -66,7 +77,7 @@ function DashboardIndex() {
     fetchMetrics();
     const id = setInterval(fetchMetrics, 3000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [isAuthenticated]);
 
   const calculateSavedCost = () => {
     if (!metrics) return '0.00';

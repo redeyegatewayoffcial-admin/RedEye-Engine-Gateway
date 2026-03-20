@@ -46,20 +46,9 @@ pub async fn chat_completions(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json");
         
-    let dynamic_api_key = headers.get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or(&state.openai_api_key)
-        .to_string();
-
-    let _is_stream = body
-        .get("stream")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
     // Delegate to use case
     let result = proxy::execute_proxy(
-        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx, &dynamic_api_key
+        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx
     ).await?;
 
     // Build Axum response
@@ -97,22 +86,26 @@ pub async fn chat_completions(
     }
 }
 
+use crate::api::middleware::auth::Claims;
+
 /// GET /v1/admin/metrics
-#[instrument(skip(state))]
+#[instrument(skip(state, claims))]
 pub async fn admin_metrics(
     State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
 ) -> Result<Json<Value>, GatewayError> {
-    info!("Fetching live metrics from ClickHouse");
+    info!(tenant_id = %claims.tenant_id, "Fetching live metrics from ClickHouse");
 
-    let query = "
+    let query = format!("
         SELECT 
             count() as total_requests,
             avg(latency_ms) as avg_latency_ms,
             sum(tokens) as total_tokens,
             countIf(status = 429) as rate_limited_requests
         FROM RedEye_telemetry.request_logs
+        WHERE tenant_id = '{}'
         FORMAT JSON
-    ";
+    ", claims.tenant_id);
 
     let response = state.http_client.post(&state.clickhouse_url).body(query).send().await
         .map_err(|e| { error!(error = %e, "ClickHouse metrics failed"); GatewayError::Proxy(e) })?;

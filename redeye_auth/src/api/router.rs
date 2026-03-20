@@ -18,12 +18,15 @@ pub fn create_router(state: AppState) -> Router {
         ])
         .allow_credentials(true);
 
+    let protected_routes = Router::new()
+        .route("/onboard", post(onboard))
+        .route_layer(axum::middleware::from_fn(crate::api::middleware::auth::auth_middleware));
+
     Router::new()
         .route("/v1/auth/signup", post(signup))
         .route("/v1/auth/login", post(login))
-        .route("/v1/auth/onboard", post(onboard))
         .route("/v1/auth/refresh", post(refresh))
-        // Example: in production /v1/auth/onboard would be protected by JWT middleware
+        .nest("/v1/auth", protected_routes)
         .layer(cors)
         .with_state(state)
 }

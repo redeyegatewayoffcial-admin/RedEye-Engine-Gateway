@@ -2,13 +2,28 @@
 // API Keys Management using Dark Red / Neon Crimson aesthetic
 
 import { useState } from 'react';
-import { Key, Plus, Trash2, X, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Key, Plus, Trash2, X, AlertTriangle, ShieldCheck, Copy, Check, Globe } from 'lucide-react';
 import { mockApiKeys } from '../../data/repositories/mockData';
 
 export function ApiKeysView() {
   const [keys, setKeys] = useState(mockApiKeys);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
+  const [copiedGateway, setCopiedGateway] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const gatewayUrl = 'http://localhost:8080/v1';
+
+  const handleCopy = (text: string, type: 'gateway' | string) => {
+    navigator.clipboard.writeText(text);
+    if (type === 'gateway') {
+      setCopiedGateway(true);
+      setTimeout(() => setCopiedGateway(false), 2000);
+    } else {
+      setCopiedKey(type);
+      setTimeout(() => setCopiedKey(null), 2000);
+    }
+  };
 
   const handleRevoke = (id: string) => {
     // Optimistic UI update for revoking
@@ -36,6 +51,46 @@ export function ApiKeysView() {
 
   return (
     <div className="space-y-6">
+      {/* Gateway Info Card */}
+      <div className="glass-panel bg-slate-900/50 border border-slate-800 rounded-xl p-6 space-y-4">
+        <h2 className="text-lg font-bold text-slate-50 flex items-center gap-2">
+          <Globe className="w-5 h-5 text-indigo-400" />
+          Gateway Connection
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="bg-slate-950/70 rounded-lg border border-slate-800 p-4">
+            <p className="text-xs font-medium text-slate-400 mb-1.5">Gateway URL</p>
+            <div className="flex items-center gap-2">
+              <code className="text-sm text-indigo-400 font-mono break-all flex-1">{gatewayUrl}</code>
+              <button
+                onClick={() => handleCopy(gatewayUrl, 'gateway')}
+                className="flex-none p-1.5 rounded-md hover:bg-slate-800 transition-colors text-slate-400 hover:text-slate-200"
+                title="Copy Gateway URL"
+              >
+                {copiedGateway ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+          {keys.filter(k => k.status === 'Active').length > 0 && (
+            <div className="bg-slate-950/70 rounded-lg border border-slate-800 p-4">
+              <p className="text-xs font-medium text-slate-400 mb-1.5">Your API Key</p>
+              <div className="flex items-center gap-2">
+                <code className="text-sm text-rose-400 font-mono break-all flex-1">
+                  {keys.find(k => k.status === 'Active')?.maskedKey}
+                </code>
+                <button
+                  onClick={() => handleCopy(keys.find(k => k.status === 'Active')?.maskedKey ?? '', 'active-key')}
+                  className="flex-none p-1.5 rounded-md hover:bg-slate-800 transition-colors text-slate-400 hover:text-slate-200"
+                  title="Copy API Key"
+                >
+                  {copiedKey === 'active-key' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Header section */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

@@ -16,5 +16,5 @@ export interface SignupPayload {
 export interface IAuthUseCase {
   login(payload: LoginPayload): Promise<User>;
   signup(payload: SignupPayload): Promise<User>;
-  completeOnboarding(userId: string, workspaceName: string, openAiApiKey: string): Promise<User>;
+  completeOnboarding(userId: string, workspaceName: string, provider: string, apiKey: string): Promise<User>;
 }
