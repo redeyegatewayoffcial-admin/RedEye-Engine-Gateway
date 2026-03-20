@@ -106,7 +106,7 @@ pub struct Claims {
 pub fn generate_jwt(user_id: Uuid, tenant_id: Uuid) -> Result<String, AppError> {
     let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
     let expiration = Utc::now()
-        .checked_add_signed(Duration::minutes(15))
+        .checked_add_signed(Duration::days(7))
         .expect("valid timestamp")
         .timestamp() as usize;
 
