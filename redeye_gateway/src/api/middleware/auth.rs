@@ -16,6 +16,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
+use sha2::{Sha256, Digest};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -36,8 +37,8 @@ pub async fn auth_middleware(
     if let Some(auth_header) = req.headers().get(axum::http::header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                // Determine if it's a JWT or a red-eye key (assuming JWTs don't start with re-sk-)
-                if token.starts_with("re-sk-") {
+                // Determine if it's a JWT or a red-eye key (assuming JWTs don't start with re_live_)
+                if token.starts_with("re_live_") {
                     token_opt = Some((token.to_string(), true));
                 } else {
                     token_opt = Some((token.to_string(), false));
@@ -50,7 +51,7 @@ pub async fn auth_middleware(
     if token_opt.is_none() {
         if let Some(api_key_header) = req.headers().get("x-api-key") {
             if let Ok(token) = api_key_header.to_str() {
-                if token.starts_with("re-sk-") {
+                if token.starts_with("re_live_") {
                     token_opt = Some((token.to_string(), true));
                 }
             }
@@ -103,8 +104,12 @@ async fn handle_api_key(
     mut req: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let row = sqlx::query("SELECT id FROM tenants WHERE redeye_api_key = $1 AND is_active = true")
-        .bind(api_key)
+    let mut hasher = Sha256::new();
+    hasher.update(api_key.as_bytes());
+    let key_hash = hex::encode(hasher.finalize());
+
+    let row = sqlx::query("SELECT tenant_id FROM api_keys WHERE key_hash = $1 AND is_active = true")
+        .bind(&key_hash)
         .fetch_optional(&state.db_pool)
         .await
         .map_err(|e| {
@@ -120,7 +125,7 @@ async fn handle_api_key(
         }
     };
     
-    let tenant_id: Uuid = tenant_row.get("id");
+    let tenant_id: Uuid = tenant_row.get("tenant_id");
     req.headers_mut().insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
     
     // Fetch and inject OpenAI API Key
@@ -144,7 +149,7 @@ async fn inject_openai_key(state: &Arc<AppState>, tenant_id: Uuid, req: &mut Req
     }
 
     // Cache Miss, check DB
-    let row = sqlx::query("SELECT encrypted_openai_key FROM tenants WHERE id = $1 AND onboarding_status = true")
+    let row = sqlx::query("SELECT encrypted_api_key FROM llm_routes WHERE tenant_id = $1 AND is_default = true")
         .bind(tenant_id)
         .fetch_optional(&state.db_pool)
         .await

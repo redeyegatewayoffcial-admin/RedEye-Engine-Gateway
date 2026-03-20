@@ -109,7 +109,7 @@ pub async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let row = sqlx::query(
-        "SELECT u.id, u.password_hash, u.tenant_id, t.name as workspace_name, t.onboarding_status, t.redeye_api_key FROM users u JOIN tenants t ON u.tenant_id = t.id WHERE u.email = $1"
+        "SELECT u.id, u.password_hash, u.tenant_id, t.name as workspace_name, t.onboarding_status FROM users u JOIN tenants t ON u.tenant_id = t.id WHERE u.email = $1"
     )
         .bind(&payload.email)
         .fetch_optional(&state.db_pool)
@@ -131,7 +131,6 @@ pub async fn login(
     let tenant_id: Uuid = user_row.get("tenant_id");
     let workspace_name: String = user_row.get("workspace_name");
     let onboarding_complete: bool = user_row.get("onboarding_status");
-    let redeye_api_key: Option<String> = user_row.get("redeye_api_key");
 
     let token = generate_jwt(user_id, tenant_id)?;
     let refresh_token = generate_refresh_token(user_id, tenant_id)?;
@@ -151,7 +150,7 @@ pub async fn login(
         workspace_name,
         onboarding_complete,
         token,
-        redeye_api_key,
+        redeye_api_key: None,
     })))
 }
 
@@ -186,14 +185,13 @@ pub async fn refresh(
         .await?
         .get("email");
         
-    let row = sqlx::query("SELECT name, onboarding_status, redeye_api_key FROM tenants WHERE id = $1")
+    let row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")
         .bind(tenant_id)
         .fetch_one(&state.db_pool)
         .await?;
         
     let workspace_name: String = row.get("name");
     let onboarding_complete: bool = row.get("onboarding_status");
-    let redeye_api_key: Option<String> = row.get("redeye_api_key");
 
     Ok(Json(AuthResponse {
         id: user_id,
@@ -202,7 +200,7 @@ pub async fn refresh(
         workspace_name,
         onboarding_complete,
         token,
-        redeye_api_key,
+        redeye_api_key: None,
     }))
 }
 
@@ -236,16 +234,48 @@ pub async fn onboard(
     // Encrypt OpenAI API key
     let encrypted_key = encrypt_api_key(&payload.openai_api_key)?;
     let redeye_api_key = generate_redeye_api_key();
+    let key_hash = crate::infrastructure::security::hash_api_key(&redeye_api_key);
 
-    // Save to database
+    let mut tx = state.db_pool.begin().await?;
+
+    // Update ONBOARDING STATUS
     sqlx::query(
-        "UPDATE tenants SET encrypted_openai_key = $1, redeye_api_key = $2, onboarding_status = true WHERE id = $3"
+        "UPDATE tenants SET onboarding_status = true WHERE id = $1"
+    )
+    .bind(tenant_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Insert keys into API_KEYS
+    sqlx::query(
+        "INSERT INTO api_keys (tenant_id, key_hash, name) VALUES ($1, $2, 'default') ON CONFLICT DO NOTHING"
+    )
+    .bind(tenant_id)
+    .bind(&key_hash)
+    .execute(&mut *tx)
+    .await?;
+
+    // Update LLM_ROUTES with encrypted API key
+    let update_res = sqlx::query(
+        "UPDATE llm_routes SET encrypted_api_key = $1 WHERE tenant_id = $2 AND is_default = true"
     )
     .bind(&encrypted_key)
-    .bind(&redeye_api_key)
     .bind(tenant_id)
-    .execute(&state.db_pool)
+    .execute(&mut *tx)
     .await?;
+
+    // If zero rows were updated, they might not have a default route, insert fallback
+    if update_res.rows_affected() == 0 {
+        sqlx::query(
+            "INSERT INTO llm_routes (tenant_id, provider, model, is_default, encrypted_api_key) VALUES ($1, 'openai', 'gpt-4o', true, $2)"
+        )
+        .bind(tenant_id)
+        .bind(&encrypted_key)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
     
     // Optionally update workspace_name
     let final_workspace_name = if let Some(ws_name) = &payload.workspace_name {

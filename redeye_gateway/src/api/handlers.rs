@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     extract::{Extension, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{IntoResponse, Response},
     Json,
 };
@@ -14,6 +14,7 @@ use tracing::{info, instrument, error};
 
 use crate::domain::models::{AppState, GatewayError, TraceContext};
 use crate::usecases::proxy;
+use crate::infrastructure::llm_router;
 
 /// GET /health
 pub async fn health_check() -> impl IntoResponse {
@@ -35,24 +36,30 @@ pub async fn chat_completions(
     info!("Received chat completion request");
 
     // Extract metadata
-    let model_name = body.get("model").and_then(|m| m.as_str()).unwrap_or("unknown").to_string();
-    let tenant_id = headers.get("x-tenant-id").and_then(|v| v.to_str().ok()).unwrap_or("anonymous").to_string();
+    let model_name = llm_router::extract_model(&body).to_string();
+    let tenant_id = headers.get("x-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("anonymous")
+        .to_string();
     let raw_prompt = serde_json::to_string(&body).unwrap_or_default();
-    let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("application/json");
-    let dynamic_openai_key = headers.get(axum::http::header::AUTHORIZATION)
+    let accept = headers.get("accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json");
+        
+    let dynamic_api_key = headers.get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or(&state.openai_api_key)
         .to_string();
 
-    let is_stream = body
+    let _is_stream = body
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
     // Delegate to use case
     let result = proxy::execute_proxy(
-        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx, &dynamic_openai_key
+        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx, &dynamic_api_key
     ).await?;
 
     // Build Axum response

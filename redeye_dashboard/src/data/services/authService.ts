@@ -32,6 +32,7 @@ function mapUser(resp: AuthResponse): User {
     workspaceName: resp.workspace_name ?? '',
     openAiApiKey: '', // We don't hold this client-side directly
     onboardingComplete: resp.onboarding_complete ?? false,
+    redeyeApiKey: resp.redeye_api_key,
   };
 }
 

@@ -12,6 +12,7 @@ use rand::distributions::Alphanumeric;
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
 use serde::{Deserialize, Serialize};
 use std::env;
+use sha2::{Sha256, Digest};
 use uuid::Uuid;
 use chrono::{Utc, Duration};
 use crate::error::AppError;
@@ -172,5 +173,12 @@ pub fn generate_redeye_api_key() -> String {
         .take(32)
         .map(char::from)
         .collect();
-    format!("re-sk-{}", random_string)
+    format!("re_live_{}", random_string)
+}
+
+pub fn hash_api_key(api_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(api_key.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(result)
 }

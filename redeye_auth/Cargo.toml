@@ -20,3 +20,5 @@ aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
 tower-http = { version = "0.5", features = ["cors"] }
+sha2 = "0.10"
+hex = "0.4"

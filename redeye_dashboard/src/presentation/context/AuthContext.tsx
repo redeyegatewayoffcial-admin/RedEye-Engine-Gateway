@@ -16,7 +16,7 @@ interface AuthContextValue {
   user: User | null;
   login(email: string, password: string): Promise<void>;
   signup(email: string, password: string): Promise<void>;
-  completeOnboarding(workspaceName: string, openAiApiKey: string): Promise<void>;
+  completeOnboarding(workspaceName: string, openAiApiKey: string): Promise<User>;
   logout(): void;
 }
 
@@ -44,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         openAiApiKey,
       );
       setUser(updated);
+      return updated;
     },
     [user],
   );

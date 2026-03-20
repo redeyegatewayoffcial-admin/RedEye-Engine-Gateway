@@ -1,8 +1,10 @@
 -- Add new columns to existing tenants table (which might be created by init.sql)
 ALTER TABLE tenants
-ADD COLUMN IF NOT EXISTS encrypted_openai_key BYTEA,
-ADD COLUMN IF NOT EXISTS redeye_api_key TEXT UNIQUE,
 ADD COLUMN IF NOT EXISTS onboarding_status BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Add encrypted_api_key to llm_routes table
+ALTER TABLE llm_routes
+ADD COLUMN IF NOT EXISTS encrypted_api_key BYTEA;
 
 -- Create users table
 CREATE TABLE IF NOT EXISTS users (

@@ -44,3 +44,9 @@ export const mockCacheStats = {
   missRatio: 0.18,
   totalLookups: 42319,
 };
+
+export const mockApiKeys = [
+  { id: 'key-1', name: 'Production Backend', maskedKey: 're_live_••••••••••••••••••••••••••••x9a2', createdAt: '2026-03-01T10:00:00Z', status: 'Active' },
+  { id: 'key-2', name: 'Staging Environment', maskedKey: 're_live_••••••••••••••••••••••••••••b8b1', createdAt: '2026-03-10T14:30:00Z', status: 'Active' },
+  { id: 'key-3', name: 'Developer Test Key', maskedKey: 're_live_••••••••••••••••••••••••••••f4c7', createdAt: '2026-02-15T09:15:00Z', status: 'Revoked' },
+];

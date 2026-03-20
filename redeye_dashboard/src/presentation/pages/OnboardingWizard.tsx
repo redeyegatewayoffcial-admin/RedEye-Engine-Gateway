@@ -5,9 +5,9 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Loader2, ChevronRight, KeyRound, Building2 } from 'lucide-react';
+import { Loader2, ChevronRight, KeyRound, Building2, Check, Copy, AlertTriangle } from 'lucide-react';
 
-type Step = 1 | 2;
+type Step = 1 | 2 | 3;
 
 export function OnboardingWizard() {
   const navigate = useNavigate();
@@ -18,6 +18,8 @@ export function OnboardingWizard() {
   const [openAiApiKey, setOpenAiApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [generatedRedEyeKey, setGeneratedRedEyeKey] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   function handleStep1(e: FormEvent) {
     e.preventDefault();
@@ -31,8 +33,13 @@ export function OnboardingWizard() {
     setError(null);
     setLoading(true);
     try {
-      await completeOnboarding(workspaceName.trim(), openAiApiKey.trim());
-      navigate('/dashboard');
+      const user = await completeOnboarding(workspaceName.trim(), openAiApiKey.trim());
+      if (user.redeyeApiKey) {
+        setGeneratedRedEyeKey(user.redeyeApiKey);
+        setStep(3);
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
@@ -53,7 +60,7 @@ export function OnboardingWizard() {
           </div>
           {/* Step bubbles */}
           <div className="flex items-center gap-2">
-            {([1, 2] as Step[]).map((s) => (
+            {([1, 2, 3] as Step[]).map((s) => (
               <div
                 key={s}
                 className={`h-2 w-2 rounded-full transition-colors ${
@@ -138,7 +145,45 @@ export function OnboardingWizard() {
           </div>
         )}
 
-        <p className="mt-5 text-center text-xs text-slate-600">Step {step} of 2</p>
+        {/* Step 3 */}
+        {step === 3 && (
+          <div className="glass-panel bg-rose-950/40 border border-rose-900 p-8">
+            <AlertTriangle className="w-7 h-7 text-rose-500 mb-4" />
+            <h1 className="text-xl font-bold text-slate-50 mb-1">Your RedEye Gateway Key</h1>
+            <p className="text-sm text-slate-400 mb-6">
+              Please copy this key now. For your security, <strong className="text-rose-400 font-medium">you won't be able to see it again</strong>.
+            </p>
+            
+            <div className="bg-slate-950/80 rounded-lg border border-rose-900/50 p-4 mb-6 flex items-center justify-between gap-4">
+              <code className="text-rose-400 font-mono text-sm break-all">
+                {generatedRedEyeKey}
+              </code>
+              <button
+                type="button"
+                onClick={() => {
+                  if (generatedRedEyeKey) {
+                    navigator.clipboard.writeText(generatedRedEyeKey);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }
+                }}
+                className="flex-none p-2 rounded-md hover:bg-slate-800 transition-colors text-slate-400 hover:text-slate-200"
+                title="Copy to clipboard"
+              >
+                {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 hover:bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_rgba(225,29,72,0.25)] transition-all duration-200"
+            >
+              Proceed to Dashboard <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        <p className="mt-5 text-center text-xs text-slate-600">Step {step} of 3</p>
       </div>
     </div>
   );

@@ -9,11 +9,25 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- ── Tenants ───────────────────────────────────────────────────────────────────
 -- Each enterprise customer is a "tenant". All resources are tenant-scoped.
 CREATE TABLE IF NOT EXISTS tenants (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        TEXT NOT NULL UNIQUE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name              TEXT NOT NULL UNIQUE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+    onboarding_status BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+-- ── Users ─────────────────────────────────────────────────────────────────────
+-- Human operators. Each user belongs to exactly one tenant (workspace).
+-- `password_hash` stores an Argon2id hash — plaintext is NEVER persisted.
+CREATE TABLE IF NOT EXISTS users (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email         TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,            -- Argon2id hash (never plaintext)
+    tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users(tenant_id);
 
 -- ── API Keys ──────────────────────────────────────────────────────────────────
 -- Keys issued to tenant applications for authenticating with the gateway.
@@ -42,12 +56,13 @@ CREATE TABLE IF NOT EXISTS rate_limit_policies (
 -- ── LLM Routes ───────────────────────────────────────────────────────────────
 -- Defines which upstream LLM provider a tenant's traffic is routed to.
 CREATE TABLE IF NOT EXISTS llm_routes (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    provider    TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic')),
-    model       TEXT NOT NULL,             -- e.g. "gpt-4o", "claude-sonnet-4-20250514"
-    is_default  BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    provider        TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic')),
+    model           TEXT NOT NULL,             -- e.g. "gpt-4o", "claude-sonnet-4-20250514"
+    is_default      BOOLEAN NOT NULL DEFAULT FALSE,
+    encrypted_api_key BYTEA,                  -- AES-256-GCM encrypted upstream API key
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ── Seed Data (Development) ───────────────────────────────────────────────────

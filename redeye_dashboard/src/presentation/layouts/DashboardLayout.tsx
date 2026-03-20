@@ -15,12 +15,14 @@ import {
   Sun,
   Moon,
   LogOut,
+  Key,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../hooks/useTheme';
 
 const NAV_ITEMS = [
   { to: '/dashboard',             label: 'Dashboard',          icon: LayoutDashboard, end: true },
+  { to: '/dashboard/api-keys',    label: 'API Keys',           icon: Key,             end: false },
   { to: '/dashboard/compliance',  label: 'Compliance',         icon: ShieldCheck,     end: false },
   { to: '/dashboard/traces',      label: 'Trace Explorer',     icon: Activity,        end: false },
   { to: '/dashboard/cache',       label: 'Semantic Cache',     icon: Database,        end: false },

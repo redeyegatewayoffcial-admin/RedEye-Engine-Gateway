@@ -5,10 +5,10 @@
 
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::domain::models::{AppState, GatewayError, TraceContext};
-use crate::infrastructure::{cache_client, clickhouse_logger, openai_client};
+use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 
 /// Result of a proxy execution — either a cached response or an upstream response.
 pub enum ProxyBody {
@@ -32,7 +32,7 @@ pub async fn execute_proxy(
     raw_prompt: &str,
     accept_header: &str,
     trace_ctx: &TraceContext,
-    dynamic_openai_key: &str,
+    dynamic_api_key: &str,
 ) -> Result<ProxyResult, GatewayError> {
     let start_time = std::time::Instant::now();
 
@@ -65,9 +65,9 @@ pub async fn execute_proxy(
         });
     }
 
-    // ── 2. Forward to OpenAI ────────────────────────────────────────────────
-    let upstream_response = openai_client::forward_chat_completion(
-        &state.http_client, dynamic_openai_key, body, accept_header,
+    // ── 2. Forward to Universal LLM Router ──────────────────────────────────
+    let upstream_response = llm_router::route_chat_completion(
+        &state.http_client, dynamic_api_key, body, accept_header,
     ).await?;
 
     let upstream_status = upstream_response.status().as_u16();
@@ -78,7 +78,7 @@ pub async fn execute_proxy(
         .unwrap_or("application/json")
         .to_string();
 
-    info!(status = upstream_status, "Received response from OpenAI");
+    info!(status = upstream_status, "Received response from upstream LLM provider");
 
     let is_streaming = body
         .get("stream")

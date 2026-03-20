@@ -7,4 +7,5 @@ export interface User {
   workspaceName: string;
   openAiApiKey: string;
   onboardingComplete: boolean;
+  redeyeApiKey?: string;
 }
