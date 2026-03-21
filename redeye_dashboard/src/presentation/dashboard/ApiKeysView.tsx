@@ -2,11 +2,30 @@
 // API Keys Management using Dark Red / Neon Crimson aesthetic
 
 import { useState } from 'react';
-import { Key, Plus, Trash2, X, AlertTriangle, ShieldCheck, Copy, Check, Globe } from 'lucide-react';
-import { mockApiKeys } from '../../data/repositories/mockData';
+import { Key, Plus, Trash2, X, AlertTriangle, ShieldCheck, Copy, Check, Globe, Loader2 } from 'lucide-react';
+import useSWR from 'swr';
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  key_hash: string;
+  created_at: string;
+  status: string;
+}
+
+const fetcher = async (url: string) => {
+  const token = localStorage.getItem('re_token');
+  if (!token) throw new Error("No authentication token found");
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+  return res.json();
+};
 
 export function ApiKeysView() {
-  const [keys, setKeys] = useState(mockApiKeys);
+  const { data: keys, error, isLoading, mutate: _mutate } = useSWR<ApiKey[]>(
+    'http://localhost:8081/v1/auth/api-keys',
+    fetcher
+  );
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
   const [copiedGateway, setCopiedGateway] = useState(false);
@@ -25,29 +44,23 @@ export function ApiKeysView() {
     }
   };
 
-  const handleRevoke = (id: string) => {
-    // Optimistic UI update for revoking
-    setKeys(prev =>
-      prev.map(k => (k.id === id ? { ...k, status: 'Revoked' } : k))
-    );
+  const handleRevoke = async (_id: string) => {
+    // Optimistic UI update could go here, but for now we just show a stub or rely on mutate
+    alert("Revoke endpoint not yet implemented");
   };
 
   const handleGenerate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newKeyName.trim()) return;
 
-    const newKey = {
-      id: `key-${Date.now()}`,
-      name: newKeyName.trim(),
-      maskedKey: 're_live_••••••••••••••••••••••••••••' + Math.floor(1000 + Math.random() * 9000),
-      createdAt: new Date().toISOString(),
-      status: 'Active',
-    };
-
-    setKeys([newKey, ...keys]);
-    setNewKeyName('');
+    // Usually this invokes a POST /api-keys to generate one.
+    // For now we just close the modal.
+    alert("Generate endpoint not yet implemented");
     setIsModalOpen(false);
   };
+
+  const activeKeysCount = keys?.filter(k => k.status === 'Active').length || 0;
+  const activeKey = keys?.find(k => k.status === 'Active');
 
   return (
     <div className="space-y-6">
@@ -71,17 +84,17 @@ export function ApiKeysView() {
               </button>
             </div>
           </div>
-          {keys.filter(k => k.status === 'Active').length > 0 && (
+          {activeKeysCount > 0 && activeKey && (
             <div className="bg-slate-950/70 rounded-lg border border-slate-800 p-4">
-              <p className="text-xs font-medium text-slate-400 mb-1.5">Your API Key</p>
+              <p className="text-xs font-medium text-slate-400 mb-1.5">Your API Key (Hash)</p>
               <div className="flex items-center gap-2">
                 <code className="text-sm text-rose-400 font-mono break-all flex-1">
-                  {keys.find(k => k.status === 'Active')?.maskedKey}
+                  {activeKey.key_hash.substring(0, 16)}...
                 </code>
                 <button
-                  onClick={() => handleCopy(keys.find(k => k.status === 'Active')?.maskedKey ?? '', 'active-key')}
+                  onClick={() => handleCopy(activeKey.key_hash ?? '', 'active-key')}
                   className="flex-none p-1.5 rounded-md hover:bg-slate-800 transition-colors text-slate-400 hover:text-slate-200"
-                  title="Copy API Key"
+                  title="Copy API Key Hash"
                 >
                   {copiedKey === 'active-key' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
@@ -125,7 +138,20 @@ export function ApiKeysView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-rose-900/30">
-              {keys.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
+                    <Loader2 className="w-5 h-5 animate-spin mx-auto text-rose-500 mb-2" />
+                    Loading API keys...
+                  </td>
+                </tr>
+              ) : error ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8 text-center text-rose-400">
+                    Failed to fetch API keys. Is the Auth service running?
+                  </td>
+                </tr>
+              ) : !keys || keys.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
                     No API keys found. Generate one to get started.
@@ -135,9 +161,9 @@ export function ApiKeysView() {
                 keys.map((keyItem) => (
                   <tr key={keyItem.id} className="hover:bg-rose-900/10 transition-colors">
                     <td className="px-6 py-4 font-medium text-slate-200">{keyItem.name}</td>
-                    <td className="px-6 py-4 font-mono text-xs text-rose-400/90">{keyItem.maskedKey}</td>
+                    <td className="px-6 py-4 font-mono text-xs text-rose-400/90">{keyItem.key_hash.substring(0, 16)}...</td>
                     <td className="px-6 py-4 text-slate-400">
-                      {new Date(keyItem.createdAt).toLocaleDateString(undefined, {
+                      {new Date(keyItem.created_at).toLocaleDateString(undefined, {
                         year: 'numeric', month: 'short', day: 'numeric'
                       })}
                     </td>

@@ -68,19 +68,13 @@ pub async fn chat_completions(
 
             Ok(response)
         }
-        crate::usecases::proxy::ProxyBody::Stream(upstream_response) => {
-            let stream = upstream_response.bytes_stream();
-
-            let response = Response::builder()
-                .status(result.status)
-                .header("content-type", &result.content_type)
-                .header("X-Cache", cache_header)
-                .body(Body::from_stream(stream))
-                .map_err(|e| {
-                    error!(error = %e, "Failed to construct streaming proxy response");
-                    GatewayError::ResponseBuild(e.to_string())
-                })?;
-
+        crate::usecases::proxy::ProxyBody::SseStream(stream) => {
+            use axum::response::sse::{Sse, KeepAlive};
+            let sse = Sse::new(stream).keep_alive(KeepAlive::default());
+            let mut response = sse.into_response();
+            if let Ok(value) = axum::http::HeaderValue::from_str(cache_header) {
+                response.headers_mut().insert("X-Cache", value);
+            }
             Ok(response)
         }
     }

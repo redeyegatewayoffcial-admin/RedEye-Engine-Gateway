@@ -1,11 +1,16 @@
 //! usecases/proxy.rs — Core proxy orchestration logic.
 //!
-//! This is the heart of the gateway: cache check → upstream call → async telemetry.
+//! Pipeline: compliance redaction → cache check → upstream call → async telemetry.
 //! It is intentionally free of Axum types so it can be tested or reused independently.
 
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::info;
+use axum::response::sse::Event;
+use futures::stream::StreamExt;
+use tokio::sync::mpsc;
+use eventsource_stream::Eventsource;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::domain::models::{AppState, GatewayError, TraceContext};
 use sqlx::Row;
@@ -14,7 +19,7 @@ use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 /// Result of a proxy execution — either a cached response or an upstream response.
 pub enum ProxyBody {
     Buffered(Vec<u8>),
-    Stream(reqwest::Response),
+    SseStream(ReceiverStream<Result<Event, axum::Error>>),
 }
 
 pub struct ProxyResult {
@@ -35,6 +40,18 @@ pub async fn execute_proxy(
     trace_ctx: &TraceContext,
 ) -> Result<ProxyResult, GatewayError> {
     let start_time = std::time::Instant::now();
+
+    // ── 0. PII Redaction via Compliance Service (fail-closed) ───────────────
+    let sanitized_body = call_compliance_redact(
+        &state.http_client,
+        &state.compliance_url,
+        body,
+    ).await?;
+
+    // Use the sanitized body for all downstream steps.
+    // `raw_prompt` (already extracted by caller) continues to reflect the
+    // *original* user message for telemetry / cache-key purposes.
+    let body = &sanitized_body;
 
     // ── 1. Semantic Cache Lookup ────────────────────────────────────────────
     if let Some(cached_content) = cache_client::lookup_cache(
@@ -65,8 +82,63 @@ pub async fn execute_proxy(
         });
     }
 
+    // ── 1.5. Token Bucket Circuit Breaker ──────────────────────────────────
+    // Estimate tokens (roughly 1 token per 4 chars of prompt).
+    let estimated_tokens = (raw_prompt.len() / 4).max(1);
+    
+    // Lua script: DECR token bucket, return 1 if allowed, 0 if rate limited.
+    // keys[1] = bucket key. args[1] = tokens to consume.
+    let lua_script = r#"
+        local current = redis.call('GET', KEYS[1])
+        if current then
+            local val = tonumber(current)
+            if val < tonumber(ARGV[1]) then
+                return 0
+            else
+                redis.call('DECRBY', KEYS[1], ARGV[1])
+                return 1
+            end
+        else
+            -- Initialize bucket (e.g. 100,000 tokens per day). Set TTL to 86400s
+            redis.call('SET', KEYS[1], 100000, 'EX', 86400)
+            redis.call('DECRBY', KEYS[1], ARGV[1])
+            return 1
+        end
+    "#;
+
+    let bucket_key = format!("tb:tokens:{}", tenant_id);
+    if let Ok(mut conn) = state.redis_pool.get().await {
+        use deadpool_redis::redis::AsyncCommands;
+        let allowed: Option<i32> = deadpool_redis::redis::Script::new(lua_script)
+            .key(&bucket_key)
+            .arg(estimated_tokens)
+            .invoke_async(&mut conn)
+            .await
+            .ok();
+
+        if allowed == Some(0) {
+            tracing::warn!(tenant_id = %tenant_id, "Rate limit Token Bucket exceeded");
+            return Err(GatewayError::RateLimitExceeded("Token limit exceeded for this billing cycle.".into()));
+        }
+    }
+
+    // ── 1.6. Adaptive Fallback (Circuit Open Check) ─────────────────────────
+    let mut initial_model = model_name.to_string();
+    let mut provider = llm_router::LlmProvider::detect(&initial_model);
+    
+    if let Ok(mut conn) = state.redis_pool.get().await {
+        use deadpool_redis::redis::AsyncCommands;
+        let cb_key = format!("cb:open:{}:{}", tenant_id, provider.as_str());
+        let is_open: Option<String> = conn.get(&cb_key).await.ok();
+        
+        if is_open.is_some() {
+            tracing::warn!(provider = provider.as_str(), "Primary circuit is OPEN. Falling back to Groq.");
+            initial_model = "llama3-8b-8192".to_string();
+            provider = llm_router::LlmProvider::Groq;
+        }
+    }
+
     // ── 2. Determine Provider and API Key ──────────────────────────────────
-    let provider = llm_router::LlmProvider::detect(model_name);
     let provider_str = provider.as_str();
     
     let redis_key = format!("tenant_provider_key:{}:{}", tenant_id, provider_str);
@@ -114,10 +186,68 @@ pub async fn execute_proxy(
         }
     };
 
-    // ── 3. Forward to Universal LLM Router ──────────────────────────────────
-    let upstream_response = llm_router::route_chat_completion(
+    // ── 3. Forward to Universal LLM Router (With Fallback) ──────────────────
+    let mut upstream_response_res = llm_router::route_chat_completion(
         &state.http_client, &resolved_key, body, accept_header,
-    ).await?;
+    ).await;
+
+    // Evaluate response for Adaptive Circuit Breaker failures (5xx or timeout)
+    let mut is_failure = false;
+    match &upstream_response_res {
+        Ok(resp) if resp.status().is_server_error() => is_failure = true,
+        Err(_) => is_failure = true,
+        _ => {}
+    }
+
+    if is_failure {
+        tracing::error!(provider = provider_str, "Primary provider failed. Tracking error for circuit breaker...");
+        if let Ok(mut conn) = state.redis_pool.get().await {
+            use deadpool_redis::redis::AsyncCommands;
+            let err_key = format!("cb:errors:{}:{}", tenant_id, provider_str);
+            let count: i32 = conn.incr(&err_key, 1).await.unwrap_or(0);
+            let _: Result<(), _> = conn.expire(&err_key, 10).await;
+
+            if count >= 2 {
+                tracing::error!("Circuit breaker triggered! Opening circuit for {}", provider_str);
+                let open_key = format!("cb:open:{}:{}", tenant_id, provider_str);
+                let _: Result<(), _> = conn.set_ex(&open_key, "1", 60).await;
+            }
+        }
+        
+        // Attempt immediate seamless retry to Fallback (Groq) if primary failed
+        if provider != llm_router::LlmProvider::Groq {
+            tracing::info!("Attempting seamless immediate fallback to Groq...");
+            initial_model = "llama3-8b-8192".to_string();
+            
+            // Re-fetch key for Groq
+            let mut groq_key = None;
+            let row = sqlx::query("SELECT encrypted_api_key FROM llm_routes WHERE tenant_id = $1 AND provider = 'groq'")
+                .bind(uuid::Uuid::parse_str(tenant_id).unwrap_or_default())
+                .fetch_optional(&state.db_pool)
+                .await.ok().flatten();
+                
+            if let Some(r) = row {
+                let encrypted_data: Vec<u8> = r.try_get(0).unwrap_or_default();
+                if let Ok(dec) = crate::api::middleware::auth::decrypt_api_key(&encrypted_data) {
+                    groq_key = Some(dec);
+                }
+            }
+
+            if let Some(gk) = groq_key {
+                // Must clone body to swap the model field for the fallback request
+                let mut fallback_body = body.clone();
+                fallback_body["model"] = json!("llama3-8b-8192");
+
+                upstream_response_res = llm_router::route_chat_completion(
+                    &state.http_client, &gk, &fallback_body, accept_header,
+                ).await;
+            } else {
+                return Err(GatewayError::ResponseBuild("Fallback provider key not found".into()));
+            }
+        }
+    }
+
+    let upstream_response = upstream_response_res?;
 
     let upstream_status = upstream_response.status().as_u16();
     let content_type = upstream_response
@@ -150,10 +280,64 @@ pub async fn execute_proxy(
             None,
         );
 
+        let mut event_stream = upstream_response.bytes_stream().eventsource();
+        let compliance_url = state.compliance_url.clone();
+        let http_client = state.http_client.clone();
+        
+        let (tx, rx) = mpsc::channel(100);
+
+        tokio::spawn(async move {
+            let mut buffer = String::new();
+            
+            while let Some(Ok(event)) = event_stream.next().await {
+                if event.data == "[DONE]" {
+                    if !buffer.is_empty() {
+                        if let Ok(redacted) = call_compliance_redact_chunk(&http_client, &compliance_url, &buffer).await {
+                            let json_str = format!(
+                                "{{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}",
+                                serde_json::to_string(&redacted).unwrap_or_else(|_| "\"\"".to_string())
+                            );
+                            let _ = tx.send(Ok(Event::default().data(json_str))).await;
+                        }
+                        buffer.clear();
+                    }
+                    let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                    break;
+                }
+
+                if let Ok(json) = serde_json::from_str::<Value>(&event.data) {
+                    if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                        buffer.push_str(content);
+                        
+                        // Heuristic: Flush buffer if it's > 30 chars or ends with punctuation/newline
+                        let should_flush = buffer.len() > 30 || content.contains(|c| ['.', '!', '?', '\n'].contains(&c));
+                        
+                        if should_flush {
+                            if let Ok(redacted) = call_compliance_redact_chunk(&http_client, &compliance_url, &buffer).await {
+                                let mut new_json = json.clone();
+                                new_json["choices"][0]["delta"]["content"] = Value::String(redacted);
+                                let _ = tx.send(Ok(Event::default().data(new_json.to_string()))).await;
+                            } else {
+                                // Fallback (e.g. timeout) - send original
+                                let mut new_json = json.clone();
+                                new_json["choices"][0]["delta"]["content"] = Value::String(buffer.clone());
+                                let _ = tx.send(Ok(Event::default().data(new_json.to_string()))).await;
+                            }
+                            buffer.clear();
+                        }
+                        continue;
+                    }
+                }
+                
+                // Unrecognized data pass-through
+                let _ = tx.send(Ok(Event::default().data(event.data))).await;
+            }
+        });
+
         return Ok(ProxyResult {
             status: upstream_status,
             content_type,
-            body: ProxyBody::Stream(upstream_response),
+            body: ProxyBody::SseStream(ReceiverStream::new(rx)),
             cache_hit: false,
         });
     }
@@ -236,4 +420,74 @@ fn fire_async_telemetry(
             cache_client::store_in_cache(&s.http_client, &s.cache_url, &tid, &model, &prompt, &response_content).await;
         }
     });
+}
+
+// ── Compliance Helper ────────────────────────────────────────────────────────
+
+/// Sends `payload` to the compliance redaction endpoint and returns the
+/// sanitized body. Implements a strict **fail-closed** policy: any network
+/// error, non-2xx status, or malformed response causes the proxy to abort
+/// with `GatewayError::ComplianceFailure`, preventing raw PII from reaching
+/// the upstream LLM provider.
+async fn call_compliance_redact(
+    http_client: &reqwest::Client,
+    compliance_url: &str,
+    payload: &Value,
+) -> Result<Value, GatewayError> {
+    let endpoint = format!("{}/api/v1/compliance/redact", compliance_url.trim_end_matches('/'));
+
+    tracing::debug!(endpoint = %endpoint, "Calling compliance redaction service");
+
+    let resp = http_client
+        .post(&endpoint)
+        .json(payload)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Compliance service unreachable — blocking request (fail-closed)");
+            GatewayError::ComplianceFailure(format!("Compliance service unreachable: {}", e))
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        tracing::error!(status = status, "Compliance service returned non-2xx — blocking request");
+        return Err(GatewayError::ComplianceFailure(
+            format!("Compliance service returned HTTP {}", status)
+        ));
+    }
+
+    let compliance_json: Value = resp.json().await.map_err(|e| {
+        tracing::error!(error = %e, "Failed to parse compliance response body");
+        GatewayError::ComplianceFailure(format!("Malformed compliance response: {}", e))
+    })?;
+
+    match compliance_json.get("sanitized_payload").cloned() {
+        Some(sanitized) => {
+            tracing::info!("PII redaction complete — forwarding sanitized payload to upstream LLM");
+            Ok(sanitized)
+        }
+        None => {
+            tracing::error!("Compliance response missing `sanitized_payload` field — blocking request");
+            Err(GatewayError::ComplianceFailure(
+                "Compliance response did not contain `sanitized_payload`".into()
+            ))
+        }
+    }
+}
+
+/// Helper to redact a single string chunk for SSE streaming
+async fn call_compliance_redact_chunk(
+    http_client: &reqwest::Client,
+    compliance_url: &str,
+    chunk: &str,
+) -> Result<String, GatewayError> {
+    // We wrap it in a dummy JSON object, since PiiEngine traverses JSON.
+    let payload = json!({ "chunk": chunk });
+    let sanitized = call_compliance_redact(http_client, compliance_url, &payload).await?;
+    
+    if let Some(redacted_str) = sanitized["chunk"].as_str() {
+        Ok(redacted_str.to_string())
+    } else {
+        Ok(chunk.to_string())
+    }
 }

@@ -2,7 +2,6 @@
 // <AuthProvider> + <BrowserRouter> wrapping all routes.
 // Protected routes redirect to /login when not authenticated.
 
-import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './presentation/context/AuthContext';
 
@@ -25,73 +24,8 @@ import { SettingsView }     from './presentation/dashboard/SettingsView';
 // -----------------------------------------------------------------------
 // Metric types & live-fetch logic (formerly in App.tsx monolith)
 // -----------------------------------------------------------------------
-interface Metrics {
-  total_requests: string;
-  avg_latency_ms: number;
-  total_tokens: string;
-  rate_limited_requests: string;
-}
-
 function DashboardIndex() {
-  const { isAuthenticated } = useAuth();
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [chartData, setChartData] = useState<{ time: string; requests: number; latency: number }[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Pause polling if the user is not authenticated
-    if (!isAuthenticated) return;
-
-    let alive = true;
-
-    const fetchMetrics = async () => {
-      try {
-        const token = localStorage.getItem('re_token');
-        if (!token) return; // Safety check
-
-        const res = await fetch('http://localhost:8080/v1/admin/metrics', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data: Metrics = await res.json();
-        if (!alive) return;
-        setMetrics(data);
-        setError(null);
-        const now = new Date().toLocaleTimeString('en-US', {
-          hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
-        });
-        setChartData((prev) =>
-          [...prev, {
-            time: now,
-            requests: parseInt(data.total_requests) || Math.floor(Math.random() * 10),
-            latency: Math.round(data.avg_latency_ms),
-          }].slice(-10),
-        );
-      } catch (err: unknown) {
-        if (alive) setError(err instanceof Error ? err.message : 'Unknown error');
-      }
-    };
-
-    fetchMetrics();
-    const id = setInterval(fetchMetrics, 3000);
-    return () => { alive = false; clearInterval(id); };
-  }, [isAuthenticated]);
-
-  const calculateSavedCost = () => {
-    if (!metrics) return '0.00';
-    return (parseInt(metrics.rate_limited_requests) * 0.005).toFixed(2);
-  };
-
-  return (
-    <DashboardView
-      metrics={metrics}
-      chartData={chartData}
-      error={error}
-      calculateSavedCost={calculateSavedCost}
-    />
-  );
+  return <DashboardView />;
 }
 
 // -----------------------------------------------------------------------

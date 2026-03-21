@@ -309,3 +309,40 @@ pub async fn onboard(
         redeye_api_key: Some(redeye_api_key),
     }))
 }
+
+// --- GET /v1/auth/api-keys ---
+#[derive(Serialize)]
+pub struct ApiKeyResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub key_hash: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub status: String,
+}
+
+pub async fn get_api_keys(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Vec<ApiKeyResponse>>, AppError> {
+    
+    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
+        AppError::Internal("Invalid tenant ID in token".into())
+    })?;
+
+    let rows = sqlx::query(
+        "SELECT id, name, key_hash, created_at FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC"
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    let keys = rows.into_iter().map(|row| ApiKeyResponse {
+        id: row.try_get("id").unwrap_or_default(),
+        name: row.try_get("name").unwrap_or_default(),
+        key_hash: row.try_get("key_hash").unwrap_or_default(),
+        created_at: row.try_get("created_at").unwrap_or_else(|_| chrono::Utc::now()),
+        status: "Active".to_string(), // In a real app we'd track revoked status in DB. For now they are Active
+    }).collect();
+
+    Ok(Json(keys))
+}

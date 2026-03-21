@@ -5,6 +5,8 @@
 
 -- Enable UUID generation
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- Enable Vector Search (pgvector)
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ── Tenants ───────────────────────────────────────────────────────────────────
 -- Each enterprise customer is a "tenant". All resources are tenant-scoped.
@@ -83,3 +85,23 @@ INSERT INTO llm_routes (tenant_id, provider, model, is_default) VALUES
     ('00000000-0000-0000-0000-000000000001', 'openai',    'gpt-4o',                    TRUE),
     ('00000000-0000-0000-0000-000000000002', 'anthropic', 'claude-sonnet-4-20250514', TRUE)
 ON CONFLICT DO NOTHING;
+
+-- ── Semantic Cache ────────────────────────────────────────────────────────────
+-- Stores responses for semantic re-use to reduce LLM costs and latency.
+CREATE TABLE IF NOT EXISTS semantic_cache (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    structural_hash   BIGINT NOT NULL,          -- Deterministic AST hash 
+    original_prompt   TEXT NOT NULL,            
+    content           TEXT NOT NULL,            -- LLM Response Text
+    embedding         vector(1536) NOT NULL,    -- text-embedding-ada-002 dimensions
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Fast exact lookup by structural hit
+CREATE INDEX IF NOT EXISTS idx_semantic_cache_tenant_hash ON semantic_cache(tenant_id, structural_hash);
+
+-- Semantic Similarity Search index (Hierarchical Navigable Small World)
+CREATE INDEX IF NOT EXISTS idx_semantic_cache_embedding
+ON semantic_cache USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);

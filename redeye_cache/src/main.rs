@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::api::handlers::{lookup_handler, store_handler, ApiState};
-use crate::infrastructure::{openai_client::OpenAiClient, redis_repo::RedisRepo};
+use crate::infrastructure::{openai_client::OpenAiClient, postgres_repo::PostgresRepo};
 use crate::usecases::semantic_search::SemanticSearchUseCase;
 
 #[tokio::main]
@@ -17,15 +17,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting RedEye Semantic Cache Microservice...");
 
     // 1. Initialize Infrastructure
-    let redis_repo = Arc::new(RedisRepo::new()?);
+    let pg_repo = Arc::new(PostgresRepo::new().await?);
     
-    info!("Ensuring vector index exists in Redis...");
-    redis_repo.ensure_index().await?;
-
     let openai_client = Arc::new(OpenAiClient::new()?);
 
     // 2. Initialize Use Cases
-    let search_use_case = Arc::new(SemanticSearchUseCase::new(redis_repo, openai_client));
+    let search_use_case = Arc::new(SemanticSearchUseCase::new(pg_repo, openai_client));
 
     // 3. Setup API State
     let app_state = ApiState { search_use_case };

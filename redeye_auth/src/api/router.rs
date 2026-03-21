@@ -1,10 +1,10 @@
 use axum::{
-    routing::{post},
+    routing::{post, get},
     Router,
 };
 use axum::http::Method;
 use tower_http::cors::CorsLayer;
-use super::handlers::{signup, login, onboard, refresh};
+use super::handlers::{signup, login, onboard, refresh, get_api_keys};
 use crate::AppState;
 
 pub fn create_router(state: AppState) -> Router {
@@ -20,6 +20,7 @@ pub fn create_router(state: AppState) -> Router {
 
     let protected_routes = Router::new()
         .route("/onboard", post(onboard))
+        .route("/api-keys", get(get_api_keys))
         .route_layer(axum::middleware::from_fn(crate::api::middleware::auth::auth_middleware));
 
     Router::new()

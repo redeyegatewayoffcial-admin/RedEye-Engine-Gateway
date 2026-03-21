@@ -42,6 +42,9 @@ async fn main() {
     let cache_url = std::env::var("CACHE_URL")
         .unwrap_or_else(|_| "http://localhost:8081".to_string());
 
+    let compliance_url = std::env::var("COMPLIANCE_URL")
+        .unwrap_or_else(|_| "http://localhost:8083".to_string());
+
     let rate_limit_max: u32 = std::env::var("RATE_LIMIT_MAX_REQUESTS")
         .unwrap_or_else(|_| "60".to_string())
         .parse()
@@ -72,6 +75,7 @@ async fn main() {
     let state = Arc::new(AppState {
         http_client,
         cache_url,
+        compliance_url,
         redis_pool,
         db_pool,
         rate_limit_max,
