@@ -90,7 +90,8 @@ pub async fn admin_metrics(
 ) -> Result<Json<Value>, GatewayError> {
     info!(tenant_id = %claims.tenant_id, "Fetching live metrics from ClickHouse");
 
-    let query = format!("
+    // 1. Summary Stats
+    let stats_query = format!("
         SELECT 
             count() as total_requests,
             avg(latency_ms) as avg_latency_ms,
@@ -101,22 +102,107 @@ pub async fn admin_metrics(
         FORMAT JSON
     ", claims.tenant_id);
 
+    // 2. Traffic Series (Last 24 hours, hourly buckets)
+    let traffic_query = format!("
+        SELECT 
+            formatDateTime(toStartOfHour(created_at), '%Y-%m-%dT%H:%M:%S') as timestamp,
+            count() as requests
+        FROM RedEye_telemetry.request_logs
+        WHERE tenant_id = '{}' AND created_at > now() - INTERVAL 24 HOUR
+        GROUP BY timestamp
+        ORDER BY timestamp
+        FORMAT JSON
+    ", claims.tenant_id);
+
+    // 3. Model Distribution
+    let model_query = format!("
+        SELECT 
+            model as name,
+            count() as value
+        FROM RedEye_telemetry.request_logs
+        WHERE tenant_id = '{}'
+        GROUP BY name
+        FORMAT JSON
+    ", claims.tenant_id);
+
+    // 4. Latency Buckets
+    let latency_query = format!("
+        SELECT 
+            case 
+                when latency_ms < 100 then '0-100ms'
+                when latency_ms < 500 then '100-500ms'
+                when latency_ms < 1000 then '500-1s'
+                else '1s+'
+            end as bucket,
+            count() as count
+        FROM RedEye_telemetry.request_logs
+        WHERE tenant_id = '{}'
+        GROUP BY bucket
+        ORDER BY count DESC
+        FORMAT JSON
+    ", claims.tenant_id);
+
+    // Execute queries (simplified sequential for reliability, could use join_all)
+    let stats_resp = state.http_client.post(&state.clickhouse_url).body(stats_query).send().await
+        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
+    let traffic_resp = state.http_client.post(&state.clickhouse_url).body(traffic_query).send().await
+        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
+    let model_resp = state.http_client.post(&state.clickhouse_url).body(model_query).send().await
+        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
+    let latency_resp = state.http_client.post(&state.clickhouse_url).body(latency_query).send().await
+        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
+
+    let stats_json: Value = stats_resp.json().await.unwrap_or(json!({"data": []}));
+    let traffic_json: Value = traffic_resp.json().await.unwrap_or(json!({"data": []}));
+    let model_json: Value = model_resp.json().await.unwrap_or(json!({"data": []}));
+    let latency_json: Value = latency_resp.json().await.unwrap_or(json!({"data": []}));
+
+    let summary = stats_json["data"].as_array().and_then(|a| a.first()).cloned()
+        .unwrap_or_else(|| json!({"total_requests": "0", "avg_latency_ms": 0.0, "total_tokens": "0", "rate_limited_requests": "0"}));
+
+    let mut result = summary;
+    result["traffic_series"] = traffic_json["data"].clone();
+    result["model_distribution"] = model_json["data"].clone();
+    result["latency_buckets"] = latency_json["data"].clone();
+
+    Ok(Json(result))
+}
+
+/// GET /v1/admin/traces
+#[instrument(skip(state, claims))]
+pub async fn get_traces(
+    State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, GatewayError> {
+    info!(tenant_id = %claims.tenant_id, "Fetching recent traces from ClickHouse");
+
+    let query = format!("
+        SELECT 
+            toString(id) as traceId,
+            tenant_id as tenantId,
+            model,
+            tokens,
+            concat(toString(latency_ms), ' ms') as latency,
+            if(status = 200, 'Allowed', 'Blocked') as policy
+        FROM RedEye_telemetry.request_logs
+        WHERE tenant_id = '{}'
+        ORDER BY created_at DESC
+        LIMIT 50
+        FORMAT JSON
+    ", claims.tenant_id);
+
     let response = state.http_client.post(&state.clickhouse_url).body(query).send().await
-        .map_err(|e| { error!(error = %e, "ClickHouse metrics failed"); GatewayError::Proxy(e) })?;
+        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
 
     if !response.status().is_success() {
         let err = response.text().await.unwrap_or_default();
-        error!(error = %err, "ClickHouse metrics query failed");
-        return Err(GatewayError::ResponseBuild("Metrics query failed".to_string()));
+        error!(error = %err, "ClickHouse traces query failed");
+        return Err(GatewayError::ResponseBuild("Traces query failed".to_string()));
     }
 
-    let mut clickhouse_json: Value = response.json().await
-        .map_err(|e| { error!(error = %e, "Failed to parse ClickHouse JSON"); GatewayError::ResponseBuild(e.to_string()) })?;
+    let clickhouse_json: Value = response.json().await
+        .map_err(|e| { error!(error = %e); GatewayError::ResponseBuild(e.to_string()) })?;
 
-    let row = clickhouse_json.get_mut("data")
-        .and_then(|data| data.as_array_mut())
-        .and_then(|arr| arr.pop())
-        .unwrap_or_else(|| json!({"total_requests": "0", "avg_latency_ms": 0.0, "total_tokens": "0", "rate_limited_requests": "0"}));
-
-    Ok(Json(row))
+    let data = clickhouse_json["data"].clone();
+    Ok(Json(data))
 }

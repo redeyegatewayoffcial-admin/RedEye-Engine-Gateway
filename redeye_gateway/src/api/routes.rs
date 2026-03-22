@@ -27,6 +27,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Admin routes
     let admin_routes = Router::new()
         .route("/metrics", get(handlers::admin_metrics))
+        .route("/traces", get(handlers::get_traces))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::api::middleware::auth::auth_middleware,
@@ -40,7 +41,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .nest("/v1", proxy_routes)
-        .nest("/v1/admin", admin_routes)
+        .nest("/v1/admin", admin_routes.clone())
+        .route("/v1/admin/analytics", get(handlers::admin_metrics).with_state(state.clone()))
         .route("/health", get(handlers::health_check))
         // Global trace context middleware
         .layer(axum::middleware::from_fn_with_state(

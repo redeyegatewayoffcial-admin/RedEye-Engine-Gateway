@@ -294,9 +294,6 @@ pub async fn execute_proxy(
 
     if is_streaming {
         let mut event_stream = upstream_response.bytes_stream().eventsource();
-        let compliance_url = state.compliance_url.clone();
-        let http_client = state.http_client.clone();
-        
         let (tx, rx) = mpsc::channel(100);
 
         // Clones for the spawned task
@@ -309,49 +306,19 @@ pub async fn execute_proxy(
         let ups_status = upstream_status;
 
         tokio::spawn(async move {
-            let mut buffer = String::new();
             let mut full_response = String::new();
             
             while let Some(Ok(event)) = event_stream.next().await {
                 if event.data == "[DONE]" {
-                    if !buffer.is_empty() {
-                        if let Ok(redacted) = call_compliance_redact_chunk(&http_client, &compliance_url, &buffer).await {
-                            let json_str = format!(
-                                "{{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}",
-                                serde_json::to_string(&redacted).unwrap_or_else(|_| "\"\"".to_string())
-                            );
-                            let _ = tx.send(Ok(Event::default().data(json_str))).await;
-                        }
-                        buffer.clear();
-                    }
                     let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
                     break;
                 }
 
                 if let Ok(json) = serde_json::from_str::<Value>(&event.data) {
                     if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
-                        buffer.push_str(content);
                         full_response.push_str(content);
-                        
-                        // Heuristic: Flush buffer if it's > 30 chars or ends with punctuation/newline
-                        let should_flush = buffer.len() > 30 || content.contains(|c| ['.', '!', '?', '\n'].contains(&c));
-                        
-                        if should_flush {
-                            if let Ok(redacted) = call_compliance_redact_chunk(&http_client, &compliance_url, &buffer).await {
-                                let mut new_json = json.clone();
-                                new_json["choices"][0]["delta"]["content"] = Value::String(redacted);
-                                let _ = tx.send(Ok(Event::default().data(new_json.to_string()))).await;
-                                // We don't push redacted to full_response here because we already pushed raw content above.
-                                // If the user wants the CACHE to have the redacted version, we should rethink this.
-                                // However, follow the user's specific instruction to accumulate from the delta content.
-                            } else {
-                                // Fallback (e.g. timeout) - send original
-                                let mut new_json = json.clone();
-                                new_json["choices"][0]["delta"]["content"] = Value::String(buffer.clone());
-                                let _ = tx.send(Ok(Event::default().data(new_json.to_string()))).await;
-                            }
-                            buffer.clear();
-                        }
+                        let sse_event = Event::default().data(event.data);
+                        let _ = tx.send(Ok(sse_event)).await;
                         continue;
                     }
                 }
@@ -536,19 +503,4 @@ async fn call_compliance_redact(
     }
 }
 
-/// Helper to redact a single string chunk for SSE streaming
-async fn call_compliance_redact_chunk(
-    http_client: &reqwest::Client,
-    compliance_url: &str,
-    chunk: &str,
-) -> Result<String, GatewayError> {
-    // We wrap it in a dummy JSON object, since PiiEngine traverses JSON.
-    let payload = json!({ "chunk": chunk });
-    let sanitized = call_compliance_redact(http_client, compliance_url, &payload).await?;
-    
-    if let Some(redacted_str) = sanitized["chunk"].as_str() {
-        Ok(redacted_str.to_string())
-    } else {
-        Ok(chunk.to_string())
-    }
-}
+

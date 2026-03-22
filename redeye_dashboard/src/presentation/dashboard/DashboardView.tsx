@@ -98,7 +98,7 @@ export function DashboardView() {
           </h2>
           <div className="h-[250px] w-full min-h-[250px]">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={metrics?.traffic_series || []}>
+              <AreaChart data={metrics?.traffic_series && metrics.traffic_series.length > 0 ? metrics.traffic_series : []}>
                 <defs>
                   <linearGradient id="colorRequests" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
@@ -139,7 +139,7 @@ export function DashboardView() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={metrics?.model_distribution || []}
+                  data={metrics?.model_distribution && metrics.model_distribution.length > 0 ? metrics.model_distribution : []}
                   cx="50%"
                   cy="50%"
                   innerRadius={60}
@@ -168,7 +168,7 @@ export function DashboardView() {
           <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-6">Latency Histogram</h2>
           <div className="h-[250px] w-full min-h-[250px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={metrics?.latency_buckets || []}>
+              <BarChart data={metrics?.latency_buckets && metrics.latency_buckets.length > 0 ? metrics.latency_buckets : []}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                 <XAxis dataKey="bucket" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
                 <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
