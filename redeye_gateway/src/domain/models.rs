@@ -6,7 +6,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub cache_url: String,
     pub compliance_url: String,
-    pub redis_pool: deadpool_redis::Pool,
+    pub redis_conn: redis::aio::MultiplexedConnection,
     pub db_pool: sqlx::PgPool,
     pub rate_limit_max: u32,
     pub rate_limit_window: u32,

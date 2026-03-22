@@ -4,7 +4,8 @@
 //! It is intentionally free of Axum types so it can be tested or reused independently.
 
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use regex::Regex;
 use tracing::info;
 use axum::response::sse::Event;
 use futures::stream::StreamExt;
@@ -16,10 +17,16 @@ use crate::domain::models::{AppState, GatewayError, TraceContext};
 use sqlx::Row;
 use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 
-/// Result of a proxy execution — either a cached response or an upstream response.
 pub enum ProxyBody {
     Buffered(Vec<u8>),
     SseStream(ReceiverStream<Result<Event, axum::Error>>),
+}
+
+fn pii_regex() -> &'static Regex {
+    static PII_REGEX: OnceLock<Regex> = OnceLock::new();
+    PII_REGEX.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:\d[ -]*?){13,16}\b|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|\b(?:\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b").unwrap()
+    })
 }
 
 pub struct ProxyResult {
@@ -42,16 +49,23 @@ pub async fn execute_proxy(
     let start_time = std::time::Instant::now();
 
     // ── 0. PII Redaction via Compliance Service (fail-closed) ───────────────
-    let sanitized_body = call_compliance_redact(
-        &state.http_client,
-        &state.compliance_url,
-        body,
-    ).await?;
+    let mut sanitized_body_storage: Option<Value> = None;
+    let mut actual_body = body;
+
+    if pii_regex().is_match(raw_prompt) {
+        let sanitized = call_compliance_redact(
+            &state.http_client,
+            &state.compliance_url,
+            body,
+        ).await?;
+        sanitized_body_storage = Some(sanitized);
+        actual_body = sanitized_body_storage.as_ref().unwrap();
+    }
 
     // Use the sanitized body for all downstream steps.
     // `raw_prompt` (already extracted by caller) continues to reflect the
     // *original* user message for telemetry / cache-key purposes.
-    let body = &sanitized_body;
+    let body = actual_body;
 
     // ── 1. Semantic Cache Lookup ────────────────────────────────────────────
     if let Some(cached_content) = cache_client::lookup_cache(
@@ -69,10 +83,19 @@ pub async fn execute_proxy(
 
         let bytes = serde_json::to_vec(&mock_response).unwrap_or_default();
 
-        fire_async_telemetry(
-            state, tenant_id, model_name, raw_prompt, trace_ctx,
-            200, start_time.elapsed().as_millis() as u32, 0, true, None,
-        );
+        let s = state.clone();
+        let tid = tenant_id.to_string();
+        let model = model_name.to_string();
+        let prompt = raw_prompt.to_string();
+        let ctx = trace_ctx.clone();
+        let latency = start_time.elapsed().as_millis() as u32;
+
+        tokio::spawn(async move {
+            fire_async_telemetry(
+                &s, &tid, &model, &prompt, &ctx,
+                200, latency, 0, true, None,
+            ).await;
+        });
 
         return Ok(ProxyResult {
             status: 200,
@@ -107,9 +130,10 @@ pub async fn execute_proxy(
     "#;
 
     let bucket_key = format!("tb:tokens:{}", tenant_id);
-    if let Ok(mut conn) = state.redis_pool.get().await {
-        use deadpool_redis::redis::AsyncCommands;
-        let allowed: Option<i32> = deadpool_redis::redis::Script::new(lua_script)
+    {
+        let mut conn = state.redis_conn.clone();
+        use redis::AsyncCommands;
+        let allowed: Option<i32> = redis::Script::new(lua_script)
             .key(&bucket_key)
             .arg(estimated_tokens)
             .invoke_async(&mut conn)
@@ -126,8 +150,9 @@ pub async fn execute_proxy(
     let mut initial_model = model_name.to_string();
     let mut provider = llm_router::LlmProvider::detect(&initial_model);
     
-    if let Ok(mut conn) = state.redis_pool.get().await {
-        use deadpool_redis::redis::AsyncCommands;
+    {
+        let mut conn = state.redis_conn.clone();
+        use redis::AsyncCommands;
         let cb_key = format!("cb:open:{}:{}", tenant_id, provider.as_str());
         let is_open: Option<String> = conn.get(&cb_key).await.ok();
         
@@ -146,8 +171,9 @@ pub async fn execute_proxy(
     let mut api_key = None;
 
     // Check Redis first
-    if let Ok(mut conn) = state.redis_pool.get().await {
-        use deadpool_redis::redis::AsyncCommands;
+    {
+        let mut conn = state.redis_conn.clone();
+        use redis::AsyncCommands;
         if let Ok(cached_key) = conn.get::<_, String>(&redis_key).await {
             api_key = Some(cached_key);
         }
@@ -169,8 +195,9 @@ pub async fn execute_proxy(
             let encrypted_data: Vec<u8> = r.get(0);
             if let Ok(decrypted) = crate::api::middleware::auth::decrypt_api_key(&encrypted_data) {
                 // Set in Redis with 300s TTL (5 minutes)
-                if let Ok(mut conn) = state.redis_pool.get().await {
-                    use deadpool_redis::redis::AsyncCommands;
+                {
+                    let mut conn = state.redis_conn.clone();
+                    use redis::AsyncCommands;
                     let _: Result<(), _> = conn.set_ex(&redis_key, &decrypted, 300).await;
                 }
                 api_key = Some(decrypted);
@@ -201,8 +228,9 @@ pub async fn execute_proxy(
 
     if is_failure {
         tracing::error!(provider = provider_str, "Primary provider failed. Tracking error for circuit breaker...");
-        if let Ok(mut conn) = state.redis_pool.get().await {
-            use deadpool_redis::redis::AsyncCommands;
+        {
+            let mut conn = state.redis_conn.clone();
+            use redis::AsyncCommands;
             let err_key = format!("cb:errors:{}:{}", tenant_id, provider_str);
             let count: i32 = conn.incr(&err_key, 1).await.unwrap_or(0);
             let _: Result<(), _> = conn.expire(&err_key, 10).await;
@@ -265,29 +293,24 @@ pub async fn execute_proxy(
         .unwrap_or(false);
 
     if is_streaming {
-        let latency_ms = start_time.elapsed().as_millis() as u32;
-
-        fire_async_telemetry(
-            state,
-            tenant_id,
-            model_name,
-            raw_prompt,
-            trace_ctx,
-            upstream_status,
-            latency_ms,
-            0,
-            false,
-            None,
-        );
-
         let mut event_stream = upstream_response.bytes_stream().eventsource();
         let compliance_url = state.compliance_url.clone();
         let http_client = state.http_client.clone();
         
         let (tx, rx) = mpsc::channel(100);
 
+        // Clones for the spawned task
+        let state_c = state.clone();
+        let tenant_id_c = tenant_id.to_string();
+        let model_name_c = model_name.to_string();
+        let raw_prompt_c = raw_prompt.to_string();
+        let trace_ctx_c = trace_ctx.clone();
+        let start_time_c = start_time;
+        let ups_status = upstream_status;
+
         tokio::spawn(async move {
             let mut buffer = String::new();
+            let mut full_response = String::new();
             
             while let Some(Ok(event)) = event_stream.next().await {
                 if event.data == "[DONE]" {
@@ -308,6 +331,7 @@ pub async fn execute_proxy(
                 if let Ok(json) = serde_json::from_str::<Value>(&event.data) {
                     if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                         buffer.push_str(content);
+                        full_response.push_str(content);
                         
                         // Heuristic: Flush buffer if it's > 30 chars or ends with punctuation/newline
                         let should_flush = buffer.len() > 30 || content.contains(|c| ['.', '!', '?', '\n'].contains(&c));
@@ -317,6 +341,9 @@ pub async fn execute_proxy(
                                 let mut new_json = json.clone();
                                 new_json["choices"][0]["delta"]["content"] = Value::String(redacted);
                                 let _ = tx.send(Ok(Event::default().data(new_json.to_string()))).await;
+                                // We don't push redacted to full_response here because we already pushed raw content above.
+                                // If the user wants the CACHE to have the redacted version, we should rethink this.
+                                // However, follow the user's specific instruction to accumulate from the delta content.
                             } else {
                                 // Fallback (e.g. timeout) - send original
                                 let mut new_json = json.clone();
@@ -332,6 +359,33 @@ pub async fn execute_proxy(
                 // Unrecognized data pass-through
                 let _ = tx.send(Ok(Event::default().data(event.data))).await;
             }
+
+            // Stream complete - trigger telemetry with the full response content
+            let latency_ms = start_time_c.elapsed().as_millis() as u32;
+            
+            let mock_response = json!({
+                "id": "chatcmpl-streamed",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model_name_c,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": full_response}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            });
+
+            let mock_bytes = serde_json::to_vec(&mock_response).unwrap_or_default();
+
+            fire_async_telemetry(
+                &state_c,
+                &tenant_id_c,
+                &model_name_c,
+                &raw_prompt_c,
+                &trace_ctx_c,
+                ups_status,
+                latency_ms,
+                0, // Token counting for streams is complex; using 0 as placeholder or implement simple heuristic
+                false,
+                Some(mock_bytes),
+            ).await;
         });
 
         return Ok(ProxyResult {
@@ -352,11 +406,20 @@ pub async fn execute_proxy(
         .and_then(|v| v["usage"]["total_tokens"].as_u64())
         .unwrap_or(0) as u32;
 
-    fire_async_telemetry(
-        state, tenant_id, model_name, raw_prompt, trace_ctx,
-        upstream_status, latency_ms, tokens, false,
-        Some(body_bytes.clone()),
-    );
+    let s = state.clone();
+    let tid = tenant_id.to_string();
+    let model = model_name.to_string();
+    let prompt = raw_prompt.to_string();
+    let ctx = trace_ctx.clone();
+    let bytes_c = Some(body_bytes.clone());
+
+    tokio::spawn(async move {
+        fire_async_telemetry(
+            &s, &tid, &model, &prompt, &ctx,
+            upstream_status, latency_ms, tokens, false,
+            bytes_c,
+        ).await;
+    });
 
     Ok(ProxyResult {
         status: upstream_status,
@@ -367,7 +430,7 @@ pub async fn execute_proxy(
 }
 
 /// Spawns a detached background task for ClickHouse logging, tracer ingestion, and cache storage.
-fn fire_async_telemetry(
+async fn fire_async_telemetry(
     state: &Arc<AppState>,
     tenant_id: &str,
     model_name: &str,
@@ -385,13 +448,12 @@ fn fire_async_telemetry(
     let prompt = raw_prompt.to_string();
     let ctx = trace_ctx.clone();
 
-    tokio::spawn(async move {
-        // 3a. ClickHouse request_logs
-        clickhouse_logger::log_request(
-            &s.http_client, &s.clickhouse_url,
-            &tid, &ctx.trace_id, &ctx.session_id,
-            status_code, latency_ms, &model, tokens, cache_hit,
-        ).await;
+    // 3a. ClickHouse request_logs
+    clickhouse_logger::log_request(
+        &s.http_client, &s.clickhouse_url,
+        &tid, &ctx.trace_id, &ctx.session_id,
+        status_code, latency_ms, &model, tokens, cache_hit,
+    ).await;
 
         // 3b. Send to redeye_tracer for deep tracing + compliance audit
         let response_content = response_bytes.as_ref()
@@ -419,7 +481,6 @@ fn fire_async_telemetry(
         if !cache_hit && status_code == 200 && !response_content.is_empty() {
             cache_client::store_in_cache(&s.http_client, &s.cache_url, &tid, &model, &prompt, &response_content).await;
         }
-    });
 }
 
 // ── Compliance Helper ────────────────────────────────────────────────────────

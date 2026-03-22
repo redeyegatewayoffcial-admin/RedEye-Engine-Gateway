@@ -41,10 +41,7 @@ pub async fn rate_limit_middleware(
 
     let redis_key = format!("rl:tenant:{}", identifier);
 
-    let mut conn = state.redis_pool.get().await.map_err(|e| {
-        error!(error = %e, "Failed to get Redis connection from pool");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let mut conn = state.redis_conn.clone();
 
     let script = redis::Script::new(RATE_LIMIT_LUA);
     let limit = state.rate_limit_max;
@@ -65,7 +62,7 @@ pub async fn rate_limit_middleware(
     let remaining = i64::max(0, limit as i64 - current_requests);
     let ttl: i64 = match current_requests {
         1 => window_secs as i64,
-        _ => conn.ttl(&redis_key).await.unwrap_or(window_secs as i64),
+        _ => conn.ttl::<_, i64>(&redis_key).await.unwrap_or(window_secs as i64),
     };
 
     if current_requests > (limit as i64) {

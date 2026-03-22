@@ -6,4 +6,6 @@
 **/*.exe
 **/*.msi
 **/*.pdb
+**/*.Prompt_temp.md
+**/*aider/
 mnt/

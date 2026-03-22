@@ -59,10 +59,7 @@ thiserror = "1"
 # "script" enables the Script API for executing Lua scripts atomically.
 redis = { version = "0.27", features = ["tokio-comp", "script"] }
 
-# deadpool-redis: Async connection pool for Redis.
-# Reuses existing connections across requests — critical for sub-5ms latency.
-# Without a pool, each request would pay ~1ms for a TCP handshake to Redis.
-deadpool-redis = "0.18"
+regex = "1.10"
 
 # ── HTTP Primitives ────────────────────────────────────────────────────────────
 # http: Shared types for HTTP (StatusCode, HeaderMap, etc.) used across crates.

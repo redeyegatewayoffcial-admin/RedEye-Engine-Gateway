@@ -9,11 +9,11 @@ echo ============================================================
 echo.
 
 :: 1. Infrastructure Bootup
-echo [1/3] Starting Docker Infrastructure (Postgres, Redis, ClickHouse)...
-docker-compose up -d
-echo.
-echo Waiting 5 seconds for DB and Cache to be ready...
-timeout /t 5 /nobreak > nul
+::echo [1/3] Starting Docker Infrastructure (Postgres, Redis, ClickHouse)...::
+::docker-compose up -d
+::ech   o.
+::echo Waiting 5 seconds for DB and Cache to be ready...
+::timeout /t 5 /nobreak > nul
 
 :: 2. Start Rust Microservices
 echo [2/3] Launching Rust Services in separate windows...

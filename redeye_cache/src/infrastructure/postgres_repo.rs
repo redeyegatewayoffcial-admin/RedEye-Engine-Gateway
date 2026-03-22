@@ -13,7 +13,7 @@ pub struct PostgresRepo {
 
 impl PostgresRepo {
     pub async fn new() -> Result<Self, sqlx::Error> {
-        let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "postgresql://postgres:postgres@localhost:5432/nexusai".to_string());
+        let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://RedEye:RedEye_secret@127.0.0.1:5433/RedEye".to_string());
         let pool = PgPool::connect(&database_url).await?;
         Ok(Self { pool })
     }

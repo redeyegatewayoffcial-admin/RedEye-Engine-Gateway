@@ -55,10 +55,12 @@ async fn main() {
         .parse()
         .expect("RATE_LIMIT_WINDOW_SECS must be a valid integer");
 
-    let cfg = deadpool_redis::Config::from_url(redis_url);
-    let redis_pool = cfg
-        .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-        .expect("Failed to create Redis connection pool");
+    let redis_client = redis::Client::open(redis_url)
+        .expect("Failed to create Redis client");
+    let redis_conn = redis_client
+        .get_multiplexed_tokio_connection()
+        .await
+        .expect("Failed to create Redis multiplexed connection");
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -76,7 +78,7 @@ async fn main() {
         http_client,
         cache_url,
         compliance_url,
-        redis_pool,
+        redis_conn,
         db_pool,
         rate_limit_max,
         rate_limit_window,
