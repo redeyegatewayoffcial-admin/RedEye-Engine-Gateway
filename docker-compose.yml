@@ -25,7 +25,7 @@ services:
   # Stores: tenants, API keys, routing rules, policy configurations.
   # We pin to 16-alpine for a minimal, production-grade image.
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: redeye_postgres
     restart: unless-stopped
     environment:
