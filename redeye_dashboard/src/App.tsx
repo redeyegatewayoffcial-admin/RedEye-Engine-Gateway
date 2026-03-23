@@ -16,6 +16,7 @@ import { DashboardLayout }  from './presentation/layouts/DashboardLayout';
 // Dashboard sub-views (mounted as children of DashboardLayout)
 import { DashboardView }    from './presentation/dashboard/DashboardView';
 import { ApiKeysView }      from './presentation/dashboard/ApiKeysView';
+import { BillingView }      from './presentation/dashboard/BillingView';
 import { ComplianceView }   from './presentation/dashboard/ComplianceView';
 import { TracesView }       from './presentation/dashboard/TracesView';
 import { CacheView }        from './presentation/dashboard/CacheView';
@@ -89,6 +90,7 @@ export default function App() {
           >
             <Route index element={<DashboardIndex />} />
             <Route path="api-keys"   element={<ApiKeysView />} />
+            <Route path="billing"    element={<BillingView />} />
             <Route path="compliance" element={<ComplianceView />} />
             <Route path="traces"     element={<TracesView />} />
             <Route path="cache"      element={<CacheView />} />

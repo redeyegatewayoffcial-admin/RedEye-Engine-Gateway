@@ -168,6 +168,157 @@ pub async fn admin_metrics(
     Ok(Json(result))
 }
 
+/// GET /v1/admin/metrics/usage
+/// Returns total token consumption and estimated cost for the authenticated tenant.
+///
+/// # Complexity
+/// - Time:  O(n) in ClickHouse (full partition scan bounded by tenant_id), O(1) in Rust.
+/// - Space: O(1) — single aggregation row is parsed; no allocations proportional to row count.
+#[instrument(skip(state, claims))]
+pub async fn get_usage_metrics(
+    State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, GatewayError> {
+    info!(tenant_id = %claims.tenant_id, "Fetching token usage metrics from ClickHouse");
+
+    // Parameterised via format! — tenant_id comes from a trusted, validated JWT claim,
+    // so there is no SQL-injection risk from external user input.
+    let query = format!(
+        "SELECT sum(tokens) as total_tokens \
+         FROM RedEye_telemetry.request_logs \
+         WHERE tenant_id = '{}' \
+         FORMAT JSON",
+        claims.tenant_id
+    );
+
+    let resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "ClickHouse usage query failed (network)");
+            GatewayError::Proxy(e)
+        })?;
+
+    if !resp.status().is_success() {
+        let err_body = resp.text().await.unwrap_or_default();
+        error!(error = %err_body, "ClickHouse usage query returned non-2xx");
+        return Err(GatewayError::ResponseBuild(
+            "ClickHouse usage query failed".to_string(),
+        ));
+    }
+
+    // Parse the ClickHouse JSON envelope: { "data": [{"total_tokens": "N"}], ... }
+    // ClickHouse returns numeric aggregates as strings in FORMAT JSON.
+    let ch_json: Value = resp.json().await.map_err(|e| {
+        error!(error = %e, "Failed to deserialise ClickHouse usage response");
+        GatewayError::ResponseBuild(e.to_string())
+    })?;
+
+    // Gracefully handle empty tables: fall back to "0".
+    let total_tokens: u64 = ch_json["data"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["total_tokens"].as_str())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    // Flat rate: $0.002 per 1,000 tokens.  Pure arithmetic — no I/O.
+    const COST_PER_THOUSAND: f64 = 0.002;
+    let estimated_cost = (total_tokens as f64) / 1_000.0 * COST_PER_THOUSAND;
+
+    info!(
+        tenant_id = %claims.tenant_id,
+        total_tokens,
+        estimated_cost,
+        "Usage metrics computed"
+    );
+
+    Ok(Json(json!({
+        "total_tokens": total_tokens,
+        "estimated_cost": (estimated_cost * 10_000.0).round() / 10_000.0,
+    })))
+}
+
+/// GET /v1/admin/billing/breakdown
+/// Returns daily cost aggregated by model.
+#[instrument(skip(state, claims))]
+pub async fn get_billing_breakdown(
+    State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, GatewayError> {
+    info!(tenant_id = %claims.tenant_id, "Fetching billing breakdown from ClickHouse");
+
+    // We group by day and model. tenant_id is safe as it's from the JWT claim.
+    let query = format!(
+        "SELECT \
+            formatDateTime(toStartOfDay(created_at), '%Y-%m-%d') as date, \
+            model, \
+            sum(tokens) as total_tokens \
+         FROM RedEye_telemetry.request_logs \
+         WHERE tenant_id = '{}' \
+         GROUP BY date, model \
+         ORDER BY date DESC, model ASC \
+         FORMAT JSON",
+        claims.tenant_id
+    );
+
+    let resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "ClickHouse billing query failed (network)");
+            GatewayError::Proxy(e)
+        })?;
+
+    if !resp.status().is_success() {
+        let err_body = resp.text().await.unwrap_or_default();
+        error!(error = %err_body, "ClickHouse billing query returned non-2xx");
+        return Err(GatewayError::ResponseBuild(
+            "ClickHouse billing query failed".to_string(),
+        ));
+    }
+
+    let ch_json: Value = resp.json().await.map_err(|e| {
+        error!(error = %e, "Failed to deserialise ClickHouse response");
+        GatewayError::ResponseBuild(e.to_string())
+    })?;
+
+    // Transform ClickHouse rows (where total_tokens is often a string) into typed entries + estimated_cost
+    let rows = ch_json["data"].as_array().cloned().unwrap_or_default();
+    
+    let mut breakdown = Vec::new();
+    const COST_PER_THOUSAND: f64 = 0.002;
+
+    for row in rows {
+        let date = row["date"].as_str().unwrap_or("1970-01-01").to_string();
+        let model = row["model"].as_str().unwrap_or("unknown").to_string();
+        
+        let tokens: f64 = match &row["total_tokens"] {
+            Value::String(s) => s.parse().unwrap_or(0.0),
+            Value::Number(n) => n.as_f64().unwrap_or(0.0),
+            _ => 0.0,
+        };
+
+        let est_cost = (tokens / 1_000.0) * COST_PER_THOUSAND;
+        let rounded_cost = (est_cost * 10_000.0).round() / 10_000.0; // 4 d.p.
+
+        breakdown.push(json!({
+            "date": date,
+            "model": model,
+            "total_tokens": tokens as u64,
+            "estimated_cost": rounded_cost
+        }));
+    }
+
+    Ok(Json(json!(breakdown)))
+}
+
 /// GET /v1/admin/traces
 #[instrument(skip(state, claims))]
 pub async fn get_traces(

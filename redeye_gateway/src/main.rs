@@ -9,10 +9,14 @@ use dotenvy::dotenv;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-mod api;
-mod domain;
-mod infrastructure;
-mod usecases;
+// Re-use modules from lib.rs (the library crate) so integration tests
+// and the binary see the exact same types.
+use redeye_gateway::api;
+use redeye_gateway::domain;
+#[allow(unused_imports)]
+use redeye_gateway::infrastructure;
+#[allow(unused_imports)]
+use redeye_gateway::usecases;
 
 use domain::models::AppState;
 

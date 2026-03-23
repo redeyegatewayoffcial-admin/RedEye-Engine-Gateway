@@ -107,7 +107,15 @@ pub async fn execute_proxy(
     // ── Stage 1.5: Token-Bucket Rate Limit ────────────────────────────────────
     enforce_token_bucket(state, tenant_id, raw_prompt).await?;
 
-    // ── Stage 1.6: Circuit-Breaker / Adaptive Fallback ────────────────────────
+    // ── Stage 1.6: Behavior Control (Loop Detection) ─────────────────────────
+    crate::usecases::behavior_guard::enforce_loop_detection(
+        state,
+        &trace_ctx.session_id,
+        body,
+    )
+    .await?;
+
+    // ── Stage 1.7: Circuit-Breaker / Adaptive Fallback ────────────────────────
     let (mut resolved_model, mut provider) = select_provider_with_fallback(state, tenant_id, model_name).await;
 
     // ── Stage 2: Resolve Provider API Key ─────────────────────────────────────

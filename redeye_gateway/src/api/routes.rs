@@ -27,6 +27,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // Admin routes
     let admin_routes = Router::new()
         .route("/metrics", get(handlers::admin_metrics))
+        .route("/metrics/usage", get(handlers::get_usage_metrics))
+        .route("/billing/breakdown", get(handlers::get_billing_breakdown))
         .route("/traces", get(handlers::get_traces))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

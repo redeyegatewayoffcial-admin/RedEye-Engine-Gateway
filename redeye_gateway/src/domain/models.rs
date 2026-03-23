@@ -36,6 +36,8 @@ pub enum GatewayError {
     ComplianceFailure(String),
     #[error("Rate Limit Exceeded: {0}")]
     RateLimitExceeded(String),
+    #[error("Agent loop detected: {0}")]
+    LoopDetected(String),
     #[error("Gateway internal error: {0}")]
     Proxy(reqwest::Error),
 }
@@ -51,6 +53,7 @@ impl axum::response::IntoResponse for GatewayError {
             GatewayError::UpstreamUnreachable(_) => StatusCode::BAD_GATEWAY,
             GatewayError::ComplianceFailure(_) => StatusCode::SERVICE_UNAVAILABLE,
             GatewayError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
+            GatewayError::LoopDetected(_) => StatusCode::TOO_MANY_REQUESTS,
             GatewayError::Proxy(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -60,6 +63,7 @@ impl axum::response::IntoResponse for GatewayError {
             GatewayError::UpstreamUnreachable(_) => "The upstream LLM service is currently unreachable.",
             GatewayError::ComplianceFailure(_) => "Request blocked: the compliance service is unavailable or rejected this payload.",
             GatewayError::RateLimitExceeded(_) => "Rate limit exceeded. Please try again later.",
+            GatewayError::LoopDetected(_) => "Agent recursive loop detected. This session has been blocked to prevent runaway costs.",
             GatewayError::Proxy(_) => "An internal error occurred while communicating with backend cluster services.",
         };
 

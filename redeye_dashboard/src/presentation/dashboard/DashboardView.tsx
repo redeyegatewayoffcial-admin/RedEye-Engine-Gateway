@@ -10,6 +10,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   PieChart, Pie, Cell, BarChart, Bar, Legend
 } from 'recharts';
+import { fetchUsageMetrics, USAGE_METRICS_URL, type UsageMetrics } from '../../data/services/metricsService';
 
 interface Metrics {
   total_requests: string;
@@ -31,6 +32,14 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
+/** Formats a token count with locale-aware thousands separators (e.g. 1,234,567). */
+const formatTokens = (n: number): string =>
+  n.toLocaleString('en-US');
+
+/** Formats a cost to USD string (e.g. $0.0025). */
+const formatCost = (n: number): string =>
+  `$${n.toFixed(4)}`;
+
 export function DashboardView() {
   const { data: metrics, error, isLoading } = useSWR<Metrics>(
     'http://localhost:8080/v1/admin/metrics',
@@ -38,10 +47,16 @@ export function DashboardView() {
     { refreshInterval: 3000, errorRetryCount: 3 }
   );
 
-  const calculateSavedCost = () => {
-    if (!metrics) return '0.00';
-    return (parseInt(metrics.rate_limited_requests || '0') * 0.005).toFixed(2);
-  };
+  // Dedicated, lean poll for token usage & cost — 30 s is sufficient for cost tracking.
+  // Independent from the main metrics hook so a ClickHouse hiccup on one doesn't block both.
+  const {
+    data: usageMetrics,
+    isLoading: isUsageLoading,
+  } = useSWR<UsageMetrics>(
+    USAGE_METRICS_URL,
+    fetchUsageMetrics,
+    { refreshInterval: 30_000, errorRetryCount: 3 }
+  );
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -69,15 +84,20 @@ export function DashboardView() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
         <StatCard title="Total Traffic" value={isLoading && !metrics ? '...' : metrics?.total_requests ?? '0'} icon={Activity} accentClass="text-indigo-400 ring-1 ring-indigo-400/20" />
         <StatCard title="Avg Latency" value={isLoading && !metrics ? '...' : `${Math.round(metrics?.avg_latency_ms ?? 0)} ms`} icon={Zap} accentClass="text-violet-400 ring-1 ring-violet-400/20" />
-        <StatCard title="Tokens Processed" value={isLoading && !metrics ? '...' : metrics?.total_tokens ?? '0'} icon={Cpu} accentClass="text-sky-400 ring-1 ring-sky-400/20" />
+        <StatCard
+          title="Tokens Processed"
+          value={(isUsageLoading && !usageMetrics) ? '...' : formatTokens(usageMetrics?.total_tokens ?? 0)}
+          icon={Cpu}
+          accentClass="text-sky-400 ring-1 ring-sky-400/20"
+        />
         <StatCard title="Threats Blocked" value={isLoading && !metrics ? '...' : metrics?.rate_limited_requests ?? '0'} icon={ShieldAlert} accentClass="text-rose-400 ring-1 ring-rose-400/20" />
         <div className="sm:col-span-2 lg:col-span-1 xl:col-span-1">
           <StatCard
-            title="API Cost Saved"
-            value={`$${calculateSavedCost()}`}
+            title="Est. Token Cost"
+            value={(isUsageLoading && !usageMetrics) ? '...' : formatCost(usageMetrics?.estimated_cost ?? 0)}
             icon={DollarSign}
             accentClass="text-emerald-400 ring-1 ring-emerald-400/20"
-            subtitle="Prevented by Gateway"
+            subtitle="Live · $0.002 / 1K tokens"
           />
         </div>
       </div>
