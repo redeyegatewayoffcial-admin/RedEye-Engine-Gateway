@@ -3,17 +3,52 @@
 //! Bootstrap only: load config, init tracing, build state, start server.
 
 use std::{net::SocketAddr, sync::Arc};
+
 use axum::Router;
 use dotenvy::dotenv;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-mod domain;
-mod usecases;
-mod infrastructure;
 mod api;
+mod domain;
+mod infrastructure;
+mod usecases;
 
 use domain::models::AppState;
+
+// ── Config defaults ───────────────────────────────────────────────────────────
+
+const DEFAULT_PORT: &str = "8080";
+const DEFAULT_TRACER_URL: &str = "http://localhost:8082";
+const DEFAULT_CACHE_URL: &str = "http://localhost:8081";
+const DEFAULT_COMPLIANCE_URL: &str = "http://localhost:8083";
+const DEFAULT_RATE_LIMIT_MAX: &str = "60";
+const DEFAULT_RATE_LIMIT_WINDOW: &str = "60";
+const HTTP_TIMEOUT_SECS: u64 = 120;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Reads a required environment variable, panicking with a clear message on absence.
+fn require_env(key: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| panic!("{} must be set", key))
+}
+
+/// Reads an optional environment variable, returning `default` when absent.
+fn optional_env(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Parses a numeric environment variable, panicking with a clear message on failure.
+fn parse_env<T: std::str::FromStr>(key: &str, default: &str) -> T
+where
+    T::Err: std::fmt::Debug,
+{
+    optional_env(key, default)
+        .parse::<T>()
+        .unwrap_or_else(|_| panic!("{} must be a valid number", key))
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() {
@@ -24,76 +59,135 @@ async fn main() {
         .with(EnvFilter::from_default_env())
         .init();
 
+    // ── Config ────────────────────────────────────────────────────────────────
+    let port: u16            = parse_env("GATEWAY_PORT", DEFAULT_PORT);
+    let redis_url            = require_env("REDIS_URL");
+    let clickhouse_url       = require_env("CLICKHOUSE_URL");
+    let db_url               = require_env("DATABASE_URL");
+    let tracer_url           = optional_env("TRACER_URL", DEFAULT_TRACER_URL);
+    let cache_url            = optional_env("CACHE_URL", DEFAULT_CACHE_URL);
+    let compliance_url       = optional_env("COMPLIANCE_URL", DEFAULT_COMPLIANCE_URL);
+    let rate_limit_max: u32  = parse_env("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX);
+    let rate_limit_window: u32 = parse_env("RATE_LIMIT_WINDOW_SECS", DEFAULT_RATE_LIMIT_WINDOW);
 
-    let port: u16 = std::env::var("GATEWAY_PORT")
-        .unwrap_or_else(|_| "8080".to_string())
-        .parse()
-        .expect("GATEWAY_PORT must be a valid port number");
-
-    let redis_url = std::env::var("REDIS_URL")
-        .expect("REDIS_URL must be set");
-
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .expect("CLICKHOUSE_URL must be set");
-
-    let tracer_url = std::env::var("TRACER_URL")
-        .unwrap_or_else(|_| "http://localhost:8082".to_string());
-
-    let cache_url = std::env::var("CACHE_URL")
-        .unwrap_or_else(|_| "http://localhost:8081".to_string());
-
-    let compliance_url = std::env::var("COMPLIANCE_URL")
-        .unwrap_or_else(|_| "http://localhost:8083".to_string());
-
-    let rate_limit_max: u32 = std::env::var("RATE_LIMIT_MAX_REQUESTS")
-        .unwrap_or_else(|_| "60".to_string())
-        .parse()
-        .expect("RATE_LIMIT_MAX_REQUESTS must be a valid integer");
-
-    let rate_limit_window: u32 = std::env::var("RATE_LIMIT_WINDOW_SECS")
-        .unwrap_or_else(|_| "60".to_string())
-        .parse()
-        .expect("RATE_LIMIT_WINDOW_SECS must be a valid integer");
-
-    let redis_client = redis::Client::open(redis_url)
-        .expect("Failed to create Redis client");
-    let redis_conn = redis_client
+    // ── Infrastructure clients ────────────────────────────────────────────────
+    let redis_conn = redis::Client::open(redis_url)
+        .expect("Failed to create Redis client")
         .get_multiplexed_tokio_connection()
         .await
         .expect("Failed to create Redis multiplexed connection");
 
     let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build()
         .expect("Failed to construct reqwest HTTP client");
 
-    let db_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
-        
     let db_pool = sqlx::PgPool::connect(&db_url)
         .await
         .expect("Failed to connect to Postgres DB");
 
+    // ── App state ─────────────────────────────────────────────────────────────
+    let (telemetry_tx, mut telemetry_rx) = tokio::sync::mpsc::channel(5000);
+
     let state = Arc::new(AppState {
-        http_client,
-        cache_url,
+        http_client: http_client.clone(),
+        cache_url: cache_url.clone(),
         compliance_url,
         redis_conn,
         db_pool,
         rate_limit_max,
         rate_limit_window,
-        clickhouse_url,
-        tracer_url,
+        clickhouse_url: clickhouse_url.clone(),
+        tracer_url: tracer_url.clone(),
+        telemetry_tx,
     });
 
-    let app: Router = api::routes::create_router(state);
+    // ── Background Workers ────────────────────────────────────────────────────
+    let clickhouse_url_clone = clickhouse_url;
+    let http_client_clone = http_client;
 
+    tokio::spawn(async move {
+        let mut buffer: Vec<serde_json::Value> = Vec::with_capacity(1000);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        
+        // Ensure the first tick doesn't trigger immediately before buffering anything
+        interval.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if !buffer.is_empty() {
+                        let mut body = String::new();
+                        for p in &buffer {
+                            body.push_str(&p.to_string());
+                            body.push('\n');
+                        }
+
+                        let _ = http_client_clone
+                            .post(format!("{}/?query=INSERT INTO RedEye_telemetry.request_logs FORMAT JSONEachRow", clickhouse_url_clone))
+                            .body(body)
+                            .send()
+                            .await;
+
+                        buffer.clear();
+                    }
+                }
+                msg = telemetry_rx.recv() => {
+                    match msg {
+                        Some(payload) => {
+                            buffer.push(payload);
+                            if buffer.len() >= 1000 {
+                                let mut body = String::new();
+                                for p in &buffer {
+                                    body.push_str(&p.to_string());
+                                    body.push('\n');
+                                }
+
+                                let _ = http_client_clone
+                                    .post(format!("{}/?query=INSERT INTO RedEye_telemetry.request_logs FORMAT JSONEachRow", clickhouse_url_clone))
+                                    .body(body)
+                                    .send()
+                                    .await;
+                                
+                                buffer.clear();
+                                // Reset interval so we don't immediately tick and flush an empty buffer
+                                interval.reset();
+                            }
+                        }
+                        None => {
+                            // Channel closed. Flush and exit.
+                            if !buffer.is_empty() {
+                                let mut body = String::new();
+                                for p in &buffer {
+                                    body.push_str(&p.to_string());
+                                    body.push('\n');
+                                }
+
+                                let _ = http_client_clone
+                                    .post(format!("{}/?query=INSERT INTO RedEye_telemetry.request_logs FORMAT JSONEachRow", clickhouse_url_clone))
+                                    .body(body)
+                                    .send()
+                                    .await;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // ── Server ────────────────────────────────────────────────────────────────
+    let app: Router = api::routes::create_router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
     info!("🚀 RedEye Gateway listening on http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
         .expect("Failed to bind TCP listener");
 
-    axum::serve(listener, app).await
+    axum::serve(listener, app)
+        .await
         .expect("Axum server encountered a fatal error");
 }
