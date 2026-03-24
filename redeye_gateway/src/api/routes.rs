@@ -30,6 +30,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/metrics/usage", get(handlers::get_usage_metrics))
         .route("/billing/breakdown", get(handlers::get_billing_breakdown))
         .route("/traces", get(handlers::get_traces))
+        .route("/security/alerts", get(handlers::security_alerts))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::api::middleware::auth::auth_middleware,

@@ -18,6 +18,7 @@ import { DashboardView }    from './presentation/dashboard/DashboardView';
 import { ApiKeysView }      from './presentation/dashboard/ApiKeysView';
 import { BillingView }      from './presentation/dashboard/BillingView';
 import { ComplianceView }   from './presentation/dashboard/ComplianceView';
+import { SecurityView }     from './presentation/dashboard/SecurityView';
 import { TracesView }       from './presentation/dashboard/TracesView';
 import { CacheView }        from './presentation/dashboard/CacheView';
 import { SettingsView }     from './presentation/dashboard/SettingsView';
@@ -92,6 +93,7 @@ export default function App() {
             <Route path="api-keys"   element={<ApiKeysView />} />
             <Route path="billing"    element={<BillingView />} />
             <Route path="compliance" element={<ComplianceView />} />
+            <Route path="security"   element={<SecurityView />} />
             <Route path="traces"     element={<TracesView />} />
             <Route path="cache"      element={<CacheView />} />
             <Route path="settings"   element={<SettingsView />} />

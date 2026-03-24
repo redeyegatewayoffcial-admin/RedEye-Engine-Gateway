@@ -108,14 +108,69 @@ pub async fn execute_proxy(
     enforce_token_bucket(state, tenant_id, raw_prompt).await?;
 
     // ── Stage 1.6: Behavior Control (Loop Detection) ─────────────────────────
-    crate::usecases::behavior_guard::enforce_loop_detection(
+    if let Err(e) = crate::usecases::behavior_guard::enforce_loop_detection(
         state,
         &trace_ctx.session_id,
         body,
     )
-    .await?;
+    .await
+    {
+        let latency_ms = start_time.elapsed().as_millis() as u32;
+        let payload = serde_json::to_value(crate::domain::models::LogPayload {
+            id: uuid::Uuid::new_v4().to_string(),
+            trace_id: trace_ctx.trace_id.clone(),
+            session_id: trace_ctx.session_id.clone(),
+            parent_trace_id: trace_ctx.parent_trace_id.clone(),
+            tenant_id: tenant_id.to_string(),
+            model: "__loop_blocked".to_string(),
+            status: 429,
+            latency_ms,
+            tokens: 0,
+            total_tokens: 0,
+            cache_hit: false,
+            prompt_content: raw_prompt.to_string(),
+            response_content: "".to_string(),
+            error_message: e.to_string(),
+        }).unwrap_or_else(|_| json!({}));
+        
+        let _ = state.telemetry_tx.send(payload.clone()).await;
+        crate::infrastructure::clickhouse_logger::send_trace_to_tracer(&state.http_client, &state.tracer_url, &payload).await;
 
-    // ── Stage 1.7: Circuit-Breaker / Adaptive Fallback ────────────────────────
+        return Err(e);
+    }
+
+    // ── Stage 1.7: Burn-Rate Control ─────────────────────────────────────────
+    if let Err(e) = crate::usecases::behavior_guard::enforce_burn_rate(
+        state,
+        &trace_ctx.session_id,
+    )
+    .await
+    {
+        let latency_ms = start_time.elapsed().as_millis() as u32;
+        let payload = serde_json::to_value(crate::domain::models::LogPayload {
+            id: uuid::Uuid::new_v4().to_string(),
+            trace_id: trace_ctx.trace_id.clone(),
+            session_id: trace_ctx.session_id.clone(),
+            parent_trace_id: trace_ctx.parent_trace_id.clone(),
+            tenant_id: tenant_id.to_string(),
+            model: "__burn_rate_blocked".to_string(),
+            status: 429,
+            latency_ms,
+            tokens: 0,
+            total_tokens: 0,
+            cache_hit: false,
+            prompt_content: raw_prompt.to_string(),
+            response_content: "".to_string(),
+            error_message: e.to_string(),
+        }).unwrap_or_else(|_| json!({}));
+
+        let _ = state.telemetry_tx.send(payload.clone()).await;
+        crate::infrastructure::clickhouse_logger::send_trace_to_tracer(&state.http_client, &state.tracer_url, &payload).await;
+
+        return Err(e);
+    }
+
+    // ── Stage 1.8: Circuit-Breaker / Adaptive Fallback ────────────────────────
     let (mut resolved_model, mut provider) = select_provider_with_fallback(state, tenant_id, model_name).await;
 
     // ── Stage 2: Resolve Provider API Key ─────────────────────────────────────
@@ -524,6 +579,9 @@ async fn fire_async_telemetry(
     cache_hit: bool,
     response_bytes: Option<Vec<u8>>,
 ) {
+    // ── Record session spend for burn-rate tracking ──────────────────────────
+    crate::usecases::behavior_guard::record_session_spend(state, &trace_ctx.session_id, tokens).await;
+
     let response_content = extract_response_content(response_bytes.as_deref());
 
     // 1. Clickhouse bulk batched payload

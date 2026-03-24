@@ -357,3 +357,141 @@ pub async fn get_traces(
     let data = clickhouse_json["data"].clone();
     Ok(Json(data))
 }
+
+/// GET /v1/admin/security/alerts
+/// Returns real security alert data from ClickHouse for the Security Command Center.
+/// Queries `agent_traces` where `status = 429` and `model IN ('__loop_blocked', '__burn_rate_blocked')`.
+#[instrument(skip(state, claims))]
+pub async fn security_alerts(
+    State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, GatewayError> {
+    info!(tenant_id = %claims.tenant_id, "Fetching security alerts from ClickHouse");
+
+    let tid = &claims.tenant_id;
+
+    // ── Query 1: Summary Stats ─────────────────────────────────────────────
+    let stats_query = format!(
+        "SELECT \
+            countIf(model = '__loop_blocked') as total_loops, \
+            countIf(model = '__burn_rate_blocked') as total_burns \
+         FROM RedEye_telemetry.agent_traces \
+         WHERE tenant_id = '{}' AND status = 429 \
+           AND model IN ('__loop_blocked', '__burn_rate_blocked') \
+         FORMAT JSON",
+        tid
+    );
+
+    // ── Query 2: Daily Blocks (last 7 days) ────────────────────────────────
+    let daily_query = format!(
+        "SELECT \
+            formatDateTime(toStartOfDay(created_at), '%b %d') as date, \
+            countIf(model = '__loop_blocked') as loops, \
+            countIf(model = '__burn_rate_blocked') as burn_rate \
+         FROM RedEye_telemetry.agent_traces \
+         WHERE tenant_id = '{}' AND status = 429 \
+           AND model IN ('__loop_blocked', '__burn_rate_blocked') \
+           AND created_at >= now() - INTERVAL 7 DAY \
+         GROUP BY toStartOfDay(created_at) \
+         ORDER BY toStartOfDay(created_at) \
+         FORMAT JSON",
+        tid
+    );
+
+    // ── Query 3: Recent Alerts (last 10) ───────────────────────────────────
+    let recent_query = format!(
+        "SELECT \
+            formatDateTime(created_at, '%Y-%m-%dT%H:%i:%sZ') as timestamp, \
+            toString(session_id) as session_id, \
+            model \
+         FROM RedEye_telemetry.agent_traces \
+         WHERE tenant_id = '{}' AND status = 429 \
+           AND model IN ('__loop_blocked', '__burn_rate_blocked') \
+         ORDER BY created_at DESC \
+         LIMIT 10 \
+         FORMAT JSON",
+        tid
+    );
+
+    // ── Execute all three queries ──────────────────────────────────────────
+    let (stats_res, daily_res, recent_res) = tokio::join!(
+        state.http_client.post(&state.clickhouse_url).body(stats_query).send(),
+        state.http_client.post(&state.clickhouse_url).body(daily_query).send(),
+        state.http_client.post(&state.clickhouse_url).body(recent_query).send(),
+    );
+
+    // ── Parse stats ────────────────────────────────────────────────────────
+    let stats_json: Value = match stats_res {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or(json!({"data": []})),
+        _ => json!({"data": []}),
+    };
+    let stats_row = stats_json["data"].as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .unwrap_or(json!({"total_loops": "0", "total_burns": "0"}));
+
+    let total_loops: u64 = stats_row["total_loops"].as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| stats_row["total_loops"].as_u64())
+        .unwrap_or(0);
+    let total_burns: u64 = stats_row["total_burns"].as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| stats_row["total_burns"].as_u64())
+        .unwrap_or(0);
+
+    // Estimated savings: each blocked request would have consumed ~250 tokens.
+    // Cost model: $0.002 per 1K tokens → $0.0005 per request.
+    let estimated_savings = (total_loops + total_burns) as f64 * 250.0 / 1000.0 * 0.002;
+    let estimated_savings = (estimated_savings * 100.0).round() / 100.0;
+
+    // ── Parse daily blocks ─────────────────────────────────────────────────
+    let daily_json: Value = match daily_res {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or(json!({"data": []})),
+        _ => json!({"data": []}),
+    };
+    let daily_blocks = daily_json["data"].as_array().cloned().unwrap_or_default()
+        .into_iter()
+        .map(|mut row| {
+            // ClickHouse returns counts as strings in FORMAT JSON — normalise them.
+            if let Some(s) = row["loops"].as_str() {
+                row["loops"] = json!(s.parse::<u64>().unwrap_or(0));
+            }
+            if let Some(s) = row["burn_rate"].as_str() {
+                row["burn_rate"] = json!(s.parse::<u64>().unwrap_or(0));
+            }
+            row
+        })
+        .collect::<Vec<_>>();
+
+    // ── Parse recent alerts ────────────────────────────────────────────────
+    let recent_json: Value = match recent_res {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or(json!({"data": []})),
+        _ => json!({"data": []}),
+    };
+    let recent_alerts: Vec<Value> = recent_json["data"].as_array().cloned().unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            let model = row["model"].as_str().unwrap_or("");
+            let (reason, severity) = match model {
+                "__loop_blocked"      => ("Loop Detected",       "High"),
+                "__burn_rate_blocked" => ("Burn Rate Exceeded",  "Critical"),
+                _                     => ("Unknown Block",       "Medium"),
+            };
+            json!({
+                "timestamp":  row["timestamp"],
+                "session_id": row["session_id"],
+                "reason":     reason,
+                "severity":   severity,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "total_blocked_loops":    total_loops,
+        "total_burn_rate_blocks": total_burns,
+        "estimated_savings_usd":  estimated_savings,
+        "daily_blocks":           daily_blocks,
+        "recent_alerts":          recent_alerts,
+    })))
+}
+

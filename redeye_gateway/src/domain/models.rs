@@ -23,6 +23,25 @@ pub struct TraceContext {
     pub parent_trace_id: Option<String>,
 }
 
+/// Strongly-typed payload for telemetry ingestion to guarantee valid JSON serialization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogPayload {
+    pub id: String,
+    pub trace_id: String,
+    pub session_id: String,
+    pub parent_trace_id: Option<String>,
+    pub tenant_id: String,
+    pub model: String,
+    pub status: u16,
+    pub latency_ms: u32,
+    pub tokens: u32,
+    pub total_tokens: u32,
+    pub cache_hit: bool,
+    pub prompt_content: String,
+    pub response_content: String,
+    pub error_message: String,
+}
+
 /// Typed errors for the gateway.
 #[derive(Debug, thiserror::Error)]
 pub enum GatewayError {
@@ -38,6 +57,8 @@ pub enum GatewayError {
     RateLimitExceeded(String),
     #[error("Agent loop detected: {0}")]
     LoopDetected(String),
+    #[error("Burn rate exceeded: {0}")]
+    BurnRateExceeded(String),
     #[error("Gateway internal error: {0}")]
     Proxy(reqwest::Error),
 }
@@ -54,6 +75,7 @@ impl axum::response::IntoResponse for GatewayError {
             GatewayError::ComplianceFailure(_) => StatusCode::SERVICE_UNAVAILABLE,
             GatewayError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             GatewayError::LoopDetected(_) => StatusCode::TOO_MANY_REQUESTS,
+            GatewayError::BurnRateExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
             GatewayError::Proxy(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -64,6 +86,7 @@ impl axum::response::IntoResponse for GatewayError {
             GatewayError::ComplianceFailure(_) => "Request blocked: the compliance service is unavailable or rejected this payload.",
             GatewayError::RateLimitExceeded(_) => "Rate limit exceeded. Please try again later.",
             GatewayError::LoopDetected(_) => "Agent recursive loop detected. This session has been blocked to prevent runaway costs.",
+            GatewayError::BurnRateExceeded(_) => "Session burn rate exceeded. Spending has been paused to prevent runaway costs.",
             GatewayError::Proxy(_) => "An internal error occurred while communicating with backend cluster services.",
         };
 

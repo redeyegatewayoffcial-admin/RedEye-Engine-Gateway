@@ -7,6 +7,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   ShieldCheck,
+  Siren,
   Activity,
   Database,
   Settings as SettingsIcon,
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { to: '/dashboard/api-keys',    label: 'API Keys',           icon: Key,             end: false },
   { to: '/dashboard/billing',     label: 'Cost & Billing',     icon: CreditCard,      end: false },
   { to: '/dashboard/compliance',  label: 'Compliance',         icon: ShieldCheck,     end: false },
+  { to: '/dashboard/security',    label: 'Security',           icon: Siren,           end: false },
   { to: '/dashboard/traces',      label: 'Trace Explorer',     icon: Activity,        end: false },
   { to: '/dashboard/cache',       label: 'Semantic Cache',     icon: Database,        end: false },
   { to: '/dashboard/settings',    label: 'Settings',           icon: SettingsIcon,    end: false },

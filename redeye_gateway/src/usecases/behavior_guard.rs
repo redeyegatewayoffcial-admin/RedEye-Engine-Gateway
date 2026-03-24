@@ -14,6 +14,7 @@
 //! - Space: O(1) — stores at most 5 hex hashes (64 bytes each) per session key.
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
@@ -28,6 +29,23 @@ const MAX_HISTORY: isize = 5;
 /// TTL for the session hash list (1 hour). Prevents memory leaks for
 /// abandoned sessions.
 const SESSION_HASH_TTL_SECS: i64 = 3_600;
+
+/// Maximum USD a single session may spend within one calendar minute.
+const MAX_BURN_RATE_PER_MINUTE: f64 = 0.005;
+/// TTL for burn-rate keys (2 minutes). Guarantees automatic cleanup even
+/// if no further requests arrive.
+const BURN_KEY_TTL_SECS: i64 = 120;
+
+/// Returns the current epoch minute (seconds since UNIX epoch ÷ 60).
+/// Used to bucket session spend into 1-minute windows.
+#[inline]
+fn current_epoch_minute() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        / 60
+}
 
 /// Computes a SHA-256 hex digest of the semantically significant parts
 /// of the request body (`messages` + `tools` fields, or the full body
@@ -117,4 +135,79 @@ pub async fn enforce_loop_detection(
     }
 
     Ok(())
+}
+
+// ── Burn-Rate Control ───────────────────────────────────────────────────────
+
+/// Pre-LLM guard: rejects the request if the session has already spent
+/// ≥ `MAX_BURN_RATE_PER_MINUTE` USD within the current calendar minute.
+///
+/// Fail-open: if Redis is unreachable the request is permitted.
+#[instrument(skip(state), fields(session_id = %session_id))]
+pub async fn enforce_burn_rate(
+    state: &Arc<AppState>,
+    session_id: &str,
+) -> Result<(), GatewayError> {
+    let minute = current_epoch_minute();
+    let key = format!("session:{}:burn:{}", session_id, minute);
+    let mut conn = state.redis_conn.clone();
+
+    let current_spend: f64 = match conn.get::<_, Option<String>>(&key).await {
+        Ok(Some(v)) => v.parse::<f64>().unwrap_or(0.0),
+        Ok(None) => 0.0,
+        Err(e) => {
+            error!(error = %e, "Burn rate: Redis GET failed — failing open");
+            return Ok(());
+        }
+    };
+
+    if current_spend >= MAX_BURN_RATE_PER_MINUTE {
+        warn!(
+            session_id = %session_id,
+            current_spend,
+            limit = MAX_BURN_RATE_PER_MINUTE,
+            "Session burn rate exceeded — blocking request"
+        );
+        return Err(GatewayError::BurnRateExceeded(
+            "Session burn rate exceeded. Paused to prevent runaway costs.".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Post-LLM recorder: atomically increments the session's spend for the
+/// current calendar minute using `INCRBYFLOAT`, then sets a 120-second
+/// expiry so keys self-clean.
+///
+/// Cost model (MVP): flat $0.002 per 1 000 tokens.
+///
+/// All Redis errors are logged but never propagated — telemetry must
+/// never break the response path.
+#[instrument(skip(state), fields(session_id = %session_id, tokens))]
+pub async fn record_session_spend(
+    state: &Arc<AppState>,
+    session_id: &str,
+    tokens: u32,
+) {
+    let cost = (tokens as f64 / 1000.0) * 0.002;
+    if cost == 0.0 {
+        return;
+    }
+
+    let minute = current_epoch_minute();
+    let key = format!("session:{}:burn:{}", session_id, minute);
+    let mut conn = state.redis_conn.clone();
+
+    // Atomic float increment + TTL in a single pipeline round-trip.
+    let res: Result<(), _> = redis::pipe()
+        .atomic()
+        .cmd("INCRBYFLOAT").arg(&key).arg(cost)
+        .expire(&key, BURN_KEY_TTL_SECS)
+        .query_async(&mut conn)
+        .await;
+
+    if let Err(e) = res {
+        error!(error = %e, "Burn rate: Redis INCRBYFLOAT/EXPIRE failed — spend not recorded");
+    }
 }
