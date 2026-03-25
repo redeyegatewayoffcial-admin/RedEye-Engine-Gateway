@@ -71,6 +71,7 @@ async fn main() {
     let tracer_url           = optional_env("TRACER_URL", DEFAULT_TRACER_URL);
     let cache_url            = optional_env("CACHE_URL", DEFAULT_CACHE_URL);
     let compliance_url       = optional_env("COMPLIANCE_URL", DEFAULT_COMPLIANCE_URL);
+    let dashboard_url        = optional_env("DASHBOARD_URL", "http://localhost:5173");
     let rate_limit_max: u32  = parse_env("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX);
     let rate_limit_window: u32 = parse_env("RATE_LIMIT_WINDOW_SECS", DEFAULT_RATE_LIMIT_WINDOW);
 
@@ -103,6 +104,7 @@ async fn main() {
         rate_limit_window,
         clickhouse_url: clickhouse_url.clone(),
         tracer_url: tracer_url.clone(),
+        dashboard_url,
         telemetry_tx,
     });
 

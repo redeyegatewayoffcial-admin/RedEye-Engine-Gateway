@@ -15,6 +15,28 @@ export interface UsageMetrics {
 }
 
 /**
+ * Generic fetcher that standardizes authentication headers, prevents CORS / 500 errors, 
+ * and handles HTTP exceptions cleanly.
+ */
+async function fetchMetrics<T>(url: string): Promise<T> {
+  const token = localStorage.getItem('re_token');
+  if (!token) throw new Error('No authentication token found — please log in.');
+
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => res.statusText);
+    throw new Error(`Metrics fetch failed (${res.status}): ${body}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/**
  * SWR-compatible fetcher for /v1/admin/metrics/usage.
  *
  * Reads the Bearer token from localStorage (set on login by authService).
@@ -24,21 +46,7 @@ export interface UsageMetrics {
  * Complexity: O(1) — single HTTP round-trip, fixed-size payload.
  */
 export async function fetchUsageMetrics(url: string): Promise<UsageMetrics> {
-  const token = localStorage.getItem('re_token');
-  if (!token) {
-    throw new Error('No authentication token found — please log in.');
-  }
-
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => res.statusText);
-    throw new Error(`Usage metrics fetch failed (${res.status}): ${body}`);
-  }
-
-  return res.json() as Promise<UsageMetrics>;
+  return fetchMetrics<UsageMetrics>(url);
 }
 
 /**
@@ -59,19 +67,40 @@ export const BILLING_BREAKDOWN_URL = `${GATEWAY_URL}/v1/admin/billing/breakdown`
  * SWR-compatible fetcher for /v1/admin/billing/breakdown.
  */
 export async function fetchBillingBreakdown(url: string): Promise<BillingBreakdown[]> {
-  const token = localStorage.getItem('re_token');
-  if (!token) {
-    throw new Error('No authentication token found — please log in.');
-  }
+  return fetchMetrics<BillingBreakdown[]>(url);
+}
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+/**
+ * Shape of the /v1/admin/metrics/cache response.
+ */
+export interface CacheMetrics {
+  hit_ratio: number;
+  miss_ratio: number;
+  total_lookups: number;
+}
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => res.statusText);
-    throw new Error(`Billing breakdown fetch failed (${res.status}): ${body}`);
-  }
+export const CACHE_METRICS_URL = `${GATEWAY_URL}/v1/admin/metrics/cache`;
 
-  return res.json() as Promise<BillingBreakdown[]>;
+export async function fetchCacheMetrics(url: string): Promise<CacheMetrics> {
+  return fetchMetrics<CacheMetrics>(url);
+}
+
+/**
+ * Shape of the /v1/admin/metrics/compliance response.
+ */
+export interface ResidencyRoute {
+  region: string;
+  endpoint: string;
+  isolation: 'Strict' | 'Relaxed';
+}
+
+export interface ComplianceMetrics {
+  redacted_count: number;
+  residency_routes: ResidencyRoute[];
+}
+
+export const COMPLIANCE_METRICS_URL = `${GATEWAY_URL}/v1/admin/metrics/compliance`;
+
+export async function fetchComplianceMetrics(url: string): Promise<ComplianceMetrics> {
+  return fetchMetrics<ComplianceMetrics>(url);
 }

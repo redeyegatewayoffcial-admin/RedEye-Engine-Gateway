@@ -90,6 +90,9 @@ pub async fn admin_metrics(
 ) -> Result<Json<Value>, GatewayError> {
     info!(tenant_id = %claims.tenant_id, "Fetching live metrics from ClickHouse");
 
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+
     // 1. Summary Stats
     let stats_query = format!("
         SELECT 
@@ -100,7 +103,7 @@ pub async fn admin_metrics(
         FROM RedEye_telemetry.request_logs
         WHERE tenant_id = '{}'
         FORMAT JSON
-    ", claims.tenant_id);
+    ", parsed_tenant_id);
 
     // 2. Traffic Series (Last 24 hours, hourly buckets)
     let traffic_query = format!("
@@ -112,7 +115,7 @@ pub async fn admin_metrics(
         GROUP BY timestamp
         ORDER BY timestamp
         FORMAT JSON
-    ", claims.tenant_id);
+    ", parsed_tenant_id);
 
     // 3. Model Distribution
     let model_query = format!("
@@ -123,7 +126,7 @@ pub async fn admin_metrics(
         WHERE tenant_id = '{}'
         GROUP BY name
         FORMAT JSON
-    ", claims.tenant_id);
+    ", parsed_tenant_id);
 
     // 4. Latency Buckets
     let latency_query = format!("
@@ -140,7 +143,7 @@ pub async fn admin_metrics(
         GROUP BY bucket
         ORDER BY count DESC
         FORMAT JSON
-    ", claims.tenant_id);
+    ", parsed_tenant_id);
 
     // Execute queries (simplified sequential for reliability, could use join_all)
     let stats_resp = state.http_client.post(&state.clickhouse_url).body(stats_query).send().await
@@ -181,6 +184,9 @@ pub async fn get_usage_metrics(
 ) -> Result<Json<Value>, GatewayError> {
     info!(tenant_id = %claims.tenant_id, "Fetching token usage metrics from ClickHouse");
 
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+
     // Parameterised via format! — tenant_id comes from a trusted, validated JWT claim,
     // so there is no SQL-injection risk from external user input.
     let query = format!(
@@ -188,7 +194,7 @@ pub async fn get_usage_metrics(
          FROM RedEye_telemetry.request_logs \
          WHERE tenant_id = '{}' \
          FORMAT JSON",
-        claims.tenant_id
+        parsed_tenant_id
     );
 
     let resp = state
@@ -251,6 +257,9 @@ pub async fn get_billing_breakdown(
 ) -> Result<Json<Value>, GatewayError> {
     info!(tenant_id = %claims.tenant_id, "Fetching billing breakdown from ClickHouse");
 
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+
     // We group by day and model. tenant_id is safe as it's from the JWT claim.
     let query = format!(
         "SELECT \
@@ -262,7 +271,7 @@ pub async fn get_billing_breakdown(
          GROUP BY date, model \
          ORDER BY date DESC, model ASC \
          FORMAT JSON",
-        claims.tenant_id
+        parsed_tenant_id
     );
 
     let resp = state
@@ -327,6 +336,9 @@ pub async fn get_traces(
 ) -> Result<Json<Value>, GatewayError> {
     info!(tenant_id = %claims.tenant_id, "Fetching recent traces from ClickHouse");
 
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+
     let query = format!("
         SELECT 
             toString(id) as traceId,
@@ -340,7 +352,7 @@ pub async fn get_traces(
         ORDER BY created_at DESC
         LIMIT 50
         FORMAT JSON
-    ", claims.tenant_id);
+    ", parsed_tenant_id);
 
     let response = state.http_client.post(&state.clickhouse_url).body(query).send().await
         .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
@@ -368,7 +380,9 @@ pub async fn security_alerts(
 ) -> Result<Json<Value>, GatewayError> {
     info!(tenant_id = %claims.tenant_id, "Fetching security alerts from ClickHouse");
 
-    let tid = &claims.tenant_id;
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+    let tid = &parsed_tenant_id;
 
     // ── Query 1: Summary Stats ─────────────────────────────────────────────
     let stats_query = format!(
@@ -492,6 +506,166 @@ pub async fn security_alerts(
         "estimated_savings_usd":  estimated_savings,
         "daily_blocks":           daily_blocks,
         "recent_alerts":          recent_alerts,
+    })))
+}
+
+/// GET /v1/admin/metrics/cache
+/// Returns hit_ratio, miss_ratio, and total_lookups for the authenticated tenant.
+///
+/// # Complexity
+/// - Time:  O(n) in ClickHouse (full partition scan bounded by tenant_id), O(1) in Rust.
+/// - Space: O(1) — single aggregation row is parsed.
+#[instrument(skip(state, claims))]
+pub async fn get_cache_metrics(
+    State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, GatewayError> {
+    info!(tenant_id = %claims.tenant_id, "Fetching cache metrics from ClickHouse");
+
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+
+    let query = format!(
+        "SELECT count() as redacted_count \
+         FROM RedEye_telemetry.compliance_audit_log \
+         WHERE tenant_id = '{}' AND flagged = true AND created_at >= now() - INTERVAL 24 HOUR \
+         FORMAT JSON",
+        parsed_tenant_id
+    );
+
+    let resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "ClickHouse cache metrics query failed (network)");
+            GatewayError::Proxy(e)
+        })?;
+
+    if !resp.status().is_success() {
+        let err_body = resp.text().await.unwrap_or_default();
+        error!(error = %err_body, "ClickHouse cache metrics query returned non-2xx");
+        return Ok(Json(json!({
+            "hit_ratio": 0.0,
+            "miss_ratio": 0.0,
+            "total_lookups": 0,
+        })));
+    }
+
+    let ch_json: Value = resp.json().await.map_err(|e| {
+        error!(error = %e, "Failed to deserialise ClickHouse cache metrics response");
+        GatewayError::ResponseBuild(e.to_string())
+    })?;
+
+    let row = ch_json["data"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .cloned()
+        .unwrap_or(json!({"total_lookups": "0", "hits": "0", "misses": "0"}));
+
+    let total_lookups: u64 = match &row["total_lookups"] {
+        Value::String(s) => s.parse().unwrap_or(0),
+        Value::Number(n) => n.as_u64().unwrap_or(0),
+        _ => 0,
+    };
+    let hits: u64 = match &row["hits"] {
+        Value::String(s) => s.parse().unwrap_or(0),
+        Value::Number(n) => n.as_u64().unwrap_or(0),
+        _ => 0,
+    };
+    let misses: u64 = match &row["misses"] {
+        Value::String(s) => s.parse().unwrap_or(0),
+        Value::Number(n) => n.as_u64().unwrap_or(0),
+        _ => 0,
+    };
+
+    let hit_ratio = if total_lookups > 0 { (hits as f64) / (total_lookups as f64) } else { 0.0 };
+    let miss_ratio = if total_lookups > 0 { (misses as f64) / (total_lookups as f64) } else { 0.0 };
+
+    Ok(Json(json!({
+        "hit_ratio": hit_ratio,
+        "miss_ratio": miss_ratio,
+        "total_lookups": total_lookups,
+    })))
+}
+
+/// GET /v1/admin/metrics/compliance
+/// Returns redacted_count and a list of residency_routes for the authenticated tenant.
+///
+/// # Complexity
+/// - Time:  O(n) in ClickHouse, O(1) in Rust.
+/// - Space: O(1) — single aggregation row is parsed.
+#[instrument(skip(state, claims))]
+pub async fn get_compliance_metrics(
+    State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, GatewayError> {
+    info!(tenant_id = %claims.tenant_id, "Fetching compliance metrics from ClickHouse");
+
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+
+    // Aggregate redacted count for the last 24 hours with a coalesce wrapper
+    let query = format!(
+        "SELECT coalesce(sum(redacted_entity_count), 0) as redacted_count \
+         FROM RedEye_telemetry.compliance_engine_audit \
+         WHERE tenant_id = '{}' AND parseDateTimeBestEffort(timestamp) >= now() - INTERVAL 24 HOUR \
+         FORMAT JSON",
+        parsed_tenant_id
+    );
+
+    let resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "ClickHouse compliance query failed (network)");
+            GatewayError::Proxy(e)
+        })?;
+
+    if !resp.status().is_success() {
+        let err_body = resp.text().await.unwrap_or_default();
+        error!(error = %err_body, "ClickHouse compliance query returned non-2xx");
+        let residency_routes = vec![
+            json!({"region": "EU (Frankfurt)", "endpoint": "api.eu.redeye.ai", "isolation": "Strict"}),
+            json!({"region": "US East", "endpoint": "api.us.redeye.ai", "isolation": "Relaxed"}),
+        ];
+        return Ok(Json(json!({
+            "redacted_count": 0,
+            "residency_routes": residency_routes,
+        })));
+    }
+
+    let ch_json: Value = resp.json().await.map_err(|e| {
+        error!(error = %e, "Failed to deserialise ClickHouse response");
+        GatewayError::ResponseBuild(e.to_string())
+    })?;
+
+    let row = ch_json["data"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .cloned()
+        .unwrap_or(json!({"redacted_count": 0}));
+
+    let redacted_count: u64 = match &row["redacted_count"] {
+        Value::String(s) => s.parse().unwrap_or(0),
+        Value::Number(n) => n.as_u64().unwrap_or(0),
+        _ => 0,
+    };
+
+    // Mock residency routes (until this is dynamically synced from the compliance service)
+    let residency_routes = vec![
+        json!({"region": "EU (Frankfurt)", "endpoint": "api.eu.redeye.ai", "isolation": "Strict"}),
+        json!({"region": "US East", "endpoint": "api.us.redeye.ai", "isolation": "Relaxed"}),
+    ];
+
+    Ok(Json(json!({
+        "redacted_count": redacted_count,
+        "residency_routes": residency_routes,
     })))
 }
 

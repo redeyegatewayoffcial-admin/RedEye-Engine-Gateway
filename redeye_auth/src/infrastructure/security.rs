@@ -48,7 +48,7 @@ pub fn encrypt_api_key(plaintext: &str) -> Result<Vec<u8>, AppError> {
         AppError::Internal("AES_MASTER_KEY missing".into())
     })?;
     
-    if master_key.len() != 32 {
+    if master_key.as_bytes().len() != 32 {
         return Err(AppError::Internal("AES_MASTER_KEY must be exactly 32 bytes long".into()));
     }
 
@@ -72,7 +72,7 @@ pub fn decrypt_api_key(encrypted_data: &[u8]) -> Result<String, AppError> {
         AppError::Internal("AES_MASTER_KEY missing".into())
     })?;
     
-    if master_key.len() != 32 {
+    if master_key.as_bytes().len() != 32 {
         return Err(AppError::Internal("AES_MASTER_KEY must be exactly 32 bytes long".into()));
     }
     
@@ -127,28 +127,20 @@ pub fn generate_jwt(user_id: Uuid, tenant_id: Uuid) -> Result<String, AppError> 
     })
 }
 
-pub fn generate_refresh_token(user_id: Uuid, tenant_id: Uuid) -> Result<String, AppError> {
-    let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
-    let expiration = Utc::now()
-        .checked_add_signed(Duration::days(7))
-        .expect("valid timestamp")
-        .timestamp() as usize;
-
-    let claims = Claims {
-        sub: user_id.to_string(),
-        tenant_id: tenant_id.to_string(),
-        exp: expiration,
-    };
-
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-    .map_err(|e| {
-        tracing::error!("JWT encoding failed: {}", e);
-        AppError::Internal("Refresh Token generation failed".into())
-    })
+// O(1) Time, O(1) Space
+#[tracing::instrument(skip(user_id))]
+pub fn generate_refresh_token(user_id: &Uuid) -> Result<(String, String), AppError> {
+    use rand::RngCore;
+    let mut token_bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut token_bytes);
+    
+    let raw_token = hex::encode(token_bytes);
+    
+    let mut hasher = Sha256::new();
+    hasher.update(raw_token.as_bytes());
+    let token_hash = hex::encode(hasher.finalize());
+    
+    Ok((raw_token, token_hash))
 }
 
 pub fn verify_jwt(token: &str) -> Result<Claims, AppError> {

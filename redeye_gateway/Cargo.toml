@@ -5,12 +5,7 @@ edition = "2021"
 
 resolver = "2"
 
-members = [
-    "redeye_gateway",
-    "redeye_cache",
-    "redeye_tracer",
-    "redeye_compliance",
-]
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

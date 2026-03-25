@@ -2,9 +2,37 @@
 // Semantic Cache: hit/miss ratios + insights panel.
 
 import { Database } from 'lucide-react';
-import { mockCacheStats } from '../../data/repositories/mockData';
+import useSWR from 'swr';
+import { CACHE_METRICS_URL, fetchCacheMetrics } from '../../data/services/metricsService';
 
 export function CacheView() {
+  const { data: cacheStats, error, isLoading } = useSWR(CACHE_METRICS_URL, fetchCacheMetrics, {
+    refreshInterval: 10000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6 animate-pulse">
+        <header>
+          <div className="w-32 h-4 bg-slate-800 rounded mb-2"></div>
+          <div className="w-64 h-8 bg-slate-800 rounded"></div>
+        </header>
+        <div className="h-48 bg-slate-900/40 border border-slate-800/80 rounded"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 bg-rose-950/20 border border-rose-900/50 rounded-lg text-rose-400">
+        <p className="font-semibold text-sm">Failed to load Cache Metrics</p>
+        <p className="text-xs mt-1">{error.message}</p>
+      </div>
+    );
+  }
+
+  const stats = cacheStats || { hit_ratio: 0, miss_ratio: 0, total_lookups: 0 };
+
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between gap-4">
@@ -34,19 +62,19 @@ export function CacheView() {
             <div>
               <p className="text-xs font-medium text-slate-400 mb-1">Hit Ratio</p>
               <p className="text-3xl font-semibold text-emerald-400">
-                {(mockCacheStats.hitRatio * 100).toFixed(1)}%
+                {(stats.hit_ratio * 100).toFixed(1)}%
               </p>
             </div>
             <div>
               <p className="text-xs font-medium text-slate-400 mb-1">Miss Ratio</p>
               <p className="text-3xl font-semibold text-rose-400">
-                {(mockCacheStats.missRatio * 100).toFixed(1)}%
+                {(stats.miss_ratio * 100).toFixed(1)}%
               </p>
             </div>
             <div>
               <p className="text-xs font-medium text-slate-400 mb-1">Total Lookups</p>
               <p className="text-3xl font-semibold text-slate-100">
-                {mockCacheStats.totalLookups.toLocaleString()}
+                {stats.total_lookups.toLocaleString()}
               </p>
             </div>
           </div>

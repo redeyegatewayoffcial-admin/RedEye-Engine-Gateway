@@ -4,12 +4,7 @@ version = "0.1.0"
 edition = "2021"
 resolver = "2"
 
-members = [
-    "redeye_gateway",
-    "redeye_cache",
-    "redeye_tracer",
-    "redeye_compliance",
-]
+
 [dependencies]
 axum = "0.8.0"
 tokio = { version = "1.0", features = ["full"] }

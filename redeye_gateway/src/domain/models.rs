@@ -12,6 +12,7 @@ pub struct AppState {
     pub rate_limit_window: u32,
     pub clickhouse_url: String,
     pub tracer_url: String,
+    pub dashboard_url: String,
     pub telemetry_tx: tokio::sync::mpsc::Sender<serde_json::Value>,
 }
 

@@ -1,6 +1,5 @@
 use std::sync::Arc;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
+
 use tracing::{info, instrument};
 
 use crate::domain::models::{CacheLookupRequest, CacheStoreRequest, CachedResponse};
@@ -54,6 +53,7 @@ impl SemanticSearchUseCase {
     }
 
     /// Implement Structural AST Hashing: isolates syntax, strips semantics.
+    // O(N) Time where N is prompt length, O(1) Space
     fn compute_ast_hash(prompt: &str) -> i64 {
         // Strip alphanumeric and whitespace characters.
         // What's left is pure structure: punctuation, brackets, XML tags, etc.
@@ -62,9 +62,6 @@ impl SemanticSearchUseCase {
             .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
             .collect();
             
-        let mut hasher = DefaultHasher::new();
-        skeleton.hash(&mut hasher);
-        // Postgres BIGINT is i64
-        hasher.finish() as i64
+        xxhash_rust::xxh3::xxh3_64(skeleton.as_bytes()) as i64
     }
 }

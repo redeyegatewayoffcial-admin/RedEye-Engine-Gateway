@@ -33,6 +33,8 @@ async fn build_test_state() -> Arc<AppState> {
         .expect("DATABASE_URL must be set in .env for integration tests");
     let clickhouse_url = std::env::var("CLICKHOUSE_URL")
         .unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let dashboard_url= std::env::var("DASAHBOARD_URL");
+        .expect("")
 
     let redis_conn = redis::Client::open(redis_url)
         .expect("Failed to create Redis client")

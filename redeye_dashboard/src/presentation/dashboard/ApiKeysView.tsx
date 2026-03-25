@@ -23,7 +23,7 @@ const fetcher = async (url: string) => {
 
 export function ApiKeysView() {
   const { data: keys, error, isLoading, mutate: _mutate } = useSWR<ApiKey[]>(
-    'http://localhost:8081/v1/auth/api-keys',
+    'http://localhost:8084/v1/auth/api-keys',
     fetcher
   );
   const [isModalOpen, setIsModalOpen] = useState(false);

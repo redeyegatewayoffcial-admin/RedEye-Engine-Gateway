@@ -2,10 +2,39 @@
 // Compliance Oversight: PII redaction count + data residency routing table.
 
 import { ShieldCheck } from 'lucide-react';
+import useSWR from 'swr';
 import { Badge } from '../components/ui/Badge';
-import { mockRedactedEntities, mockResidencyRoutes } from '../../data/repositories/mockData';
+import { COMPLIANCE_METRICS_URL, fetchComplianceMetrics } from '../../data/services/metricsService';
 
 export function ComplianceView() {
+  const { data: metrics, error, isLoading } = useSWR(COMPLIANCE_METRICS_URL, fetchComplianceMetrics, {
+    refreshInterval: 10000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6 animate-pulse">
+        <header>
+          <div className="w-32 h-4 bg-slate-800 rounded mb-2"></div>
+          <div className="w-64 h-8 bg-slate-800 rounded"></div>
+        </header>
+        <div className="h-64 bg-slate-900/40 border border-slate-800/80 rounded"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 bg-rose-950/20 border border-rose-900/50 rounded-lg text-rose-400">
+        <p className="font-semibold text-sm">Failed to load Compliance Metrics</p>
+        <p className="text-xs mt-1">{error.message}</p>
+      </div>
+    );
+  }
+
+  const redactedCount = metrics?.redacted_count ?? 0;
+  const routes = metrics?.residency_routes ?? [];
+
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between gap-4">
@@ -24,7 +53,7 @@ export function ComplianceView() {
         <div className="glass-panel bg-slate-900/40 border border-slate-800/80 p-5 lg:col-span-1">
           <p className="text-xs font-medium text-slate-400 mb-2">Redacted Entities</p>
           <p className="text-4xl font-semibold text-emerald-400 tracking-tight">
-            {mockRedactedEntities.toLocaleString()}
+            {redactedCount.toLocaleString()}
           </p>
           <p className="text-xs text-slate-500 mt-2">
             Total entities masked across all tenants in the last 24 hours.
@@ -48,7 +77,7 @@ export function ComplianceView() {
                 </tr>
               </thead>
               <tbody className="text-xs sm:text-sm">
-                {mockResidencyRoutes.map((row) => (
+                {routes.map((row) => (
                   <tr key={row.region} className="border-b border-slate-900/70 hover:bg-slate-900/70 transition-colors">
                     <td className="py-2 text-slate-200 whitespace-nowrap pr-4 font-mono text-[11px]">{row.region}</td>
                     <td className="py-2 text-indigo-300 whitespace-nowrap pr-4 text-xs">{row.endpoint}</td>

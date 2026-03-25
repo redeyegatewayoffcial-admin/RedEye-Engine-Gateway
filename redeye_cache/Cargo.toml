@@ -4,12 +4,7 @@ version = "0.1.0"
 edition = "2024"
 resolver = "2"
 
-members = [
-    "redeye_gateway",
-    "redeye_cache",
-    "redeye_tracer",
-    "redeye_compliance",
-]
+
 [dependencies]
 axum = "0.8.8"
 pgvector = { version = "0.3", features = ["postgres", "sqlx"] }
@@ -23,3 +18,4 @@ tokio = { version = "1.50.0", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 uuid = { version = "1.22.0", features = ["v4"] }
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }

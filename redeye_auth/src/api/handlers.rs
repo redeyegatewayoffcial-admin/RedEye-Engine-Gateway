@@ -76,11 +76,19 @@ pub async fn signup(
     tx.commit().await?;
 
     let token = generate_jwt(user_id, tenant_id)?;
-    let refresh_token = generate_refresh_token(user_id, tenant_id)?;
+    let (raw_refresh, hash_refresh) = generate_refresh_token(&user_id)?;
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '7 days')"
+    )
+    .bind(user_id)
+    .bind(&hash_refresh)
+    .execute(&state.db_pool)
+    .await?;
 
     let cookie = format!(
         "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
-        refresh_token
+        raw_refresh
     );
 
     let mut headers = HeaderMap::new();
@@ -133,11 +141,19 @@ pub async fn login(
     let onboarding_complete: bool = user_row.get("onboarding_status");
 
     let token = generate_jwt(user_id, tenant_id)?;
-    let refresh_token = generate_refresh_token(user_id, tenant_id)?;
+    let (raw_refresh, hash_refresh) = generate_refresh_token(&user_id)?;
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '7 days')"
+    )
+    .bind(user_id)
+    .bind(&hash_refresh)
+    .execute(&state.db_pool)
+    .await?;
 
     let cookie = format!(
         "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
-        refresh_token
+        raw_refresh
     );
 
     let mut headers = HeaderMap::new();
@@ -164,34 +180,46 @@ pub async fn refresh(
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| AppError::Unauthorized("Missing refresh token cookie".into()))?;
         
-    let refresh_token = cookie_header.split(';')
+    let raw_refresh = cookie_header.split(';')
         .map(|s| s.trim())
         .find(|s| s.starts_with("refresh_token="))
         .map(|s| &s["refresh_token=".len()..])
         .ok_or_else(|| AppError::Unauthorized("Refresh token cookie not found".into()))?;
 
-    let claims = verify_jwt(refresh_token)?;
-    let user_id = Uuid::parse_str(&claims.sub).unwrap_or_default();
-    let tenant_id = Uuid::parse_str(&claims.tenant_id).unwrap_or_default();
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(raw_refresh.as_bytes());
+    let token_hash = hex::encode(hasher.finalize());
 
-    // Re-issue a short-lived token
-    let token = generate_jwt(user_id, tenant_id)?;
+    let row = sqlx::query(
+        "SELECT user_id FROM refresh_tokens WHERE token_hash = $1 AND expires_at > NOW()"
+    )
+    .bind(&token_hash)
+    .fetch_optional(&state.db_pool)
+    .await?;
 
-    // Return partial response (or full if you want, but for simplicity partial is okay)
-    // To keep the dashboard working, we can return the same AuthResponse.
-    let email: String = sqlx::query("SELECT email FROM users WHERE id = $1")
+    let user_id: Uuid = match row {
+        Some(r) => r.get("user_id"),
+        None => return Err(AppError::Unauthorized("Invalid or expired refresh token".into())),
+    };
+
+    let user_row = sqlx::query("SELECT email, tenant_id FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_one(&state.db_pool)
-        .await?
-        .get("email");
+        .await?;
         
-    let row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")
+    let email: String = user_row.get("email");
+    let tenant_id: Uuid = user_row.get("tenant_id");
+
+    let tenant_row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")
         .bind(tenant_id)
         .fetch_one(&state.db_pool)
         .await?;
         
-    let workspace_name: String = row.get("name");
-    let onboarding_complete: bool = row.get("onboarding_status");
+    let workspace_name: String = tenant_row.get("name");
+    let onboarding_complete: bool = tenant_row.get("onboarding_status");
+
+    let token = generate_jwt(user_id, tenant_id)?;
 
     Ok(Json(AuthResponse {
         id: user_id,
