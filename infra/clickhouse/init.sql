@@ -59,3 +59,15 @@ CREATE TABLE IF NOT EXISTS RedEye_telemetry.compliance_audit_log
 ENGINE = MergeTree
 ORDER BY (tenant_id, created_at)
 TTL created_at + INTERVAL 365 DAY;
+
+CREATE TABLE IF NOT EXISTS RedEye_telemetry.compliance_engine_audit
+(
+    tenant_id              String,
+    timestamp              DateTime,
+    redacted_entity_count  UInt32,
+    request_id             String,
+    policy_triggered       String
+)
+ENGINE = MergeTree
+ORDER BY (tenant_id, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
