@@ -89,12 +89,14 @@ pub async fn route_chat_completion(
     api_key: &str,
     body: &Value,
     accept_header: &str,
+    base_url_override: Option<&str>,
 ) -> Result<reqwest::Response, GatewayError> {
     // Extract model from request body
     let model = extract_model(body);
 
     let provider = LlmProvider::detect(model);
-    let endpoint = format!("{}/chat/completions", provider.base_url());
+    let base = base_url_override.unwrap_or_else(|| provider.base_url());
+    let endpoint = format!("{}/chat/completions", base);
 
     info!(
         provider = provider.name(),

@@ -105,6 +105,7 @@ async fn main() {
         clickhouse_url: clickhouse_url.clone(),
         tracer_url: tracer_url.clone(),
         dashboard_url,
+        llm_api_base_url: None,
         telemetry_tx,
     });
 

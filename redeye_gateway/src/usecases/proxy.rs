@@ -381,7 +381,7 @@ async fn route_with_circuit_breaker(
     resolved_key: &str,
 ) -> Result<reqwest::Response, GatewayError> {
     let mut response_res =
-        llm_router::route_chat_completion(&state.http_client, resolved_key, body, accept_header).await;
+        llm_router::route_chat_completion(&state.http_client, resolved_key, body, accept_header, state.llm_api_base_url.as_deref()).await;
 
     let is_failure = match &response_res {
         Ok(r) if r.status().is_server_error() => true,
@@ -403,7 +403,7 @@ async fn route_with_circuit_breaker(
             fallback_body["model"] = json!(FALLBACK_MODEL);
 
             response_res =
-                llm_router::route_chat_completion(&state.http_client, &groq_key, &fallback_body, accept_header).await;
+                llm_router::route_chat_completion(&state.http_client, &groq_key, &fallback_body, accept_header, state.llm_api_base_url.as_deref()).await;
         }
     }
 

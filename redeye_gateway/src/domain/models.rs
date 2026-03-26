@@ -13,6 +13,7 @@ pub struct AppState {
     pub clickhouse_url: String,
     pub tracer_url: String,
     pub dashboard_url: String,
+    pub llm_api_base_url: Option<String>,
     pub telemetry_tx: tokio::sync::mpsc::Sender<serde_json::Value>,
 }
 
