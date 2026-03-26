@@ -76,11 +76,20 @@ pub async fn auth_middleware(
 }
 
 pub fn verify_jwt(token: &str) -> Result<Claims, StatusCode> {
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+    // BUG FIX 1: No more fallback to "secret". Returns 500 Error if missing.
+    let secret = std::env::var("JWT_SECRET").map_err(|_| {
+        tracing::error!("CRITICAL SECURITY ERROR: JWT_SECRET environment variable is missing!");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    // Security Boost: Explicitly restrict to HS256 algorithm to prevent algorithm confusion attacks
+    let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+    validation.validate_exp = true;
+
     match decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
+        &validation,
     ) {
         Ok(token_data) => Ok(token_data.claims),
         Err(e) => {
@@ -97,7 +106,12 @@ async fn handle_jwt(
 ) -> Result<Response, StatusCode> {
     let claims = verify_jwt(token)?;
     
-    let tenant_id = Uuid::parse_str(&claims.tenant_id).unwrap_or_default();
+    // BUG FIX 2: Reject invalid UUIDs (401 Unauthorized) instead of silently defaulting
+    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
+        tracing::warn!("Invalid UUID format for tenant_id in token");
+        StatusCode::UNAUTHORIZED
+    })?;
+
     req.headers_mut().insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
     
     // CRUCIAL: Inject decoded claims into request extensions

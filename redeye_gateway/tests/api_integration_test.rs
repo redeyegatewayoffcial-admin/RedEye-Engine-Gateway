@@ -63,7 +63,7 @@ async fn setup_test_environment() -> TestEnv {
     // 1. Force the AES Master key so standard decryption doesn't panic.
     std::env::set_var("AES_MASTER_KEY", "01234567890123456789012345678901");
     // Also inject generic dev db credentials to appease sqlx::migrate! at compile-time/runtime defaults if needed
-    
+    std::env::set_var("JWT_SECRET", "secret");
     // 2. Start Ephemeral Containers
     let redis_node = Redis::default().start().await.expect("Failed to start Redis container");
     let postgres_node = Postgres::default().start().await.expect("Failed to start Postgres container");

@@ -61,10 +61,12 @@ const FALLBACK_MODEL: &str = "llama3-8b-8192";
 fn pii_regex() -> &'static Regex {
     static PII_REGEX: OnceLock<Regex> = OnceLock::new();
     PII_REGEX.get_or_init(|| {
-        Regex::new(
-            r"(?i)\b(?:\d[ -]*?){13,16}\b|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|\b(?:\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b",
-        )
-        .unwrap()
+        // Existing: Credit Card, Email, Phone
+        // Kotthaga add chesinavi: Aadhaar, IFSC, Bank Account
+        let pattern = r"(?i)\b(?:\d[ -]*?){13,16}\b|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b|\b(?:\+\d{1,2}\s)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b|\b\d{4}[ -]?\d{4}[ -]?\d{4}\b|\b[A-Z]{4}0[A-Z0-9]{6}\b|\b\d{9,18}\b";
+        
+        // ".unwrap()" badulu ".expect()" vaadadam best practice
+        Regex::new(pattern).expect("Invalid PII Regex")
     })
 }
 
@@ -738,4 +740,18 @@ mod tests {
         
         // Ippadi thaan channel ulla data pass aaguthu nu compile aagi prove aagidum!
     }
+}
+#[test]
+fn test_pii_regex_matches_aadhaar() {
+    let regex = pii_regex();
+    let prompt = "My aadhaar is 1234-5678-9012, please process it.";
+    assert!(regex.is_match(prompt)); // Match avvali
+}
+
+#[test]
+fn test_pii_regex_matches_bank_account_and_ifsc() {
+    let regex = pii_regex();
+    // IFSC mariyu Account number rendu test chestunnam
+    assert!(regex.is_match("Transfer to a/c 123456789012"));
+    assert!(regex.is_match("My bank IFSC is SBIN0001234"));
 }

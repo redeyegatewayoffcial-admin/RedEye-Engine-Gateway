@@ -602,20 +602,20 @@ pub async fn get_compliance_metrics(
     State(state): State<Arc<AppState>>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Value>, GatewayError> {
-    info!(tenant_id = %claims.tenant_id, "Fetching compliance metrics from ClickHouse");
+    let tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".into()))?;
 
-    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
-        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
-
-    // Aggregate redacted count for the last 24 hours with a coalesce wrapper
+    // ---- 1️⃣  Use native DateTime comparison (no parse) ----
     let query = format!(
-        "SELECT coalesce(sum(redacted_entity_count), 0) as redacted_count \
+        "SELECT coalesce(sum(redacted_entity_count), 0) AS redacted_count \
          FROM RedEye_telemetry.compliance_engine_audit \
-         WHERE tenant_id = '{}' AND parseDateTimeBestEffort(timestamp) >= now() - INTERVAL 24 HOUR \
+         WHERE tenant_id = '{}' \
+           AND timestamp >= now() - INTERVAL 24 HOUR \
          FORMAT JSON",
-        parsed_tenant_id
+        tenant_id
     );
 
+    // ---- 2️⃣  Execute the query ----
     let resp = state
         .http_client
         .post(&state.clickhouse_url)
@@ -627,9 +627,11 @@ pub async fn get_compliance_metrics(
             GatewayError::Proxy(e)
         })?;
 
+    // ---- 3️⃣  Handle non‑2xx responses ----
     if !resp.status().is_success() {
         let err_body = resp.text().await.unwrap_or_default();
         error!(error = %err_body, "ClickHouse compliance query returned non-2xx");
+        // Return a safe default instead of bubbling up the DB error
         let residency_routes = vec![
             json!({"region": "EU (Frankfurt)", "endpoint": "api.eu.redeye.ai", "isolation": "Strict"}),
             json!({"region": "US East", "endpoint": "api.us.redeye.ai", "isolation": "Relaxed"}),
@@ -640,24 +642,19 @@ pub async fn get_compliance_metrics(
         })));
     }
 
+    // ---- 4️⃣  Parse the JSON envelope ----
     let ch_json: Value = resp.json().await.map_err(|e| {
         error!(error = %e, "Failed to deserialise ClickHouse response");
         GatewayError::ResponseBuild(e.to_string())
     })?;
 
-    let row = ch_json["data"]
+    let redacted_count = ch_json["data"]
         .as_array()
-        .and_then(|rows| rows.first())
-        .cloned()
-        .unwrap_or(json!({"redacted_count": 0}));
+        .and_then(|a| a.first())
+        .and_then(|row| row["redacted_count"].as_u64())
+        .unwrap_or(0);
 
-    let redacted_count: u64 = match &row["redacted_count"] {
-        Value::String(s) => s.parse().unwrap_or(0),
-        Value::Number(n) => n.as_u64().unwrap_or(0),
-        _ => 0,
-    };
-
-    // Mock residency routes (until this is dynamically synced from the compliance service)
+    // ---- 5️⃣  Add static residency route data (until dynamical) ----
     let residency_routes = vec![
         json!({"region": "EU (Frankfurt)", "endpoint": "api.eu.redeye.ai", "isolation": "Strict"}),
         json!({"region": "US East", "endpoint": "api.us.redeye.ai", "isolation": "Relaxed"}),
@@ -668,4 +665,5 @@ pub async fn get_compliance_metrics(
         "residency_routes": residency_routes,
     })))
 }
+
 
