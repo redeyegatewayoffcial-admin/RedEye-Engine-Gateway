@@ -48,6 +48,7 @@ export function DashboardLayout() {
     <div className="min-h-screen bg-slate-950 dark:bg-slate-950 text-slate-100 flex">
       {/* Sidebar */}
       <aside
+        id="tour-sidebar"
         className={`hidden md:flex flex-col border-r border-slate-800/80 bg-slate-900/80 backdrop-blur-xl transition-[width] duration-300 ease-in-out flex-shrink-0 ${
           collapsed ? 'w-16' : 'w-64 lg:w-72'
         }`}

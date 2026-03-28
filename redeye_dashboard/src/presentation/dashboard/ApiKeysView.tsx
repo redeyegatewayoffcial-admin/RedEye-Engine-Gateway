@@ -63,7 +63,7 @@ export function ApiKeysView() {
   const activeKey = keys?.find(k => k.status === 'Active');
 
   return (
-    <div className="space-y-6">
+    <div id="tour-api-keys" className="space-y-6">
       {/* Gateway Info Card */}
       <div className="glass-panel bg-slate-900/50 border border-slate-800 rounded-xl p-6 space-y-4">
         <h2 className="text-lg font-bold text-slate-50 flex items-center gap-2">
