@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { User } from '../../domain/entities/User';
-import type { IAuthUseCase } from '../../domain/usecases/AuthUseCase';
+import type { IAuthUseCaseExtended } from '../../data/services/authService';
 
 interface AuthContextValue {
   isAuthenticated: boolean;
@@ -17,6 +17,7 @@ interface AuthContextValue {
   requestMagicLink(email: string): Promise<void>;
   verifyMagicLink(email: string, otp: string): Promise<User>;
   ssoRedirect(provider: string): Promise<void>;
+  syncOAuthState(token: string): Promise<void>;
   completeOnboarding(workspaceName: string, provider: string, apiKey: string): Promise<User>;
   logout(): void;
 }
@@ -25,7 +26,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 interface AuthProviderProps {
   children: ReactNode;
-  authUseCase: IAuthUseCase;
+  authUseCase: IAuthUseCaseExtended;
 }
 
 export function AuthProvider({ children, authUseCase }: AuthProviderProps) {
@@ -44,6 +45,20 @@ export function AuthProvider({ children, authUseCase }: AuthProviderProps) {
   const ssoRedirect = useCallback(async (provider: string) => {
     if (authUseCase.ssoRedirect) {
       await authUseCase.ssoRedirect(provider);
+    }
+  }, [authUseCase]);
+
+  const syncOAuthState = useCallback(async (token: string) => {
+    // Persist token to localStorage via the Data layer
+    if (authUseCase.saveToken) {
+      authUseCase.saveToken(token);
+    } else {
+      localStorage.setItem('re_token', token);
+    }
+    // Hydrate React state — use refreshToken which reads from the saved token
+    if (authUseCase.refreshToken) {
+      const u = await authUseCase.refreshToken();
+      if (u) setUser(u);
     }
   }, [authUseCase]);
 
@@ -76,6 +91,7 @@ export function AuthProvider({ children, authUseCase }: AuthProviderProps) {
         requestMagicLink,
         verifyMagicLink,
         ssoRedirect,
+        syncOAuthState,
         completeOnboarding,
         logout,
       }}

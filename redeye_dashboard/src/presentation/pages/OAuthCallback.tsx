@@ -1,28 +1,32 @@
 import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { authService } from '../../data/services/authService';
+import { useAuth } from '../context/AuthContext';
 
 export function OAuthCallback() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { syncOAuthState } = useAuth();
 
   useEffect(() => {
     const token = searchParams.get('token');
     const onboardingComplete = searchParams.get('onboarding_complete') === 'true';
 
-    if (token) {
-      // Persist the access token — authService owns the storage contract
-      authService.saveToken(token);
+    if (!token) {
+      navigate('/login', { replace: true });
+      return;
+    }
 
+    // Persist token AND hydrate React Context state before navigating
+    syncOAuthState(token).then(() => {
       if (onboardingComplete) {
         navigate('/dashboard', { replace: true });
       } else {
         navigate('/onboarding', { replace: true });
       }
-    } else {
+    }).catch(() => {
       navigate('/login', { replace: true });
-    }
-  }, [searchParams, navigate]);
+    });
+  }, [searchParams, navigate, syncOAuthState]);
 
   return (
     <div className="relative min-h-screen bg-slate-950 flex flex-col items-center justify-center overflow-hidden">
