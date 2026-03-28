@@ -9,36 +9,48 @@ import {
   type ReactNode,
 } from 'react';
 import type { User } from '../../domain/entities/User';
-import { authService } from '../../data/services/authService';
+import type { IAuthUseCase } from '../../domain/usecases/AuthUseCase';
 
 interface AuthContextValue {
   isAuthenticated: boolean;
   user: User | null;
-  login(email: string, password: string): Promise<void>;
-  signup(email: string, password: string): Promise<void>;
+  requestMagicLink(email: string): Promise<void>;
+  verifyMagicLink(email: string, otp: string): Promise<User>;
+  ssoRedirect(provider: string): Promise<void>;
   completeOnboarding(workspaceName: string, provider: string, apiKey: string): Promise<User>;
   logout(): void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+interface AuthProviderProps {
+  children: ReactNode;
+  authUseCase: IAuthUseCase;
+}
+
+export function AuthProvider({ children, authUseCase }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const u = await authService.login({ email, password });
-    setUser(u);
-  }, []);
+  const requestMagicLink = useCallback(async (email: string) => {
+    await authUseCase.requestMagicLink(email);
+  }, [authUseCase]);
 
-  const signup = useCallback(async (email: string, password: string) => {
-    const u = await authService.signup({ email, password });
+  const verifyMagicLink = useCallback(async (email: string, otp: string) => {
+    const u = await authUseCase.verifyMagicLink(email, otp);
     setUser(u);
-  }, []);
+    return u;
+  }, [authUseCase]);
+
+  const ssoRedirect = useCallback(async (provider: string) => {
+    if (authUseCase.ssoRedirect) {
+      await authUseCase.ssoRedirect(provider);
+    }
+  }, [authUseCase]);
 
   const completeOnboarding = useCallback(
     async (workspaceName: string, provider: string, apiKey: string) => {
       if (!user) throw new Error('Not authenticated');
-      const updated = await authService.completeOnboarding(
+      const updated = await authUseCase.completeOnboarding(
         user.id,
         workspaceName,
         provider,
@@ -47,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(updated);
       return updated;
     },
-    [user],
+    [user, authUseCase],
   );
 
   const logout = useCallback(() => {
@@ -61,8 +73,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         isAuthenticated: user !== null,
         user,
-        login,
-        signup,
+        requestMagicLink,
+        verifyMagicLink,
+        ssoRedirect,
         completeOnboarding,
         logout,
       }}

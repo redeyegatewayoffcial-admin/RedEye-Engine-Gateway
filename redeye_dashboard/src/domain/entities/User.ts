@@ -4,6 +4,10 @@
 export interface User {
   id: string;
   email: string;
+  password?: string;
+  authProvider: string;
+  providerId?: string;
+  tenantId: string;
   workspaceName: string;
   openAiApiKey: string;
   onboardingComplete: boolean;

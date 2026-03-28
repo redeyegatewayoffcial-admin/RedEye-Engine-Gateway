@@ -4,7 +4,7 @@ use axum::{
 };
 use axum::http::Method;
 use tower_http::cors::CorsLayer;
-use super::handlers::{signup, login, onboard, refresh, get_api_keys};
+use super::handlers::{signup, login, onboard, refresh, get_api_keys, request_otp, verify_otp, google_login, google_callback, github_login, github_callback};
 use crate::AppState;
 
 pub fn create_router(state: AppState) -> Router {
@@ -26,6 +26,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/auth/signup", post(signup))
         .route("/v1/auth/login", post(login))
         .route("/v1/auth/refresh", post(refresh))
+        .route("/v1/auth/otp/request", post(request_otp))
+        .route("/v1/auth/otp/verify", post(verify_otp))
+        .route("/v1/auth/google/login", get(google_login))
+        .route("/v1/auth/google/callback", get(google_callback))
+        .route("/v1/auth/github/login", get(github_login))
+        .route("/v1/auth/github/callback", get(github_callback))
         .nest("/v1/auth", protected_routes)
         .layer(cors)
         .with_state(state)

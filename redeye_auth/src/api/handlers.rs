@@ -3,6 +3,51 @@ use serde::{Deserialize, Serialize};
 use crate::{AppState, error::AppError, infrastructure::security::{hash_password, verify_password, generate_jwt, encrypt_api_key, generate_redeye_api_key, verify_jwt, generate_refresh_token, Claims}};
 use uuid::Uuid;
 use sqlx::Row;
+use rand::Rng;
+use oauth2::{
+    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret,
+    CsrfToken, RedirectUrl, Scope, TokenResponse, TokenUrl, reqwest::async_http_client,
+};
+
+use reqwest::Client;
+
+async fn send_real_otp_email(to_email: &str, otp_code: &str) -> Result<(), AppError> {
+    let api_key = std::env::var("RESEND_API_KEY").unwrap_or_default();
+    let client = Client::new();
+
+    let email_html = format!(
+        "<div style=\"font-family: sans-serif; max-width: 500px; margin: 0 auto;\">
+            <h2>Welcome to RedEye Gateway</h2>
+            <p>Your magic login code is:</p>
+            <h1 style=\"font-size: 40px; letter-spacing: 5px; color: #22d3ee;\">{}</h1>
+            <p>This code will expire in 10 minutes.</p>
+        </div>",
+        otp_code
+    );
+
+    let payload = serde_json::json!({
+        "from": "RedEye Auth <onboarding@resend.dev>", // Resend provides this test email address
+        "to": [to_email],
+        "subject": "Your RedEye Login Code",
+        "html": email_html
+    });
+
+    let res = client.post("https://api.resend.com/emails")
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to send email via Resend: {}", e);
+            AppError::Internal("Failed to send email".into())
+        })?;
+
+    if !res.status().is_success() {
+        tracing::error!("Resend API error status: {}", res.status());
+    }
+
+    Ok(())
+}
 
 // --- POST /v1/auth/signup ---
 #[derive(Deserialize)]
@@ -373,4 +418,460 @@ pub async fn get_api_keys(
     }).collect();
 
     Ok(Json(keys))
+}
+
+// --- OTP Handlers ---
+#[derive(Deserialize, Debug)]
+pub struct OtpRequestPayload {
+    pub email: String,
+}
+
+#[axum::debug_handler]
+pub async fn request_otp(
+    State(state): State<AppState>,
+    Json(payload): Json<OtpRequestPayload>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 1. Generate secure 6-digit OTP
+    let otp_code: String = {
+        let mut rng = rand::thread_rng();
+        (0..6).map(|_| rng.gen_range(0..10).to_string()).collect()
+    };
+
+    // 2. Set expiry (10 minutes from now)
+    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(10);
+
+    // 3. Save to DB
+    sqlx::query(
+        "INSERT INTO auth_otps (email, otp_code, expires_at) VALUES ($1, $2, $3)"
+    )
+    .bind(&payload.email)
+    .bind(&otp_code)
+    .bind(expires_at)
+    .execute(&state.db_pool)
+    .await?;
+
+    // --- REAL EMAIL SENDER ---
+    send_real_otp_email(&payload.email, &otp_code).await?;
+    tracing::info!("✉️ Real OTP Email sent to: {}", payload.email);
+
+    Ok(Json(serde_json::json!({"message": "OTP sent to email successfully"})))
+}
+
+#[derive(Deserialize)]
+pub struct OtpVerifyPayload {
+    pub email: String,
+    pub otp_code: String,
+}
+
+pub async fn verify_otp(
+    State(state): State<AppState>,
+    Json(payload): Json<OtpVerifyPayload>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let row = sqlx::query(
+        "SELECT id FROM auth_otps WHERE email = $1 AND otp_code = $2 AND expires_at > NOW()"
+    )
+    .bind(&payload.email)
+    .bind(&payload.otp_code)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    if row.is_none() {
+        return Err(AppError::Unauthorized("Invalid or expired OTP".into()));
+    }
+
+    let mut tx = state.db_pool.begin().await?;
+
+    sqlx::query("DELETE FROM auth_otps WHERE email = $1 AND otp_code = $2")
+        .bind(&payload.email)
+        .bind(&payload.otp_code)
+        .execute(&mut *tx)
+        .await?;
+
+    let user_row = sqlx::query("SELECT id, tenant_id FROM users WHERE email = $1")
+        .bind(&payload.email)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+    let (user_id, tenant_id, workspace_name, onboarding_complete) = if let Some(r) = user_row {
+        let u_id: Uuid = r.get("id");
+        let t_id: Uuid = r.get("tenant_id");
+        let t_row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")
+            .bind(t_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let t_name: String = t_row.get("name");
+        let onboarding_sts: bool = t_row.get("onboarding_status");
+        (u_id, t_id, t_name, onboarding_sts)
+    } else {
+        let new_t_id: Uuid = sqlx::query("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
+            .bind("My Workspace")
+            .fetch_one(&mut *tx)
+            .await?
+            .get("id");
+        
+        let new_u_id: Uuid = sqlx::query(
+            "INSERT INTO users (email, tenant_id, auth_provider) VALUES ($1, $2, 'email_otp') RETURNING id"
+        )
+        .bind(&payload.email)
+        .bind(new_t_id)
+        .fetch_one(&mut *tx)
+        .await?
+        .get("id");
+
+        (new_u_id, new_t_id, "My Workspace".to_string(), false)
+    };
+
+    tx.commit().await?;
+
+    let token = generate_jwt(user_id, tenant_id)?;
+    let (raw_refresh, hash_refresh) = generate_refresh_token(&user_id)?;
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '7 days')"
+    )
+    .bind(user_id)
+    .bind(&hash_refresh)
+    .execute(&state.db_pool)
+    .await?;
+
+    let cookie = format!(
+        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+        raw_refresh
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+
+    Ok((headers, Json(AuthResponse {
+        id: user_id,
+        email: payload.email,
+        tenant_id,
+        workspace_name,
+        onboarding_complete,
+        token,
+        redeye_api_key: None,
+    })))
+}
+
+// --- Google OAuth Handlers ---
+fn google_oauth_client() -> BasicClient {
+    BasicClient::new(
+        ClientId::new(std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default()),
+        Some(ClientSecret::new(std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default())),
+        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
+        Some(TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap()),
+    )
+    .set_redirect_uri(RedirectUrl::new(std::env::var("GOOGLE_REDIRECT_URI").unwrap_or_else(|_| "http://localhost:8084/v1/auth/google/callback".to_string())).unwrap())
+}
+
+pub async fn google_login() -> impl axum::response::IntoResponse {
+    let (auth_url, csrf_token) = google_oauth_client()
+        .authorize_url(CsrfToken::new_random)
+        .add_scope(Scope::new("email".to_string()))
+        .add_scope(Scope::new("profile".to_string()))
+        .url();
+
+    let cookie = format!(
+        "oauth_state={}; HttpOnly; Path=/; Max-Age=600; SameSite=Lax",
+        csrf_token.secret()
+    );
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&cookie).unwrap());
+
+    (headers, axum::response::Redirect::to(auth_url.as_ref()))
+}
+
+#[derive(Deserialize)]
+pub struct OAuthCallbackQuery {
+    pub code: String,
+    pub state: String,
+}
+
+pub async fn google_callback(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OAuthCallbackQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let cookie_header = headers.get(axum::http::header::COOKIE)
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| AppError::Unauthorized("Missing OAuth state cookie".into()))?;
+        
+    let saved_state = cookie_header.split(';')
+        .map(|s| s.trim())
+        .find(|s| s.starts_with("oauth_state="))
+        .map(|s| &s["oauth_state=".len()..])
+        .ok_or_else(|| AppError::Unauthorized("OAuth state cookie not found".into()))?;
+
+    if query.state != saved_state {
+        return Err(AppError::Unauthorized("Invalid CSRF state".into()));
+    }
+    let token = google_oauth_client()
+        .exchange_code(AuthorizationCode::new(query.code))
+        .request_async(async_http_client)
+        .await
+        .map_err(|e| AppError::Unauthorized(format!("OAuth failed: {}", e)))?;
+
+    let client = reqwest::Client::new();
+    let user_info_res = client
+        .get("https://www.googleapis.com/oauth2/v3/userinfo")
+        .bearer_auth(token.access_token().secret())
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let user_info: serde_json::Value = user_info_res
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let email = user_info.get("email").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let sub = user_info.get("sub").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+
+    if email.is_empty() {
+        return Err(AppError::Unauthorized("No email from Google".into()));
+    }
+
+    let mut tx = state.db_pool.begin().await?;
+
+    let user_row = sqlx::query("SELECT id, tenant_id FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+    let (user_id, tenant_id, workspace_name, onboarding_complete) = if let Some(r) = user_row {
+        let u_id: Uuid = r.get("id");
+        let t_id: Uuid = r.get("tenant_id");
+        let t_row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")
+            .bind(t_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let t_name: String = t_row.get("name");
+        let onboarding_sts: bool = t_row.get("onboarding_status");
+        
+        sqlx::query("UPDATE users SET auth_provider = 'google', provider_id = $1 WHERE id = $2")
+            .bind(&sub)
+            .bind(u_id)
+            .execute(&mut *tx)
+            .await?;
+
+        (u_id, t_id, t_name, onboarding_sts)
+    } else {
+        let new_t_id: Uuid = sqlx::query("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
+            .bind("My Workspace")
+            .fetch_one(&mut *tx)
+            .await?
+            .get("id");
+        
+        let new_u_id: Uuid = sqlx::query(
+            "INSERT INTO users (email, tenant_id, auth_provider, provider_id) VALUES ($1, $2, 'google', $3) RETURNING id"
+        )
+        .bind(&email)
+        .bind(new_t_id)
+        .bind(&sub)
+        .fetch_one(&mut *tx)
+        .await?
+        .get("id");
+
+        (new_u_id, new_t_id, "My Workspace".to_string(), false)
+    };
+
+    tx.commit().await?;
+
+    let jwt = generate_jwt(user_id, tenant_id)?;
+    let (raw_refresh, hash_refresh) = generate_refresh_token(&user_id)?;
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '7 days')"
+    )
+    .bind(user_id)
+    .bind(&hash_refresh)
+    .execute(&state.db_pool)
+    .await?;
+
+    // Clear oauth_state cookie, set refresh_token cookie
+    let refresh_cookie = format!(
+        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+        raw_refresh
+    );
+    let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
+
+    let mut headers = HeaderMap::new();
+    headers.append(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
+    headers.append(SET_COOKIE, HeaderValue::from_str(&state_clear_cookie).unwrap());
+
+    let dashboard_url = std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let redirect_url = format!("{}{}?token={}&onboarding_complete={}", dashboard_url, "/oauth/callback", jwt, onboarding_complete);
+
+    Ok((headers, axum::response::Redirect::to(&redirect_url)))
+}
+
+// --- GitHub OAuth Handlers ---
+fn github_oauth_client() -> BasicClient {
+    BasicClient::new(
+        ClientId::new(std::env::var("GITHUB_CLIENT_ID").unwrap_or_default()),
+        Some(ClientSecret::new(std::env::var("GITHUB_CLIENT_SECRET").unwrap_or_default())),
+        AuthUrl::new("https://github.com/login/oauth/authorize".to_string()).unwrap(),
+        Some(TokenUrl::new("https://github.com/login/oauth/access_token".to_string()).unwrap()),
+    )
+    .set_redirect_uri(RedirectUrl::new(std::env::var("GITHUB_REDIRECT_URI").unwrap_or_else(|_| "http://localhost:8084/v1/auth/github/callback".to_string())).unwrap())
+}
+
+pub async fn github_login() -> impl axum::response::IntoResponse {
+    let (auth_url, csrf_token) = github_oauth_client()
+        .authorize_url(CsrfToken::new_random)
+        .add_scope(Scope::new("user:email".to_string()))
+        .url();
+
+    let cookie = format!(
+        "oauth_state={}; HttpOnly; Path=/; Max-Age=600; SameSite=Lax",
+        csrf_token.secret()
+    );
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&cookie).unwrap());
+
+    (headers, axum::response::Redirect::to(auth_url.as_ref()))
+}
+
+pub async fn github_callback(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OAuthCallbackQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let cookie_header = headers.get(axum::http::header::COOKIE)
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| AppError::Unauthorized("Missing OAuth state cookie".into()))?;
+        
+    let saved_state = cookie_header.split(';')
+        .map(|s| s.trim())
+        .find(|s| s.starts_with("oauth_state="))
+        .map(|s| &s["oauth_state=".len()..])
+        .ok_or_else(|| AppError::Unauthorized("OAuth state cookie not found".into()))?;
+
+    if query.state != saved_state {
+        return Err(AppError::Unauthorized("Invalid CSRF state".into()));
+    }
+
+    let token = github_oauth_client()
+        .exchange_code(AuthorizationCode::new(query.code))
+        .request_async(async_http_client)
+        .await
+        .map_err(|e| AppError::Unauthorized(format!("OAuth failed: {}", e)))?;
+
+    let client = reqwest::Client::new();
+    let user_info_res = client
+        .get("https://api.github.com/user")
+        .bearer_auth(token.access_token().secret())
+        .header("User-Agent", "RedEye-Auth-Backend")
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let user_info: serde_json::Value = user_info_res
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let sub = user_info.get("id").map(|v| v.to_string()).unwrap_or_default();
+    
+    // Github primary email might be null in /user, need to fetch /user/emails
+    let mut email = user_info.get("email").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    
+    if email.is_empty() {
+        let emails_res = client
+            .get("https://api.github.com/user/emails")
+            .bearer_auth(token.access_token().secret())
+            .header("User-Agent", "RedEye-Auth-Backend")
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+            
+        let emails: Vec<serde_json::Value> = emails_res
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+            
+        for e in emails {
+            if e.get("primary").and_then(|v| v.as_bool()).unwrap_or(false) {
+                email = e.get("email").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                break;
+            }
+        }
+    }
+
+    if email.is_empty() {
+        return Err(AppError::Unauthorized("No primary email from GitHub".into()));
+    }
+
+    let mut tx = state.db_pool.begin().await?;
+
+    let user_row = sqlx::query("SELECT id, tenant_id FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+    let (user_id, tenant_id, workspace_name, onboarding_complete) = if let Some(r) = user_row {
+        let u_id: Uuid = r.get("id");
+        let t_id: Uuid = r.get("tenant_id");
+        let t_row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")
+            .bind(t_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let t_name: String = t_row.get("name");
+        let onboarding_sts: bool = t_row.get("onboarding_status");
+        
+        sqlx::query("UPDATE users SET auth_provider = 'github', provider_id = $1 WHERE id = $2")
+            .bind(&sub)
+            .bind(u_id)
+            .execute(&mut *tx)
+            .await?;
+
+        (u_id, t_id, t_name, onboarding_sts)
+    } else {
+        let new_t_id: Uuid = sqlx::query("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
+            .bind("My Workspace")
+            .fetch_one(&mut *tx)
+            .await?
+            .get("id");
+        
+        let new_u_id: Uuid = sqlx::query(
+            "INSERT INTO users (email, tenant_id, auth_provider, provider_id) VALUES ($1, $2, 'github', $3) RETURNING id"
+        )
+        .bind(&email)
+        .bind(new_t_id)
+        .bind(&sub)
+        .fetch_one(&mut *tx)
+        .await?
+        .get("id");
+
+        (new_u_id, new_t_id, "My Workspace".to_string(), false)
+    };
+
+    tx.commit().await?;
+
+    let jwt = generate_jwt(user_id, tenant_id)?;
+    let (raw_refresh, hash_refresh) = generate_refresh_token(&user_id)?;
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '7 days')"
+    )
+    .bind(user_id)
+    .bind(&hash_refresh)
+    .execute(&state.db_pool)
+    .await?;
+
+    let refresh_cookie = format!(
+        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+        raw_refresh
+    );
+    let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&refresh_cookie).unwrap());
+    headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&state_clear_cookie).unwrap());
+
+    let dashboard_url = std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let redirect_path = if onboarding_complete { "/dashboard" } else { "/onboarding" };
+    
+    let redirect_url = format!("{}{}#token={}&onboarding_complete={}", dashboard_url, redirect_path, jwt, onboarding_complete);
+
+    Ok((headers, axum::response::Redirect::to(&redirect_url)))
 }

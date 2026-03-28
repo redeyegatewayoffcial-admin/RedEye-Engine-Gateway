@@ -41,7 +41,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     // CORS for React dashboard
     let origin = state.dashboard_url.parse::<axum::http::HeaderValue>().expect("Invalid DASHBOARD_URL for CORS");
     let cors = CorsLayer::new()
-        .allow_origin(origin)
+        .allow_origin(tower_http::cors::Any)
         .allow_methods(Any)
         .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE]);
 

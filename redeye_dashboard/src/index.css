@@ -2,11 +2,12 @@
 
 /* ─── Design Tokens ──────────────────────────────────────────────────────── */
 @theme {
-  --color-redeye-dark:    #020617;   /* slate-950 */
-  --color-redeye-panel:   #0f172a;   /* slate-900 */
-  --color-redeye-primary: #6366f1;   /* indigo-500 */
-  --color-redeye-success: #10b981;   /* emerald-500 */
-  --color-redeye-danger:  #f43f5e;   /* rose-500 */
+  --color-redeye-dark:      #020617;   /* slate-950 */
+  --color-redeye-panel:     #0f172a;   /* slate-900 */
+  --color-redeye-primary:   #22d3ee;   /* cyan-400 */
+  --color-redeye-secondary: #2dd4bf;   /* teal-400 */
+  --color-redeye-success:   #10b981;   /* emerald-500 */
+  --color-redeye-danger:    #f43f5e;   /* rose-500 */
 }
 
 /* ─── Dark Mode ──────────────────────────────────────────────────────────── */
@@ -19,38 +20,47 @@
   }
   body {
     @apply bg-slate-950 text-slate-200 min-h-screen overflow-x-hidden;
-    background: radial-gradient(ellipse at top, rgba(99, 102, 241, 0.08), #020617 50%, #000000);
+    background: radial-gradient(ellipse at top, rgba(34, 211, 238, 0.08), #020617 50%, #000000);
   }
 }
 
-/* ─── Glass Panel — Slate + Indigo ───────────────────────────────────────── */
+/* ─── Glass Panel — Premium Glassmorphism ────────────────────────────────── */
 .glass-panel {
   background: rgba(15, 23, 42, 0.50);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(99, 102, 241, 0.10);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(34, 211, 238, 0.15);
   box-shadow:
-    0 0 15px rgba(99, 102, 241, 0.04),
+    0 0 15px rgba(34, 211, 238, 0.04),
     0 4px 30px rgba(0, 0, 0, 0.4);
-  border-radius: 1rem;
+  border-radius: 1.5rem;
+  transition: all 0.3s ease;
 }
 
 .glass-panel:hover {
-  border-color: rgba(99, 102, 241, 0.18);
+  border-color: rgba(45, 212, 191, 0.30);
+  box-shadow:
+    0 0 20px rgba(45, 212, 191, 0.1),
+    0 4px 30px rgba(0, 0, 0, 0.5);
 }
 
-/* ─── Neon pulse — Indigo ────────────────────────────────────────────────── */
+/* ─── Premium Form Input ─────────────────────────────────────────────────── */
+.premium-input {
+  @apply w-full rounded-xl bg-slate-950/70 border border-slate-800 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400 focus:border-cyan-400 transition-colors;
+}
+
+/* ─── Neon pulse — Cyan ──────────────────────────────────────────────────── */
 @keyframes neon-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(99, 102, 241, 0.5), 0 0 8px rgba(99, 102, 241, 0.25); }
-  50%       { box-shadow: 0 0 8px rgba(99, 102, 241, 0.8), 0 0 16px rgba(99, 102, 241, 0.45); }
+  0%, 100% { box-shadow: 0 0 4px rgba(34, 211, 238, 0.5), 0 0 8px rgba(34, 211, 238, 0.25); }
+  50%       { box-shadow: 0 0 8px rgba(34, 211, 238, 0.8), 0 0 16px rgba(34, 211, 238, 0.45); }
 }
 
 .neon-dot {
   animation: neon-pulse 2s ease-in-out infinite;
 }
 
-/* ─── Custom Scrollbar — Indigo ──────────────────────────────────────────── */
+/* ─── Custom Scrollbar — Cyan ────────────────────────────────────────────── */
 .custom-scrollbar::-webkit-scrollbar        { height: 4px; width: 4px; }
-.custom-scrollbar::-webkit-scrollbar-track  { background: rgba(99, 102, 241, 0.04); border-radius: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb  { background: rgba(99, 102, 241, 0.20); border-radius: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.38); }
+.custom-scrollbar::-webkit-scrollbar-track  { background: rgba(34, 211, 238, 0.04); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb  { background: rgba(34, 211, 238, 0.20); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(34, 211, 238, 0.38); }

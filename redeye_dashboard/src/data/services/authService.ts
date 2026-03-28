@@ -2,14 +2,11 @@
 // Implements IAuthUseCase against http://localhost:8080/v1/auth
 
 import type { User } from '../../domain/entities/User';
-import type {
-  IAuthUseCase,
-  LoginPayload,
-  SignupPayload,
-} from '../../domain/usecases/AuthUseCase';
+import type { IAuthUseCase } from '../../domain/usecases/AuthUseCase';
 
 export interface IAuthUseCaseExtended extends IAuthUseCase {
   refreshToken(): Promise<User | null>;
+  saveToken(token: string): void;
 }
 
 const BASE_URL = 'http://localhost:8084/v1/auth';
@@ -19,9 +16,11 @@ interface AuthResponse {
   id: string; // user id
   email: string;
   tenant_id: string;
+  auth_provider?: string;
+  provider_id?: string;
   workspace_name: string;
   onboarding_complete: boolean;
-  token: string;
+  token?: string;
   redeye_api_key?: string;
 }
 
@@ -29,6 +28,9 @@ function mapUser(resp: AuthResponse): User {
   return {
     id: resp.id,
     email: resp.email,
+    authProvider: resp.auth_provider ?? 'email_otp',
+    providerId: resp.provider_id,
+    tenantId: resp.tenant_id,
     workspaceName: resp.workspace_name ?? '',
     openAiApiKey: '', // We don't hold this client-side directly
     onboardingComplete: resp.onboarding_complete ?? false,
@@ -52,10 +54,14 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 }
 
 export const authService: IAuthUseCaseExtended = {
-  async login({ email, password }: LoginPayload): Promise<User> {
-    const data = await postJson<AuthResponse>(`${BASE_URL}/login`, {
+  async requestMagicLink(email: string): Promise<void> {
+    await postJson(`${BASE_URL}/otp/request`, { email });
+  },
+
+  async verifyMagicLink(email: string, otp: string): Promise<User> {
+    const data = await postJson<AuthResponse>(`${BASE_URL}/otp/verify`, {
       email,
-      password,
+      otp_code: otp,
     });
     if (data.token) {
       localStorage.setItem('re_token', data.token);
@@ -63,16 +69,8 @@ export const authService: IAuthUseCaseExtended = {
     return mapUser(data);
   },
 
-  async signup({ email, password, companyName = 'My Company' }: SignupPayload & { companyName?: string }): Promise<User> {
-    const data = await postJson<AuthResponse>(`${BASE_URL}/signup`, {
-      email,
-      password,
-      company_name: companyName,
-    });
-    if (data.token) {
-      localStorage.setItem('re_token', data.token);
-    }
-    return mapUser(data);
+  async ssoRedirect(provider: string): Promise<void> {
+    window.location.href = `${BASE_URL}/${provider}/login`;
   },
 
   async completeOnboarding(
@@ -125,5 +123,9 @@ export const authService: IAuthUseCaseExtended = {
     } catch (e) {
       return null;
     }
-  }
+  },
+
+  saveToken(token: string): void {
+    localStorage.setItem('re_token', token);
+  },
 };

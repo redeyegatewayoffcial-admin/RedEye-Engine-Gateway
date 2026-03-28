@@ -4,10 +4,12 @@
 
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './presentation/context/AuthContext';
+import { authService } from './data/services/authService';
 
 // Pages
 import { LandingPage }      from './presentation/pages/LandingPage';
 import { AuthPage }         from './presentation/pages/AuthPage';
+import { OAuthCallback }    from './presentation/pages/OAuthCallback';
 import { OnboardingWizard } from './presentation/pages/OnboardingWizard';
 
 // Layout
@@ -55,11 +57,12 @@ function RedirectIfAuth({ children }: { children: React.ReactNode }) {
 // -----------------------------------------------------------------------
 export default function App() {
   return (
-    <AuthProvider>
+    <AuthProvider authUseCase={authService}>
       <BrowserRouter>
         <Routes>
           {/* Public */}
           <Route path="/" element={<LandingPage />} />
+          <Route path="/oauth/callback" element={<OAuthCallback />} />
 
           <Route
             path="/login"
