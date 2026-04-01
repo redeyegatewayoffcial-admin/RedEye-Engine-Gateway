@@ -104,3 +104,124 @@ impl axum::response::IntoResponse for GatewayError {
         (status, body).into_response()
     }
 }
+
+/// The role of the message sender in the Universal Middleman Schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedEyeRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+/// The content block within a message, supporting text, images, and tool invocations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RedEyeContent {
+    Text {
+        text: String,
+    },
+    ImageUrl {
+        url: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    ToolResult {
+        tool_id: String,
+        content: String,
+    },
+}
+
+/// A specific message in the conversation history, associating a role with a list of content blocks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedEyeMessage {
+    pub role: RedEyeRole,
+    pub content: Vec<RedEyeContent>,
+}
+
+/// The Universal Middleman Schema encompassing the whole conversation state for parsing on-the-fly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedEyeConversation {
+    pub system_prompt: Option<String>,
+    pub messages: Vec<RedEyeMessage>,
+    pub tools: Option<Vec<serde_json::Value>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_universal_schema_serialization() {
+        let json_str = r#"{
+            "system_prompt": "You are a helpful assistant.",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Hello, what's in this image?"
+                        },
+                        {
+                            "type": "image_url",
+                            "url": "https://example.com/image.jpg"
+                        }
+                    ]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_call",
+                            "id": "call_123",
+                            "name": "get_weather",
+                            "arguments": { "location": "San Francisco" }
+                        }
+                    ]
+                },
+                {
+                    "role": "tool",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_id": "call_123",
+                            "content": "Sunny and 70 degrees"
+                        }
+                    ]
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get current weather"
+                    }
+                }
+            ]
+        }"#;
+
+        // Verify Deserialization from JSON String
+        let conversation: RedEyeConversation = serde_json::from_str(json_str).expect("Failed to deserialize Universal Schema JSON");
+        
+        assert_eq!(conversation.system_prompt.as_deref(), Some("You are a helpful assistant."));
+        assert_eq!(conversation.messages.len(), 3);
+        assert_eq!(conversation.messages[0].role, RedEyeRole::User);
+        assert_eq!(conversation.messages[1].role, RedEyeRole::Assistant);
+        assert_eq!(conversation.messages[2].role, RedEyeRole::Tool);
+
+        // Verify Serialization back to JSON with no data loss
+        let serialized_str = serde_json::to_string(&conversation).expect("Failed to serialize back to json");
+        
+        // Parse both as serde_json::Value to ignore whitespace formatting differences
+        let original_val: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        let serialized_val: serde_json::Value = serde_json::from_str(&serialized_str).unwrap();
+        
+        assert_eq!(original_val, serialized_val, "Serialized JSON did not match original cleanly");
+    }
+}
