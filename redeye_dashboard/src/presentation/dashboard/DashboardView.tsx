@@ -13,6 +13,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, Legend
 } from 'recharts';
 import { fetchUsageMetrics, USAGE_METRICS_URL, type UsageMetrics } from '../../data/services/metricsService';
+import { HotSwapLiveChart } from './HotSwapLiveChart';
 
 interface Metrics {
   total_requests: string;
@@ -137,8 +138,44 @@ export function DashboardView() {
           </motion.div>
         )}
 
+        {/* ── Hot-Swap Chart & Controls ───────────────────────────────────────── */}
+        <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6 mt-6">
+          <div className="lg:col-span-3">
+            <HotSwapLiveChart />
+          </div>
+          <div className="lg:col-span-1 glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 flex flex-col justify-between rounded-xl">
+            <div>
+              <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-2 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-orange-500" />
+                Chaos Engineering
+              </h2>
+              <p className="text-sm text-slate-400 mb-6">
+                Test zero-downtime routing. This will simulate a 503 Service Unavailable error from the primary OpenAI provider.
+              </p>
+            </div>
+            
+            <button
+              onClick={async () => {
+                try {
+                  const token = localStorage.getItem('re_token');
+                  await fetch('http://localhost:8080/v1/admin/toggle-chaos', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                  });
+                } catch (e) {
+                  console.error('Failed to trigger chaos', e);
+                }
+              }}
+              className="w-full py-3 px-4 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/50 hover:border-orange-500 rounded-lg font-bold transition-all duration-200 active:scale-95 flex items-center justify-center gap-2"
+            >
+              <Zap className="w-4 h-4 fill-current" />
+              Simulate OpenAI Outage
+            </button>
+          </div>
+        </motion.div>
+
         {/* ── Charts Row 1 ───────────────────────────────────────── */}
-        <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+        <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mt-6">
           {/* Traffic Chart */}
           <div id="tour-traffic-chart" className="glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 lg:col-span-2">
             <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-6 flex items-center gap-2">

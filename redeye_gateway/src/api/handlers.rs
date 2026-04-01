@@ -80,6 +80,95 @@ pub async fn chat_completions(
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct HotSwapMetric {
+    pub time: String,
+    pub openai_success: u64,
+    pub openai_error: u64,
+    pub anthropic_fallback: u64,
+}
+
+/// GET /v1/admin/metrics/hot-swaps
+/// Returns real-time hot-swap counts for the authenticated tenant.
+#[instrument(skip(state, claims))]
+pub async fn get_hot_swaps(
+    State(state): State<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Vec<HotSwapMetric>>, GatewayError> {
+    info!(tenant_id = %claims.tenant_id, "Fetching hot-swaps from ClickHouse");
+
+    let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
+
+    let query = format!(
+        "SELECT \
+            formatDateTime(toStartOfMinute(created_at), '%H:%M') as time, \
+            countIf(requested_provider = 'openai' AND is_hot_swapped = 0 AND status = 200) as openai_success, \
+            countIf(requested_provider = 'openai' AND is_hot_swapped = 0 AND status != 200) as openai_error, \
+            countIf(is_hot_swapped = 1) as anthropic_fallback \
+         FROM RedEye_telemetry.request_logs \
+         WHERE tenant_id = '{}' AND created_at >= NOW() - INTERVAL 1 HOUR \
+         GROUP BY toStartOfMinute(created_at) \
+         ORDER BY toStartOfMinute(created_at) ASC \
+         FORMAT JSON",
+        parsed_tenant_id
+    );
+
+    let resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "ClickHouse hot-swaps query failed (network)");
+            GatewayError::Proxy(e)
+        })?;
+
+    if !resp.status().is_success() {
+        let err_body = resp.text().await.unwrap_or_default();
+        error!(error = %err_body, "ClickHouse hot-swaps query returned non-2xx");
+        return Err(GatewayError::ResponseBuild("ClickHouse hot-swaps query failed".to_string()));
+    }
+
+    let ch_json: Value = resp.json().await.map_err(|e| {
+        error!(error = %e, "Failed to deserialise ClickHouse response");
+        GatewayError::ResponseBuild(e.to_string())
+    })?;
+
+    let mut metrics = Vec::new();
+    let rows = ch_json["data"].as_array().cloned().unwrap_or_default();
+
+    for row in rows {
+        let time = row["time"].as_str().unwrap_or("00:00").to_string();
+        
+        let openai_success: u64 = match &row["openai_success"] {
+            Value::String(s) => s.parse().unwrap_or(0),
+            Value::Number(n) => n.as_u64().unwrap_or(0),
+            _ => 0,
+        };
+        let openai_error: u64 = match &row["openai_error"] {
+            Value::String(s) => s.parse().unwrap_or(0),
+            Value::Number(n) => n.as_u64().unwrap_or(0),
+            _ => 0,
+        };
+        let anthropic_fallback: u64 = match &row["anthropic_fallback"] {
+            Value::String(s) => s.parse().unwrap_or(0),
+            Value::Number(n) => n.as_u64().unwrap_or(0),
+            _ => 0,
+        };
+
+        metrics.push(HotSwapMetric {
+            time,
+            openai_success,
+            openai_error,
+            anthropic_fallback,
+        });
+    }
+
+    Ok(Json(metrics))
+}
+
 use crate::api::middleware::auth::Claims;
 
 /// GET /v1/admin/metrics

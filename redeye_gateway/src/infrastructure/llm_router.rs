@@ -226,6 +226,8 @@ pub async fn route_chat_completion(
         let hr = axum::http::Response::builder()
             .status(200)
             .header("content-type", "application/json")
+            .header("x-redeye-hot-swapped", "1")
+            .header("x-redeye-executed-provider", "anthropic")
             .body(reqwest::Body::from(body_bytes))
             .unwrap();
         

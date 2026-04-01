@@ -8,13 +8,16 @@ CREATE DATABASE IF NOT EXISTS RedEye_telemetry;
 -- ── Request Logs (Immutable Telemetry) ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS RedEye_telemetry.request_logs
 (
-    id          UUID,
-    tenant_id   String,
-    status      UInt16,
-    latency_ms  UInt32,
-    model       String,
-    tokens      UInt32,
-    created_at  DateTime DEFAULT now()
+    id                 UUID,
+    tenant_id          String,
+    status             UInt16,
+    latency_ms         UInt32,
+    model              String,
+    tokens             UInt32,
+    requested_provider String,
+    executed_provider  String,
+    is_hot_swapped     UInt8,
+    created_at         DateTime DEFAULT now()
 )
 ENGINE = MergeTree
 ORDER BY (tenant_id, created_at)

@@ -42,6 +42,9 @@ pub struct LogPayload {
     pub prompt_content: String,
     pub response_content: String,
     pub error_message: String,
+    pub requested_provider: String,
+    pub executed_provider: String,
+    pub is_hot_swapped: u8,
 }
 
 /// Typed errors for the gateway.

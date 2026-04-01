@@ -133,6 +133,9 @@ pub async fn execute_proxy(
             prompt_content: raw_prompt.to_string(),
             response_content: "".to_string(),
             error_message: e.to_string(),
+            requested_provider: llm_router::LlmProvider::detect(model_name).as_str().to_string(),
+            executed_provider: "".to_string(),
+            is_hot_swapped: 0,
         }).unwrap_or_else(|_| json!({}));
         
         let _ = state.telemetry_tx.send(payload.clone()).await;
@@ -164,6 +167,9 @@ pub async fn execute_proxy(
             prompt_content: raw_prompt.to_string(),
             response_content: "".to_string(),
             error_message: e.to_string(),
+            requested_provider: llm_router::LlmProvider::detect(model_name).as_str().to_string(),
+            executed_provider: "".to_string(),
+            is_hot_swapped: 0,
         }).unwrap_or_else(|_| json!({}));
 
         let _ = state.telemetry_tx.send(payload.clone()).await;
@@ -185,6 +191,10 @@ pub async fn execute_proxy(
     )
     .await?;
 
+    let requested_provider = llm_router::LlmProvider::detect(model_name).as_str().to_string();
+    let mut executed_provider = provider.as_str().to_string();
+    let mut is_hot_swapped: u8 = 0;
+
     let upstream_status = upstream_response.status().as_u16();
     let content_type = upstream_response
         .headers()
@@ -193,7 +203,14 @@ pub async fn execute_proxy(
         .unwrap_or("application/json")
         .to_string();
 
-    info!(status = upstream_status, provider = provider.as_str(), "Received response from upstream LLM provider");
+    if let Some(hs) = upstream_response.headers().get("x-redeye-hot-swapped") {
+        if hs == "1" { is_hot_swapped = 1; }
+    }
+    if let Some(ep) = upstream_response.headers().get("x-redeye-executed-provider") {
+        if let Ok(ep_str) = ep.to_str() { executed_provider = ep_str.to_string(); }
+    }
+
+    info!(status = upstream_status, provider = executed_provider.as_str(), "Received response from upstream LLM provider");
 
     let is_streaming = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -202,6 +219,7 @@ pub async fn execute_proxy(
         return handle_streaming_response(
             state, upstream_response, upstream_status, content_type,
             tenant_id, model_name, raw_prompt, trace_ctx, start_time,
+            requested_provider, executed_provider, is_hot_swapped,
         );
     }
 
@@ -209,6 +227,7 @@ pub async fn execute_proxy(
     handle_buffered_response(
         state, upstream_response, upstream_status, content_type,
         tenant_id, model_name, raw_prompt, trace_ctx, start_time,
+        requested_provider, executed_provider, is_hot_swapped,
     )
     .await
 }
@@ -237,9 +256,12 @@ fn handle_cache_hit(
     let bytes = serde_json::to_vec(&mock_response).unwrap_or_default();
     let latency_ms = start_time.elapsed().as_millis() as u32;
 
+    let requested_provider = llm_router::LlmProvider::detect(model_name).as_str().to_string();
+
     spawn_telemetry(
         state, tenant_id, model_name, raw_prompt, trace_ctx,
         200, latency_ms, 0, true, None,
+        requested_provider.clone(), requested_provider, 0,
     );
 
     Ok(ProxyResult {
@@ -466,6 +488,9 @@ fn handle_streaming_response(
     raw_prompt: &str,
     trace_ctx: &TraceContext,
     start_time: std::time::Instant,
+    requested_provider: String,
+    executed_provider: String,
+    is_hot_swapped: u8,
 ) -> Result<ProxyResult, GatewayError> {
     let event_stream = upstream_response.bytes_stream().eventsource();
     let (tx, rx) = mpsc::channel(100);
@@ -496,6 +521,7 @@ fn handle_streaming_response(
         fire_async_telemetry(
             &state_c, &tenant_id_c, &model_name_c, &raw_prompt_c, &trace_ctx_c,
             upstream_status, latency_ms, 0, false, None,
+            requested_provider, executed_provider, is_hot_swapped,
         )
         .await;
     });
@@ -520,6 +546,9 @@ async fn handle_buffered_response(
     raw_prompt: &str,
     trace_ctx: &TraceContext,
     start_time: std::time::Instant,
+    requested_provider: String,
+    executed_provider: String,
+    is_hot_swapped: u8,
 ) -> Result<ProxyResult, GatewayError> {
     let body_bytes = upstream_response.bytes().await.unwrap_or_default().to_vec();
     let latency_ms = start_time.elapsed().as_millis() as u32;
@@ -532,6 +561,7 @@ async fn handle_buffered_response(
     spawn_telemetry(
         state, tenant_id, model_name, raw_prompt, trace_ctx,
         upstream_status, latency_ms, tokens, false, Some(body_bytes.clone()),
+        requested_provider, executed_provider, is_hot_swapped,
     );
 
     Ok(ProxyResult {
@@ -556,6 +586,9 @@ fn spawn_telemetry(
     tokens: u32,
     cache_hit: bool,
     response_bytes: Option<Vec<u8>>,
+    requested_provider: String,
+    executed_provider: String,
+    is_hot_swapped: u8,
 ) {
     let s = state.clone();
     let tid = tenant_id.to_string();
@@ -564,7 +597,7 @@ fn spawn_telemetry(
     let ctx = trace_ctx.clone();
 
     tokio::spawn(async move {
-        fire_async_telemetry(&s, &tid, &model, &prompt, &ctx, status_code, latency_ms, tokens, cache_hit, response_bytes).await;
+        fire_async_telemetry(&s, &tid, &model, &prompt, &ctx, status_code, latency_ms, tokens, cache_hit, response_bytes, requested_provider, executed_provider, is_hot_swapped).await;
     });
 }
 
@@ -580,6 +613,9 @@ async fn fire_async_telemetry(
     tokens: u32,
     cache_hit: bool,
     response_bytes: Option<Vec<u8>>,
+    requested_provider: String,
+    executed_provider: String,
+    is_hot_swapped: u8,
 ) {
     // ── Record session spend for burn-rate tracking ──────────────────────────
     crate::usecases::behavior_guard::record_session_spend(state, &trace_ctx.session_id, tokens).await;
@@ -593,7 +629,10 @@ async fn fire_async_telemetry(
         "status": status_code,
         "latency_ms": latency_ms,
         "model": model_name,
-        "tokens": tokens
+        "tokens": tokens,
+        "requested_provider": requested_provider,
+        "executed_provider": executed_provider,
+        "is_hot_swapped": is_hot_swapped
     });
 
     if let Err(e) = state.telemetry_tx.send(payload).await {
@@ -612,7 +651,10 @@ async fn fire_async_telemetry(
         "total_tokens":    tokens,
         "cache_hit":       cache_hit,
         "prompt_content":  raw_prompt,
-        "response_content": response_content
+        "response_content": response_content,
+        "requested_provider": requested_provider,
+        "executed_provider": executed_provider,
+        "is_hot_swapped": is_hot_swapped
     });
 
     clickhouse_logger::send_trace_to_tracer(&state.http_client, &state.tracer_url, &trace_payload).await;

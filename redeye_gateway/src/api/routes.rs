@@ -30,6 +30,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/metrics/usage", get(handlers::get_usage_metrics))
         .route("/metrics/cache", get(handlers::get_cache_metrics))
         .route("/metrics/compliance", get(handlers::get_compliance_metrics))
+        .route("/metrics/hot-swaps", get(handlers::get_hot_swaps))
         .route("/billing/breakdown", get(handlers::get_billing_breakdown))
         .route("/traces", get(handlers::get_traces))
         .route("/security/alerts", get(handlers::security_alerts))
