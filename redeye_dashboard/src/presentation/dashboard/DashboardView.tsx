@@ -28,9 +28,11 @@ interface Metrics {
 const CHART_COLORS = ['#22d3ee', '#2dd4bf', '#818cf8', '#ec4899', '#f59e0b'];
 
 const fetcher = async (url: string) => {
-  const token = localStorage.getItem('re_token');
-  if (!token) throw new Error("No authentication token found");
-  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  // Authentication handled via HttpOnly cookies (credentials: 'include')
+  const res = await fetch(url, { 
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' }
+  });
   if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
   return res.json();
 };
@@ -85,22 +87,22 @@ export function DashboardView() {
           className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
         >
           <div>
-            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 to-teal-300 bg-clip-text text-transparent pb-1">
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-600 to-teal-500 dark:from-cyan-400 dark:to-teal-300 bg-clip-text text-transparent pb-1">
               RedEye Gateway
             </h1>
-            <p className="text-xs sm:text-sm text-slate-400 mt-1">
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
               Enterprise Telemetry &amp; Security Command Center
             </p>
           </div>
 
           {/* Live Sync Badge */}
-          <div className="flex items-center space-x-2 glass-panel px-3 py-1.5 sm:px-4 sm:py-2 rounded-full self-start sm:self-auto w-fit">
+          <div className="flex items-center space-x-2 glass-panel bg-white/80 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-800/80 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full self-start sm:self-auto w-fit shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
             {isLoading && !metrics ? (
-              <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
+              <Loader2 className="w-4 h-4 text-cyan-600 dark:text-cyan-400 animate-spin" />
             ) : (
               <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${error ? 'bg-rose-500' : 'bg-emerald-500 neon-dot'}`} />
             )}
-            <span className="text-xs sm:text-sm font-medium text-slate-300">
+            <span className="text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300">
               {isLoading && !metrics ? 'Connecting...' : error ? 'System Offline' : 'Live Sync Active'}
             </span>
           </div>
@@ -132,9 +134,9 @@ export function DashboardView() {
 
         {/* Error Banner */}
         {error && !metrics && (
-          <motion.div variants={fadeUpVariant} className="glass-panel border-rose-500/20 bg-rose-500/5 p-4 flex items-center gap-3">
+          <motion.div variants={fadeUpVariant} className="glass-panel bg-rose-50 dark:bg-rose-500/5 border border-rose-200 dark:border-rose-500/20 p-4 flex items-center gap-3 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
             <AlertCircle className="w-5 h-5 text-rose-500 flex-shrink-0" />
-            <p className="text-sm text-slate-300">Connection to backend metrics failed. Showing stale or zeroed data.</p>
+            <p className="text-sm text-rose-700 dark:text-slate-300">Connection to backend metrics failed. Showing stale or zeroed data.</p>
           </motion.div>
         )}
 
@@ -143,13 +145,13 @@ export function DashboardView() {
           <div className="lg:col-span-3">
             <HotSwapLiveChart />
           </div>
-          <div className="lg:col-span-1 glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 flex flex-col justify-between rounded-xl">
+          <div className="lg:col-span-1 glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 flex flex-col justify-between rounded-xl shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
             <div>
-              <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-2 flex items-center gap-2">
+              <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-2 flex items-center gap-2">
                 <AlertCircle className="w-5 h-5 text-orange-500" />
                 Chaos Engineering
               </h2>
-              <p className="text-sm text-slate-400 mb-6">
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
                 Test zero-downtime routing. This will simulate a 503 Service Unavailable error from the primary OpenAI provider.
               </p>
             </div>
@@ -157,16 +159,17 @@ export function DashboardView() {
             <button
               onClick={async () => {
                 try {
-                  const token = localStorage.getItem('re_token');
+                  // Authentication handled via HttpOnly cookies
                   await fetch('http://localhost:8080/v1/admin/toggle-chaos', {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` }
+                    credentials: 'include', // Sends HttpOnly cookies automatically
+                    headers: { 'Content-Type': 'application/json' }
                   });
                 } catch (e) {
                   console.error('Failed to trigger chaos', e);
                 }
               }}
-              className="w-full py-3 px-4 bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/50 hover:border-orange-500 rounded-lg font-bold transition-all duration-200 active:scale-95 flex items-center justify-center gap-2"
+              className="w-full py-3 px-4 bg-orange-100 dark:bg-orange-500/10 hover:bg-orange-200 dark:hover:bg-orange-500/20 text-orange-600 dark:text-orange-400 border border-orange-300 dark:border-orange-500/50 hover:border-orange-400 dark:hover:border-orange-500 rounded-lg font-bold transition-all duration-200 active:scale-95 ease-in-out focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:ring-offset-1 dark:focus:ring-offset-slate-900 flex items-center justify-center gap-2"
             >
               <Zap className="w-4 h-4 fill-current" />
               Simulate OpenAI Outage
@@ -177,10 +180,10 @@ export function DashboardView() {
         {/* ── Charts Row 1 ───────────────────────────────────────── */}
         <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mt-6">
           {/* Traffic Chart */}
-          <div id="tour-traffic-chart" className="glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 lg:col-span-2">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-6 flex items-center gap-2">
+          <div id="tour-traffic-chart" className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-2 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6 flex items-center gap-2">
               Live Traffic Overview
-              <span className="text-[10px] text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-tighter">Real-time</span>
+              <span className="text-[10px] text-cyan-600 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-tighter">Real-time</span>
             </h2>
             <div className="h-[250px] w-full min-h-[250px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -191,16 +194,16 @@ export function DashboardView() {
                       <stop offset="95%" stopColor="#22d3ee" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                   <XAxis
                     dataKey="timestamp"
-                    stroke="#475569"
+                    stroke="#64748b"
                     fontSize={10}
                     tickLine={false}
                     axisLine={false}
                     tickFormatter={(val) => val.split('T')[1]?.substring(0, 5) ?? val}
                   />
-                  <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: 'rgba(34,211,238,0.2)', borderRadius: '10px', fontSize: '12px' }}
                     itemStyle={{ color: '#22d3ee' }}
@@ -220,8 +223,8 @@ export function DashboardView() {
           </div>
 
           {/* Model Distribution */}
-          <div className="glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 lg:col-span-1 flex flex-col">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-6">Model Distribution</h2>
+          <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-1 flex flex-col shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">Model Distribution</h2>
             <div className="h-[250px] w-full flex-1 min-h-[250px]">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -252,14 +255,14 @@ export function DashboardView() {
         {/* ── Charts Row 2 ───────────────────────────────────────── */}
         <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
           {/* Latency Histogram */}
-          <div className="glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 lg:col-span-1">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-6">Latency Histogram</h2>
+          <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-1 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">Latency Histogram</h2>
             <div className="h-[250px] w-full min-h-[250px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={metrics?.latency_buckets && metrics.latency_buckets.length > 0 ? metrics.latency_buckets : []}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                  <XAxis dataKey="bucket" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-                  <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                  <XAxis dataKey="bucket" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: 'rgba(45,212,191,0.2)', borderRadius: '10px', fontSize: '12px' }}
                   />
@@ -275,16 +278,16 @@ export function DashboardView() {
           </div>
 
           {/* Audit Log */}
-          <div className="glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 lg:col-span-2 flex flex-col overflow-hidden">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-4 flex items-center justify-between">
+          <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-2 flex flex-col overflow-hidden shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center justify-between">
               Live Request Audit Log
-              <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-widest animate-pulse">Live</span>
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-widest animate-pulse">Live</span>
             </h2>
-            <div className="overflow-x-auto w-full pb-2 custom-scrollbar flex-1 min-h-[190px] flex flex-col justify-center border border-slate-800/50 rounded-xl bg-slate-950/20">
+            <div className="overflow-x-auto w-full pb-2 custom-scrollbar flex-1 min-h-[190px] flex flex-col justify-center border border-slate-200 dark:border-slate-800/50 rounded-xl bg-slate-50 dark:bg-slate-950/20">
               <div className="text-center py-8">
-                <Activity className="w-8 h-8 text-slate-700 mx-auto mb-3 animate-pulse" />
+                <Activity className="w-8 h-8 text-slate-400 dark:text-slate-700 mx-auto mb-3 animate-pulse" />
                 <span className="text-slate-500 text-sm font-medium">Tracing active spans...</span>
-                <p className="text-[10px] text-slate-600 mt-1 uppercase tracking-[0.2em]">Audit log data buffered at gateway</p>
+                <p className="text-[10px] text-slate-400 dark:text-slate-600 mt-1 uppercase tracking-[0.2em]">Audit log data buffered at gateway</p>
               </div>
             </div>
           </div>

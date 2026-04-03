@@ -2,9 +2,10 @@
 //!
 //! Owns all observability data: trace ingestion, compliance audit storage, and query APIs.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, env};
 use axum::{routing::{get, post}, Router};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -12,22 +13,28 @@ mod domain;
 mod usecases;
 mod infrastructure;
 mod api;
+mod error;
 
 use infrastructure::clickhouse_repo::ClickHouseRepo;
 
 #[tokio::main]
 async fn main() {
+    let _ = dotenvy::dotenv();
     // Init tracing
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
-
+    
     info!("Starting RedEye Tracer Microservice...");
 
     // ClickHouse connection
     let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://localhost:8123/?user=RedEye&password=clickhouse_secret&database=RedEye_telemetry".to_string());
+        .unwrap_or_else(|_| {
+            let default_url = "http://localhost:8123".to_string();
+            tracing::warn!("CLICKHOUSE_URL not set, using default: {}", default_url);
+            default_url
+        });
 
     let repo = ClickHouseRepo::new(clickhouse_url);
 
@@ -38,11 +45,8 @@ async fn main() {
 
     let shared_repo = Arc::new(repo);
 
-    // CORS for dashboard
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // CORS configuration - strict origin validation
+    let cors = create_cors_layer();
 
     let app = Router::new()
         .route("/v1/traces/ingest", post(api::handlers::ingest_handler))
@@ -50,6 +54,7 @@ async fn main() {
         .route("/v1/audit", get(api::handlers::audit_handler))
         .route("/health", get(|| async { axum::Json(serde_json::json!({"status": "ok", "service": "redeye_tracer"})) }))
         .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB limit
         .with_state(shared_repo);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8082));
@@ -60,4 +65,30 @@ async fn main() {
 
     axum::serve(listener, app).await
         .expect("Tracer server encountered a fatal error");
+}
+
+/// Creates a CORS layer with strict origin validation.
+/// In production, only allows the DASHBOARD_URL environment variable.
+/// Falls back to restricted local development origins if DASHBOARD_URL is not set.
+fn create_cors_layer() -> CorsLayer {
+    let dashboard_url = env::var("DASHBOARD_URL").ok();
+    
+    let origins = match dashboard_url {
+        Some(url) => {
+            vec![url.parse().expect("Invalid DASHBOARD_URL format")]
+        }
+        None => {
+            // Restricted development origins only
+            vec![
+                "http://localhost:5173".parse().unwrap(),
+                "http://localhost:3000".parse().unwrap(),
+            ]
+        }
+    };
+    
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_credentials(true)
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
 }

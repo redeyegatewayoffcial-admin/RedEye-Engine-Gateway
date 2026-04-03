@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
     Json,
 };
 use serde_json::json;
 use tracing::{error, info};
 
 use crate::domain::models::{AuditQuery, TraceIngestPayload, TraceQuery};
+use crate::error::AppError;
 use crate::infrastructure::clickhouse_repo::ClickHouseRepo;
 use crate::usecases::{ingest, query};
 
@@ -20,16 +19,15 @@ use crate::usecases::{ingest, query};
 pub async fn ingest_handler(
     State(repo): State<Arc<ClickHouseRepo>>,
     Json(payload): Json<TraceIngestPayload>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, AppError> {
     info!(trace_id = %payload.trace_id, "Ingest request received");
 
-    match ingest::ingest_trace(&repo, &payload).await {
-        Ok(()) => (StatusCode::CREATED, Json(json!({"ingested": true}))),
-        Err(e) => {
-            error!(error = %e, "Ingest failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e})))
-        }
-    }
+    ingest::ingest_trace(&repo, &payload).await.map_err(|e| {
+        error!(error = %e, "Ingest failed");
+        AppError::Internal(format!("Failed to ingest trace: {}", e))
+    })?;
+
+    Ok(Json(json!({"ingested": true})))
 }
 
 /// GET /v1/traces
@@ -37,21 +35,20 @@ pub async fn ingest_handler(
 pub async fn traces_handler(
     State(repo): State<Arc<ClickHouseRepo>>,
     Query(params): Query<TraceQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, AppError> {
     let session_id = params.session_id.unwrap_or_default();
     let limit = params.limit.unwrap_or(50);
 
     if session_id.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "session_id query parameter is required"}))).into_response();
+        return Err(AppError::BadRequest("session_id query parameter is required".into()));
     }
 
-    match query::query_traces_by_session(&repo, &session_id, limit).await {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            error!(error = %e, "Trace query failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response()
-        }
-    }
+    let data = query::query_traces_by_session(&repo, &session_id, limit).await.map_err(|e| {
+        error!(error = %e, "Trace query failed");
+        AppError::Internal(format!("Failed to query traces: {}", e))
+    })?;
+
+    Ok(Json(data))
 }
 
 /// GET /v1/audit
@@ -59,19 +56,18 @@ pub async fn traces_handler(
 pub async fn audit_handler(
     State(repo): State<Arc<ClickHouseRepo>>,
     Query(params): Query<AuditQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, AppError> {
     let tenant_id = params.tenant_id.unwrap_or_default();
     let limit = params.limit.unwrap_or(50);
 
     if tenant_id.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "tenant_id query parameter is required"}))).into_response();
+        return Err(AppError::BadRequest("tenant_id query parameter is required".into()));
     }
 
-    match query::query_audit_by_tenant(&repo, &tenant_id, limit).await {
-        Ok(data) => Json(data).into_response(),
-        Err(e) => {
-            error!(error = %e, "Audit query failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response()
-        }
-    }
+    let data = query::query_audit_by_tenant(&repo, &tenant_id, limit).await.map_err(|e| {
+        error!(error = %e, "Audit query failed");
+        AppError::Internal(format!("Failed to query audit: {}", e))
+    })?;
+
+    Ok(Json(data))
 }

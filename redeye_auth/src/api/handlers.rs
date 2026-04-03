@@ -131,13 +131,13 @@ pub async fn signup(
     .execute(&state.db_pool)
     .await?;
 
-    let cookie = format!(
-        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+    let refresh_cookie = format!(
+        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
 
     let mut headers = HeaderMap::new();
-    headers.insert(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
 
     Ok((headers, Json(AuthResponse { 
         id: user_id,
@@ -196,13 +196,13 @@ pub async fn login(
     .execute(&state.db_pool)
     .await?;
 
-    let cookie = format!(
-        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+    let refresh_cookie = format!(
+        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
 
     let mut headers = HeaderMap::new();
-    headers.insert(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
 
     Ok((headers, Json(AuthResponse {
         id: user_id,
@@ -219,7 +219,7 @@ pub async fn login(
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<AuthResponse>, AppError> {
+) -> Result<impl axum::response::IntoResponse, AppError> {
     // Read the refresh_token from cookies
     let cookie_header = headers.get(axum::http::header::COOKIE)
         .and_then(|h| h.to_str().ok())
@@ -234,12 +234,13 @@ pub async fn refresh(
     use sha2::{Sha256, Digest};
     let mut hasher = Sha256::new();
     hasher.update(raw_refresh.as_bytes());
-    let token_hash = hex::encode(hasher.finalize());
+    let old_token_hash = hex::encode(hasher.finalize());
 
+    // Verify the old refresh token exists and is valid
     let row = sqlx::query(
         "SELECT user_id FROM refresh_tokens WHERE token_hash = $1 AND expires_at > NOW()"
     )
-    .bind(&token_hash)
+    .bind(&old_token_hash)
     .fetch_optional(&state.db_pool)
     .await?;
 
@@ -248,6 +249,13 @@ pub async fn refresh(
         None => return Err(AppError::Unauthorized("Invalid or expired refresh token".into())),
     };
 
+    // REFRESH TOKEN ROTATION: Delete the old refresh token (invalidate it)
+    sqlx::query("DELETE FROM refresh_tokens WHERE token_hash = $1")
+        .bind(&old_token_hash)
+        .execute(&state.db_pool)
+        .await?;
+
+    // Generate new tokens
     let user_row = sqlx::query("SELECT email, tenant_id FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_one(&state.db_pool)
@@ -264,17 +272,44 @@ pub async fn refresh(
     let workspace_name: String = tenant_row.get("name");
     let onboarding_complete: bool = tenant_row.get("onboarding_status");
 
-    let token = generate_jwt(user_id, tenant_id)?;
+    // Generate new JWT and refresh token
+    let jwt = generate_jwt(user_id, tenant_id)?;
+    let (new_raw_refresh, new_hash_refresh) = generate_refresh_token(&user_id)?;
 
-    Ok(Json(AuthResponse {
+    // Save the NEW refresh token hash to database
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '7 days')"
+    )
+    .bind(user_id)
+    .bind(&new_hash_refresh)
+    .execute(&state.db_pool)
+    .await?;
+
+    // Set new HttpOnly, Secure cookies with the new tokens
+    let jwt_cookie = format!(
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
+        jwt
+    );
+    let refresh_cookie = format!(
+        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
+        new_raw_refresh
+    );
+
+    let mut response_headers = HeaderMap::new();
+    response_headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
+    response_headers.append(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
+
+    let response = AuthResponse {
         id: user_id,
         email,
         tenant_id,
         workspace_name,
         onboarding_complete,
-        token,
+        token: jwt,
         redeye_api_key: None,
-    }))
+    };
+
+    Ok((response_headers, Json(response)))
 }
 
 // --- POST /v1/auth/onboard ---
@@ -534,12 +569,12 @@ pub async fn verify_otp(
     .execute(&state.db_pool)
     .await?;
 
-    let cookie = format!(
-        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+    let refresh_cookie = format!(
+        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
     let mut headers = HeaderMap::new();
-    headers.insert(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
 
     Ok((headers, Json(AuthResponse {
         id: user_id,
@@ -687,19 +722,26 @@ pub async fn google_callback(
     .execute(&state.db_pool)
     .await?;
 
-    // Clear oauth_state cookie, set refresh_token cookie
+    // Clear oauth_state cookie, set refresh_token cookie with Secure flag
     let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
     let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
+    // Set JWT as HttpOnly Secure cookie instead of URL parameter
+    let jwt_cookie = format!(
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
+        jwt
+    );
 
     let mut headers = HeaderMap::new();
     headers.append(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
     headers.append(SET_COOKIE, HeaderValue::from_str(&state_clear_cookie).unwrap());
+    headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
+    // Redirect without token in URL - client reads from cookie
     let dashboard_url = std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
-    let redirect_url = format!("{}{}?token={}&onboarding_complete={}", dashboard_url, "/oauth/callback", jwt, onboarding_complete);
+    let redirect_url = format!("{}{}?onboarding_complete={}", dashboard_url, "/oauth/callback", onboarding_complete);
 
     Ok((headers, axum::response::Redirect::to(&redirect_url)))
 }
@@ -859,19 +901,26 @@ pub async fn github_callback(
     .await?;
 
     let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Path=/; Max-Age=604800; SameSite=Strict",
+        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
     let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
+    // Set JWT as HttpOnly Secure cookie instead of URL fragment
+    let jwt_cookie = format!(
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
+        jwt
+    );
 
     let mut headers = axum::http::HeaderMap::new();
     headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&refresh_cookie).unwrap());
     headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&state_clear_cookie).unwrap());
+    headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&jwt_cookie).unwrap());
 
     let dashboard_url = std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
     let redirect_path = if onboarding_complete { "/dashboard" } else { "/onboarding" };
     
-    let redirect_url = format!("{}{}#token={}&onboarding_complete={}", dashboard_url, redirect_path, jwt, onboarding_complete);
+    // Redirect without token in URL - client reads from cookie
+    let redirect_url = format!("{}{}?onboarding_complete={}", dashboard_url, redirect_path, onboarding_complete);
 
     Ok((headers, axum::response::Redirect::to(&redirect_url)))
 }

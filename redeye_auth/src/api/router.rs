@@ -4,22 +4,12 @@ use axum::{
 };
 use axum::http::{Method, HeaderValue};
 use tower_http::cors::CorsLayer;
+use std::env;
 use super::handlers::{signup, login, onboard, refresh, get_api_keys, request_otp, verify_otp, google_login, google_callback, github_login, github_callback};
 use crate::AppState;
 
 pub fn create_router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin([
-            "http://localhost:5173".parse::<HeaderValue>().unwrap(),
-            "http://localhost:3000".parse::<HeaderValue>().unwrap(),
-        ])
-        .allow_credentials(true)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([
-            axum::http::header::CONTENT_TYPE,
-            axum::http::header::AUTHORIZATION,
-            axum::http::header::ACCEPT,
-        ]);
+    let cors = create_cors_layer();
 
     let protected_routes = Router::new()
         .route("/onboard", post(onboard))
@@ -38,5 +28,36 @@ pub fn create_router(state: AppState) -> Router {
         .route("/v1/auth/github/callback", get(github_callback))
         .nest("/v1/auth", protected_routes)
         .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)) // 2MB limit for auth payloads
         .with_state(state)
+}
+
+/// Creates a CORS layer with strict origin validation.
+/// In production, only allows the DASHBOARD_URL environment variable.
+/// Falls back to restricted local development origins if DASHBOARD_URL is not set.
+fn create_cors_layer() -> CorsLayer {
+    let dashboard_url = env::var("DASHBOARD_URL").ok();
+    
+    let origins = match dashboard_url {
+        Some(url) => {
+            vec![url.parse::<HeaderValue>().expect("Invalid DASHBOARD_URL format")]
+        }
+        None => {
+            // Restricted development origins only
+            vec![
+                "http://localhost:5173".parse::<HeaderValue>().unwrap(),
+                "http://localhost:3000".parse::<HeaderValue>().unwrap(),
+            ]
+        }
+    };
+    
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_credentials(true)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::ACCEPT,
+        ])
 }

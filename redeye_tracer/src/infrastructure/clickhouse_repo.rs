@@ -95,18 +95,26 @@ impl ClickHouseRepo {
 
     /// Queries traces by session_id.
     pub async fn query_traces(&self, session_id: &str, limit: u32) -> Result<Value, String> {
+        // Validate session_id as UUID to prevent SQL injection
+        let session_uuid = uuid::Uuid::parse_str(session_id)
+            .map_err(|e| format!("Invalid session_id format: {}", e))?;
+        
         let query = format!(
             "SELECT * FROM RedEye_telemetry.agent_traces WHERE session_id = '{}' ORDER BY created_at DESC LIMIT {} FORMAT JSON",
-            session_id, limit
+            session_uuid, limit
         );
         self.run_query(&query).await
     }
 
     /// Queries audit log by tenant_id.
     pub async fn query_audit(&self, tenant_id: &str, limit: u32) -> Result<Value, String> {
+        // Validate tenant_id as UUID to prevent SQL injection
+        let tenant_uuid = uuid::Uuid::parse_str(tenant_id)
+            .map_err(|e| format!("Invalid tenant_id format: {}", e))?;
+        
         let query = format!(
             "SELECT * FROM RedEye_telemetry.compliance_audit_log WHERE tenant_id = '{}' ORDER BY created_at DESC LIMIT {} FORMAT JSON",
-            tenant_id, limit
+            tenant_uuid, limit
         );
         self.run_query(&query).await
     }

@@ -73,33 +73,72 @@ impl axum::response::IntoResponse for GatewayError {
         use axum::http::StatusCode;
         use axum::Json;
 
-        let status = match self {
-            GatewayError::Unauthorized => StatusCode::UNAUTHORIZED,
-            GatewayError::ResponseBuild(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            GatewayError::UpstreamUnreachable(_) => StatusCode::BAD_GATEWAY,
-            GatewayError::ComplianceFailure(_) => StatusCode::SERVICE_UNAVAILABLE,
-            GatewayError::RateLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
-            GatewayError::LoopDetected(_) => StatusCode::TOO_MANY_REQUESTS,
-            GatewayError::BurnRateExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
-            GatewayError::Proxy(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        let (status, code, message) = match &self {
+            GatewayError::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "Missing or invalid API key.",
+            ),
+            GatewayError::ResponseBuild(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "An internal error occurred while building the response.",
+            ),
+            GatewayError::UpstreamUnreachable(_) => (
+                StatusCode::BAD_GATEWAY,
+                "UPSTREAM_ERROR",
+                "The upstream LLM service is currently unreachable.",
+            ),
+            GatewayError::ComplianceFailure(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "COMPLIANCE_ERROR",
+                "Request blocked: the compliance service is unavailable or rejected this payload.",
+            ),
+            GatewayError::RateLimitExceeded(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "RATE_LIMITED",
+                "Rate limit exceeded. Please try again later.",
+            ),
+            GatewayError::LoopDetected(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "AGENT_LOOP_DETECTED",
+                "Agent recursive loop detected. This session has been blocked to prevent runaway costs.",
+            ),
+            GatewayError::BurnRateExceeded(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "BURN_RATE_EXCEEDED",
+                "Session burn rate exceeded. Spending has been paused to prevent runaway costs.",
+            ),
+            GatewayError::Proxy(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "An internal error occurred while communicating with backend cluster services.",
+            ),
         };
 
-        let message = match &self {
-            GatewayError::Unauthorized => "Missing or invalid API key.",
-            GatewayError::ResponseBuild(_) => "An internal error occurred while building the response.",
-            GatewayError::UpstreamUnreachable(_) => "The upstream LLM service is currently unreachable.",
-            GatewayError::ComplianceFailure(_) => "Request blocked: the compliance service is unavailable or rejected this payload.",
-            GatewayError::RateLimitExceeded(_) => "Rate limit exceeded. Please try again later.",
-            GatewayError::LoopDetected(_) => "Agent recursive loop detected. This session has been blocked to prevent runaway costs.",
-            GatewayError::BurnRateExceeded(_) => "Session burn rate exceeded. Spending has been paused to prevent runaway costs.",
-            GatewayError::Proxy(_) => "An internal error occurred while communicating with backend cluster services.",
-        };
-
-        tracing::error!(error = %self, "Returning error response to client");
+        // Log internal errors with full details
+        match &self {
+            GatewayError::ResponseBuild(_) | GatewayError::Proxy(_) => {
+                tracing::error!(
+                    error_code = %code,
+                    status = %status.as_u16(),
+                    internal_details = %self,
+                    "Internal gateway error occurred"
+                );
+            }
+            _ => {
+                tracing::warn!(
+                    error_code = %code,
+                    status = %status.as_u16(),
+                    message = %message,
+                    "Gateway client error occurred"
+                );
+            }
+        }
 
         let body = Json(serde_json::json!({
             "error": {
-                "code": status.as_u16(),
+                "code": code,
                 "message": message,
             }
         }));

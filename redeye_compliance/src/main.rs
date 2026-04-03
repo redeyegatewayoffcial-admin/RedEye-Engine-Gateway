@@ -3,9 +3,10 @@
 //! Owns all Autonomous Compliance Engine features: PII redaction, Data Residency,
 //! OPA policy enforcement, and Immutable Audit Logging.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, env};
 use axum::{routing::get, Router};
 use tower_http::cors::{Any, CorsLayer};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -13,6 +14,7 @@ mod domain;
 mod api;
 mod usecases;
 mod infrastructure;
+mod error;
 
 use api::middleware::geo_routing::SharedConfig;
 
@@ -25,10 +27,8 @@ async fn main() {
 
     info!("Starting RedEye Compliance Microservice...");
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // CORS configuration - strict origin validation
+    let cors = create_cors_layer();
 
     // Compliance engine runs on port 8083 to separate from Gateway (8080), Cache (8081), Tracer (8082)
     let addr = SocketAddr::from(([0, 0, 0, 0], 8083));
@@ -68,11 +68,38 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(|| async { axum::Json(serde_json::json!({"status": "ok", "service": "redeye_compliance"})) }))
         .nest("/api", api::routes::create_router(state))
-        .layer(cors);
+        .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)); // 10MB limit
 
     let listener = tokio::net::TcpListener::bind(addr).await
         .expect("Failed to bind TCP listener");
 
     axum::serve(listener, app).await
         .expect("Compliance server encountered a fatal error");
+}
+
+/// Creates a CORS layer with strict origin validation.
+/// In production, only allows the DASHBOARD_URL environment variable.
+/// Falls back to restricted local development origins if DASHBOARD_URL is not set.
+fn create_cors_layer() -> CorsLayer {
+    let dashboard_url = env::var("DASHBOARD_URL").ok();
+    
+    let origins = match dashboard_url {
+        Some(url) => {
+            vec![url.parse().expect("Invalid DASHBOARD_URL format")]
+        }
+        None => {
+            // Restricted development origins only
+            vec![
+                "http://localhost:5173".parse().unwrap(),
+                "http://localhost:3000".parse().unwrap(),
+            ]
+        }
+    };
+    
+    CorsLayer::new()
+        .allow_origin(origins)
+        .allow_credentials(true)
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::DELETE])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
 }

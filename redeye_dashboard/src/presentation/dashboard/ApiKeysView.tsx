@@ -14,9 +14,11 @@ export interface ApiKey {
 }
 
 const fetcher = async (url: string) => {
-  const token = localStorage.getItem('re_token');
-  if (!token) throw new Error("No authentication token found");
-  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  // Authentication handled via HttpOnly cookies (credentials: 'include')
+  const res = await fetch(url, { 
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' }
+  });
   if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
   return res.json();
 };
@@ -65,38 +67,38 @@ export function ApiKeysView() {
   return (
     <div id="tour-api-keys" className="space-y-6">
       {/* Gateway Info Card */}
-      <div className="glass-panel bg-slate-900/50 border border-slate-800 rounded-xl p-6 space-y-4">
-        <h2 className="text-lg font-bold text-slate-50 flex items-center gap-2">
-          <Globe className="w-5 h-5 text-indigo-400" />
+      <div className="glass-panel bg-white/80 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-800 rounded-xl p-6 space-y-4 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+        <h2 className="text-lg font-bold text-slate-900 dark:text-slate-50 flex items-center gap-2">
+          <Globe className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
           Gateway Connection
         </h2>
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="bg-slate-950/70 rounded-lg border border-slate-800 p-4">
-            <p className="text-xs font-medium text-slate-400 mb-1.5">Gateway URL</p>
+          <div className="bg-slate-50 dark:bg-slate-950/70 rounded-lg border border-slate-200 dark:border-slate-800 p-4">
+            <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Gateway URL</p>
             <div className="flex items-center gap-2">
-              <code className="text-sm text-indigo-400 font-mono break-all flex-1">{gatewayUrl}</code>
+              <code className="text-sm text-indigo-600 dark:text-indigo-400 font-mono break-all flex-1">{gatewayUrl}</code>
               <button
                 onClick={() => handleCopy(gatewayUrl, 'gateway')}
-                className="flex-none p-1.5 rounded-md hover:bg-slate-800 transition-colors text-slate-400 hover:text-slate-200"
+                className="flex-none p-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-800 transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 active:scale-90 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
                 title="Copy Gateway URL"
               >
-                {copiedGateway ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedGateway ? <Check className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
             </div>
           </div>
           {activeKeysCount > 0 && activeKey && (
-            <div className="bg-slate-950/70 rounded-lg border border-slate-800 p-4">
-              <p className="text-xs font-medium text-slate-400 mb-1.5">Your API Key (Hash)</p>
+            <div className="bg-slate-50 dark:bg-slate-950/70 rounded-lg border border-slate-200 dark:border-slate-800 p-4">
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Your API Key (Hash)</p>
               <div className="flex items-center gap-2">
-                <code className="text-sm text-rose-400 font-mono break-all flex-1">
+                <code className="text-sm text-rose-600 dark:text-rose-400 font-mono break-all flex-1">
                   {activeKey.key_hash.substring(0, 16)}...
                 </code>
                 <button
                   onClick={() => handleCopy(activeKey.key_hash ?? '', 'active-key')}
-                  className="flex-none p-1.5 rounded-md hover:bg-slate-800 transition-colors text-slate-400 hover:text-slate-200"
+                  className="flex-none p-1.5 rounded-md hover:bg-slate-200 dark:hover:bg-slate-800 transition-all duration-200 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 active:scale-90 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
                   title="Copy API Key Hash"
                 >
-                  {copiedKey === 'active-key' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedKey === 'active-key' ? <Check className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </div>
@@ -107,17 +109,17 @@ export function ApiKeysView() {
       {/* Header section */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2 text-slate-50">
-            <Key className="w-6 h-6 text-rose-500" />
+          <h1 className="text-2xl font-bold flex items-center gap-2 text-slate-900 dark:text-slate-50">
+            <Key className="w-6 h-6 text-rose-600 dark:text-rose-500" />
             API Keys Management
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             Generate and manage your RedEye Gateway API keys to access LLM providers.
           </p>
         </div>
         <button
           onClick={() => setIsModalOpen(true)}
-          className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 hover:bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_rgba(225,29,72,0.25)] transition-all duration-200"
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 hover:bg-rose-500 active:scale-95 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_0_20px_rgba(225,29,72,0.25)] hover:shadow-[0_0_30px_rgba(225,29,72,0.4)] transition-all duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:ring-offset-1 dark:focus:ring-offset-slate-900"
         >
           <Plus className="w-4 h-4" />
           Generate New Key
@@ -125,10 +127,10 @@ export function ApiKeysView() {
       </div>
 
       {/* Table section */}
-      <div className="glass-panel bg-rose-950/20 border border-rose-900/40 rounded-xl overflow-hidden shadow-xl">
+      <div className="glass-panel bg-white/80 dark:bg-rose-950/20 border border-slate-200/60 dark:border-rose-900/40 rounded-xl overflow-hidden shadow-sm backdrop-blur-md dark:shadow-xl transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
         <div className="overflow-x-auto custom-scrollbar">
-          <table className="w-full text-left text-sm text-slate-300">
-            <thead className="bg-rose-950/40 text-xs uppercase text-slate-400 border-b border-rose-900/40">
+          <table className="w-full text-left text-sm text-slate-700 dark:text-slate-300">
+            <thead className="bg-slate-50 dark:bg-rose-950/40 text-xs uppercase text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-rose-900/40">
               <tr>
                 <th scope="col" className="px-6 py-4 font-semibold tracking-wider">Key Name</th>
                 <th scope="col" className="px-6 py-4 font-semibold tracking-wider">Masked Key</th>
@@ -137,7 +139,7 @@ export function ApiKeysView() {
                 <th scope="col" className="px-6 py-4 font-semibold tracking-wider text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-rose-900/30">
+            <tbody className="divide-y divide-slate-100 dark:divide-rose-900/30">
               {isLoading ? (
                 <tr>
                   <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
@@ -159,22 +161,22 @@ export function ApiKeysView() {
                 </tr>
               ) : (
                 keys.map((keyItem) => (
-                  <tr key={keyItem.id} className="hover:bg-rose-900/10 transition-colors">
-                    <td className="px-6 py-4 font-medium text-slate-200">{keyItem.name}</td>
-                    <td className="px-6 py-4 font-mono text-xs text-rose-400/90">{keyItem.key_hash.substring(0, 16)}...</td>
-                    <td className="px-6 py-4 text-slate-400">
+                  <tr key={keyItem.id} className="hover:bg-slate-50 dark:hover:bg-rose-900/10 transition-colors">
+                    <td className="px-6 py-4 font-medium text-slate-900 dark:text-slate-200">{keyItem.name}</td>
+                    <td className="px-6 py-4 font-mono text-xs text-rose-600 dark:text-rose-400/90">{keyItem.key_hash.substring(0, 16)}...</td>
+                    <td className="px-6 py-4 text-slate-500 dark:text-slate-400">
                       {new Date(keyItem.created_at).toLocaleDateString(undefined, {
                         year: 'numeric', month: 'short', day: 'numeric'
                       })}
                     </td>
                     <td className="px-6 py-4">
                       {keyItem.status === 'Active' ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 border border-emerald-500/20">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 dark:bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse"></span>
                           Active
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-400 border border-rose-500/20">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 dark:bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/20">
                           Revoked
                         </span>
                       )}
@@ -183,7 +185,7 @@ export function ApiKeysView() {
                       {keyItem.status === 'Active' && (
                         <button
                           onClick={() => handleRevoke(keyItem.id)}
-                          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-rose-400 hover:text-white hover:bg-rose-600/90 transition-all border border-transparent hover:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50"
+                          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-rose-600 dark:text-rose-400 hover:text-white hover:bg-rose-600/90 active:scale-95 transition-all duration-200 ease-in-out border border-transparent hover:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:ring-offset-1 dark:focus:ring-offset-slate-900"
                           title="Revoke Key"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -201,29 +203,29 @@ export function ApiKeysView() {
 
       {/* Generate Modal (Mock) */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="glass-panel bg-slate-900/90 border border-rose-900 shadow-2xl rounded-2xl w-full max-w-md overflow-hidden relative animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-rose-900/50 bg-rose-950/20">
-              <h2 className="text-lg font-bold text-slate-50 flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-rose-400" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-slate-950/80 backdrop-blur-sm">
+          <div className="glass-panel bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-rose-900 shadow-2xl rounded-2xl w-full max-w-md overflow-hidden relative animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-rose-900/50 bg-slate-50 dark:bg-rose-950/20">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-50 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-rose-600 dark:text-rose-400" />
                 Generate API Key
               </h2>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-slate-200 transition-colors p-1"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors p-1"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleGenerate} className="p-6">
-              <p className="text-sm text-slate-400 mb-6 flex items-start gap-2 bg-rose-950/30 p-3 rounded-lg border border-rose-900/30">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-6 flex items-start gap-2 bg-rose-50 dark:bg-rose-950/30 p-3 rounded-lg border border-rose-200 dark:border-rose-900/30">
+                <AlertTriangle className="w-4 h-4 text-rose-500 dark:text-rose-400 shrink-0 mt-0.5" />
                 For security, your new key will only be shown once. Have your clipboard ready.
               </p>
 
               <div className="space-y-2 mb-6">
-                <label className="text-sm font-medium text-slate-300">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   Key Name
                 </label>
                 <input
@@ -233,7 +235,7 @@ export function ApiKeysView() {
                   placeholder="e.g. Production Frontend App"
                   value={newKeyName}
                   onChange={(e) => setNewKeyName(e.target.value)}
-                  className="w-full rounded-lg bg-slate-950/70 border border-rose-900/50 px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-rose-500 focus:border-rose-500 transition-colors"
+                  className="w-full rounded-lg bg-white dark:bg-slate-950/70 border border-slate-300 dark:border-rose-900/50 px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 transition-all duration-200 ease-in-out"
                 />
               </div>
 
@@ -241,13 +243,13 @@ export function ApiKeysView() {
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+                  className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-95 transition-all duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-rose-500/50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 hover:bg-rose-500 px-5 py-2 text-sm font-semibold text-white shadow-[0_0_15px_rgba(225,29,72,0.3)] transition-all duration-200"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-600 hover:bg-rose-500 px-5 py-2 text-sm font-semibold text-white shadow-[0_0_15px_rgba(225,29,72,0.3)] hover:shadow-[0_0_25px_rgba(225,29,72,0.4)] active:scale-95 transition-all duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-rose-500/50"
                 >
                   Generate Key
                 </button>

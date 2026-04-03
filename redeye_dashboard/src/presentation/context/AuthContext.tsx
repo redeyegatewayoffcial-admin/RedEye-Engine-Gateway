@@ -48,14 +48,9 @@ export function AuthProvider({ children, authUseCase }: AuthProviderProps) {
     }
   }, [authUseCase]);
 
-  const syncOAuthState = useCallback(async (token: string) => {
-    // Persist token to localStorage via the Data layer
-    if (authUseCase.saveToken) {
-      authUseCase.saveToken(token);
-    } else {
-      localStorage.setItem('re_token', token);
-    }
-    // Hydrate React state — use refreshToken which reads from the saved token
+  const syncOAuthState = useCallback(async () => {
+    // OAuth tokens are now received as HttpOnly cookies from the backend
+    // No need to store in localStorage - just hydrate user state via refreshToken
     if (authUseCase.refreshToken) {
       const u = await authUseCase.refreshToken();
       if (u) setUser(u);
@@ -78,7 +73,7 @@ export function AuthProvider({ children, authUseCase }: AuthProviderProps) {
   );
 
   const logout = useCallback(() => {
-    localStorage.removeItem('re_token');
+    // Clear user state - HttpOnly cookies must be cleared by backend
     setUser(null);
     window.location.href = '/login';
   }, []);

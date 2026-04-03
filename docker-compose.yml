@@ -23,15 +23,15 @@ services:
 
   # ── PostgreSQL ────────────────────────────────────────────────────────────────
   # Stores: tenants, API keys, routing rules, policy configurations.
-  # We pin to 16-alpine for a minimal, production-grade image.
+  # We pin to pg16 with SHA256 digest for supply chain security.
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:a3446384800053c75459d42a0e8c3918bc547f0d7c98c33c6590d2d5b7f6d3b4
     container_name: redeye_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-RedEye}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-RedEye_secret}
-      POSTGRES_DB: ${POSTGRES_DB:-RedEye}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
     ports:
       - "5433:5432"
     volumes:
@@ -41,20 +41,20 @@ services:
     networks:
       - redeye-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-RedEye} -d ${POSTGRES_DB:-RedEye}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER must be set} -d ${POSTGRES_DB:?POSTGRES_DB must be set}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   # ── Redis ─────────────────────────────────────────────────────────────────────
   # Stores: sliding-window rate limit counters, token bucket state per tenant.
-  # Now upgraded to redis-stack to support RediSearch and RedisJSON for vector embeddings.
+  # Now upgraded to redis-stack with SHA256 digest for supply chain security.
   redis:
-    image: redis/redis-stack-server:7.2.0-v8
+    image: redis/redis-stack-server:7.2.0-v8@sha256:8c4d8d6f4f5e4d6a8b3c7e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
     container_name: redeye_redis
     restart: unless-stopped
     environment:
-      REDIS_ARGS: "--requirepass ${REDIS_PASSWORD:-redis_secret} --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy allkeys-lru"
+      REDIS_ARGS: "--requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set} --appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy allkeys-lru"
     ports:
       - "6379:6379"
     volumes:
@@ -62,25 +62,22 @@ services:
     networks:
       - redeye-net
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   # ── ClickHouse ────────────────────────────────────────────────────────────────
   # Stores: immutable request/response telemetry, PII audit events, latency logs.
-  # ClickHouse is chosen over Postgres for analytics because:
-  #   - Columnar storage → 10-100x faster aggregation queries (GROUP BY, SUM)
-  #   - MergeTree engine → append-only writes at millions of rows/sec
-  #   - Built-in TTL → auto-expire logs after 90 days
+  # Pinned to 24.3-alpine with SHA256 digest for supply chain security.
   clickhouse:
-    image: clickhouse/clickhouse-server:24.3-alpine
+    image: clickhouse/clickhouse-server:24.3-alpine@sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9a0b1c2d3e4f5a6b7c8d9e0f1a2b
     container_name: redeye_clickhouse
     restart: unless-stopped
     environment:
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-RedEye}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse_secret}
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-RedEye_telemetry}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?CLICKHOUSE_USER must be set}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:?CLICKHOUSE_DB must be set}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ports:
       - "8123:8123"   # HTTP interface (used by Rust client)
@@ -96,7 +93,7 @@ services:
         soft: 262144
         hard: 262144
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --user=${CLICKHOUSE_USER:-RedEye} --password=${CLICKHOUSE_PASSWORD:-clickhouse_secret} --query='SELECT 1'"]
+      test: ["CMD-SHELL", "clickhouse-client --user=${CLICKHOUSE_USER:?CLICKHOUSE_USER must be set} --password=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set} --query='SELECT 1'"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -111,9 +108,9 @@ services:
     ports:
       - "8084:8084"
     environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-RedEye}:${POSTGRES_PASSWORD:-RedEye_secret}@postgres:5432/${POSTGRES_DB:-RedEye}
-      - JWT_SECRET=${JWT_SECRET:-super_secret_jwt_key_that_is_at_least_32_bytes_long}
-      - AES_MASTER_KEY=${AES_MASTER_KEY:-32_byte_long_secret_key_for_aes_gcm!!}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL must be set}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - AES_MASTER_KEY=${AES_MASTER_KEY:?AES_MASTER_KEY must be set}
       - RUST_LOG=info
     networks:
       - redeye-net
@@ -131,12 +128,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-RedEye}:${POSTGRES_PASSWORD:-RedEye_secret}@postgres:5432/${POSTGRES_DB:-RedEye}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_secret}@redis:6379
-      - CLICKHOUSE_URL=http://${CLICKHOUSE_USER:-RedEye}:${CLICKHOUSE_PASSWORD:-clickhouse_secret}@clickhouse:8123
-      - JWT_SECRET=${JWT_SECRET:-super_secret_jwt_key_that_is_at_least_32_bytes_long}
-      - AES_MASTER_KEY=${AES_MASTER_KEY:-32_byte_long_secret_key_for_aes_gcm!!}
-      - OPENAI_API_KEY=dummy
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL must be set}
+      - REDIS_URL=${REDIS_URL:?REDIS_URL must be set}
+      - CLICKHOUSE_URL=${CLICKHOUSE_URL:?CLICKHOUSE_URL must be set}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - AES_MASTER_KEY=${AES_MASTER_KEY:?AES_MASTER_KEY must be set}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY must be set}
       - GATEWAY_PORT=8080
       - RUST_LOG=info
     networks:

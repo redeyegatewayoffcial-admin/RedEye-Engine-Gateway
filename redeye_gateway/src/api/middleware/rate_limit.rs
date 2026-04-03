@@ -7,12 +7,13 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
-    middleware::Next,
+    extract::{Request, State, Extension, ConnectInfo},
+    Json, 
+    http::{HeaderMap, HeaderValue, header::SET_COOKIE, StatusCode, request::Parts},
     response::{IntoResponse, Response},
-    Json,
+    middleware::Next,
 };
+use std::net::SocketAddr;
 use redis::AsyncCommands;
 use serde_json::json;
 use tracing::{debug, error, warn};
@@ -29,15 +30,17 @@ const RATE_LIMIT_LUA: &str = r#"
 
 pub async fn rate_limit_middleware(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Extract identifier: prefer x-tenant-id if present and valid, otherwise use peer IP
     let identifier = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
-        .or_else(|| headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()))
-        .unwrap_or("anonymous");
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
 
     let redis_key = format!("rl:tenant:{}", identifier);
 

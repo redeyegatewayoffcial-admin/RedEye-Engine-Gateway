@@ -6,7 +6,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng as AesOsRng},
     Aes256Gcm, Key, Nonce,
 };
-use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
+use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey, Algorithm};
 use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
@@ -104,7 +104,11 @@ pub struct Claims {
 }
 
 pub fn generate_jwt(user_id: Uuid, tenant_id: Uuid) -> Result<String, AppError> {
-    let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+    let secret = env::var("JWT_SECRET").map_err(|_| {
+        tracing::error!("JWT_SECRET environment variable is missing");
+        AppError::Internal("JWT configuration error".into())
+    })?;
+    
     let expiration = Utc::now()
         .checked_add_signed(Duration::days(7))
         .expect("valid timestamp")
@@ -117,7 +121,7 @@ pub fn generate_jwt(user_id: Uuid, tenant_id: Uuid) -> Result<String, AppError> 
     };
 
     encode(
-        &Header::default(),
+        &Header::new(Algorithm::HS256),
         &claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
@@ -144,12 +148,18 @@ pub fn generate_refresh_token(user_id: &Uuid) -> Result<(String, String), AppErr
 }
 
 pub fn verify_jwt(token: &str) -> Result<Claims, AppError> {
-    let secret = env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+    let secret = env::var("JWT_SECRET").map_err(|_| {
+        tracing::error!("JWT_SECRET environment variable is missing");
+        AppError::Internal("JWT configuration error".into())
+    })?;
+    
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = true;
     
     let token_data = decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
+        &validation,
     )
     .map_err(|e| {
         tracing::error!("JWT verification failed: {}", e);

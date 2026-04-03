@@ -1,11 +1,11 @@
 **/node_modules/
 **/target/
-**/dist/
+**/audit/
 **/build/
 **/.env
 **/*.exe
 **/*.msi
 **/*.pdb
-**/.Prompt_temp.md
+**/Prompt_temp.md/
 **/*aider/
 mnt/

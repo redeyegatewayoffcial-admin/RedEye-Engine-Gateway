@@ -1,15 +1,18 @@
 // Data Service — Auth API calls to RedEye Gateway
 // Implements IAuthUseCase against http://localhost:8080/v1/auth
+// NOTE: All authenticated requests use credentials: 'include' to send HttpOnly cookies automatically.
 
+import { parseApiError, type StandardizedError } from '../utils/apiErrors';
 import type { User } from '../../domain/entities/User';
 import type { IAuthUseCase } from '../../domain/usecases/AuthUseCase';
 
 export interface IAuthUseCaseExtended extends IAuthUseCase {
   refreshToken(): Promise<User | null>;
-  saveToken(token: string): void;
 }
 
 const BASE_URL = 'http://localhost:8084/v1/auth';
+
+export { type StandardizedError };
 
 // Shape expected from the backend on login/signup/onboard
 interface AuthResponse {
@@ -20,7 +23,7 @@ interface AuthResponse {
   provider_id?: string;
   workspace_name: string;
   onboarding_complete: boolean;
-  token?: string;
+  token?: string; // Legacy field - now sent via HttpOnly cookie
   redeye_api_key?: string;
 }
 
@@ -38,16 +41,17 @@ function mapUser(resp: AuthResponse): User {
   };
 }
 
-async function postJson<T>(url: string, body: unknown): Promise<T> {
+async function postJson<T>(url: string, body: unknown, includeCredentials = false): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    credentials: includeCredentials ? 'include' : 'same-origin',
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
+    const error = await parseApiError(res);
+    throw error;
   }
 
   return res.json() as Promise<T>;
@@ -62,10 +66,8 @@ export const authService: IAuthUseCaseExtended = {
     const data = await postJson<AuthResponse>(`${BASE_URL}/otp/verify`, {
       email,
       otp_code: otp,
-    });
-    if (data.token) {
-      localStorage.setItem('re_token', data.token);
-    }
+    }, true); // credentials: 'include' to receive HttpOnly cookies
+    // Token is now set as HttpOnly cookie by backend - no localStorage needed
     return mapUser(data);
   },
 
@@ -79,13 +81,13 @@ export const authService: IAuthUseCaseExtended = {
     provider: string,
     apiKey: string,
   ): Promise<User> {
-    const token = localStorage.getItem('re_token') || '';
+    // Use credentials: 'include' to send HttpOnly auth cookie automatically
     const res = await fetch(`${BASE_URL}/onboard`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
       },
+      credentials: 'include', // Sends HttpOnly cookies automatically
       body: JSON.stringify({
         provider,
         api_key: apiKey,
@@ -94,13 +96,11 @@ export const authService: IAuthUseCaseExtended = {
     });
     
     if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new Error(text || `HTTP ${res.status}`);
+      const error = await parseApiError(res);
+      throw error;
     }
     const data = await res.json() as AuthResponse;
-    if (data.token) {
-      localStorage.setItem('re_token', data.token);
-    }
+    // Token is now set as HttpOnly cookie by backend - no localStorage needed
     return mapUser(data);
   },
 
@@ -109,23 +109,22 @@ export const authService: IAuthUseCaseExtended = {
       const res = await fetch(`${BASE_URL}/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include' // Sent explicitly since it is an HttpOnly token.
+        credentials: 'include' // Sends HttpOnly refresh_token cookie automatically
       });
 
-      if (!res.ok) return null;
+      if (!res.ok) {
+        // Parse error but return null for silent failures
+        await parseApiError(res);
+        return null;
+      }
       
       const data = await res.json() as AuthResponse;
-      if (data.token) {
-        localStorage.setItem('re_token', data.token);
-        return mapUser(data);
-      }
-      return null;
+      // New JWT and refresh token are set as HttpOnly cookies by backend
+      // Backend implements refresh token rotation for security
+      return mapUser(data);
     } catch (e) {
       return null;
     }
   },
 
-  saveToken(token: string): void {
-    localStorage.setItem('re_token', token);
-  },
 };

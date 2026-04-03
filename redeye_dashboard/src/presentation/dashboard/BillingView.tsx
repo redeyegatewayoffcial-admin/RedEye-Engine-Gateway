@@ -72,23 +72,23 @@ export function BillingView() {
       {/* Header and Controls */}
       <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 to-teal-200 bg-clip-text text-transparent pb-1 flex items-center gap-3">
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 to-teal-500 dark:from-emerald-400 dark:to-teal-200 bg-clip-text text-transparent pb-1 flex items-center gap-3">
             Cost &amp; Billing
           </h1>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1">Real-time inference spend analysis</p>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">Real-time inference spend analysis</p>
         </div>
         
         <div className="flex items-center gap-4">
           {/* Currency Switcher */}
-          <div className="flex bg-slate-900/80 border border-slate-700 p-1 rounded-lg">
+          <div className="flex bg-slate-100 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700 p-1 rounded-lg">
             {(['USD', 'INR', 'EUR'] as Currency[]).map((c) => (
               <button
                 key={c}
                 onClick={() => setCurrency(c)}
-                className={`px-3 py-1 sm:px-4 sm:py-1.5 text-xs sm:text-sm font-medium rounded-md transition-all ${
+                className={`px-3 py-1 sm:px-4 sm:py-1.5 text-xs sm:text-sm font-medium rounded-md transition-all duration-200 ease-in-out active:scale-95 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
                   currency === c
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                    ? 'bg-indigo-600 text-white shadow-md hover:shadow-lg'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800'
                 }`}
               >
                 {c}
@@ -96,13 +96,13 @@ export function BillingView() {
             ))}
           </div>
 
-          <div className="flex items-center space-x-2 glass-panel px-3 py-1.5 sm:px-4 sm:py-2 rounded-full self-start sm:self-auto w-fit">
+          <div className="flex items-center space-x-2 glass-panel bg-white/80 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-700/50 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full self-start sm:self-auto w-fit shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
             {isLoading && !breakdown ? (
-              <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+              <Loader2 className="w-4 h-4 text-emerald-500 dark:text-emerald-400 animate-spin" />
             ) : (
               <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${error ? 'bg-rose-500' : 'bg-emerald-500 neon-dot'}`} />
             )}
-            <span className="text-xs sm:text-sm font-medium text-slate-300 font-display">
+            <span className="text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300 font-display">
               {isLoading && !breakdown ? 'Syncing...' : error ? 'Offline' : 'Live'}
             </span>
           </div>
@@ -122,22 +122,22 @@ export function BillingView() {
       </div>
 
       {error && !breakdown && (
-        <div className="glass-panel border-rose-500/20 bg-rose-500/5 p-4 flex items-center gap-3">
+        <div className="glass-panel bg-rose-50 dark:bg-rose-500/5 border border-rose-200 dark:border-rose-500/20 p-4 flex items-center gap-3 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
           <AlertCircle className="w-5 h-5 text-rose-500" />
-          <p className="text-sm text-slate-300">Connection to billing pipeline failed. Displaying local cache if available.</p>
+          <p className="text-sm text-rose-700 dark:text-slate-300">Connection to billing pipeline failed. Displaying local cache if available.</p>
         </div>
       )}
 
       {/* Bar Chart */}
-      <div className="glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6">
-        <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-6">Daily Cost Breakdown</h2>
+      <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+        <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">Daily Cost Breakdown</h2>
         <div className="h-[300px] w-full min-h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-              <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
               <YAxis 
-                stroke="#475569" 
+                stroke="#64748b" 
                 fontSize={10} 
                 tickLine={false} 
                 axisLine={false} 
@@ -168,19 +168,19 @@ export function BillingView() {
       </div>
 
       {/* Breakdown Table */}
-      <div className="glass-panel bg-slate-900/40 border border-slate-800/80 p-4 sm:p-6 overflow-hidden">
-        <h2 className="text-lg sm:text-xl font-bold text-slate-100 mb-4">Detailed Ledger</h2>
-        <div className="overflow-x-auto w-full border border-slate-800/50 rounded-lg bg-slate-950/40">
+      <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 overflow-hidden shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+        <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-4">Detailed Ledger</h2>
+        <div className="overflow-x-auto w-full border border-slate-200 dark:border-slate-800/50 rounded-lg bg-slate-50 dark:bg-slate-950/40">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-800 text-xs sm:text-sm font-semibold text-slate-400 bg-slate-900/50">
+              <tr className="border-b border-slate-200 dark:border-slate-800 text-xs sm:text-sm font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-900/50">
                 <th className="p-3">Date</th>
                 <th className="p-3">AI Model</th>
                 <th className="p-3 text-right">Tokens Processed</th>
                 <th className="p-3 text-right">Cost ({currency})</th>
               </tr>
             </thead>
-            <tbody className="text-xs sm:text-sm text-slate-300 divide-y divide-slate-800">
+            <tbody className="text-xs sm:text-sm text-slate-700 dark:text-slate-300 divide-y divide-slate-100 dark:divide-slate-800">
               {!breakdown && isLoading ? (
                 <tr>
                   <td colSpan={4} className="p-6 text-center text-slate-500">
@@ -194,15 +194,15 @@ export function BillingView() {
                 </tr>
               ) : (
                 breakdown?.map((row, idx) => (
-                  <tr key={`${row.date}-${row.model}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="p-3 font-mono text-slate-400">{row.date}</td>
+                  <tr key={`${row.date}-${row.model}-${idx}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                    <td className="p-3 font-mono text-slate-500 dark:text-slate-400">{row.date}</td>
                     <td className="p-3">
-                      <span className="px-2 py-0.5 rounded textxs font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                      <span className="px-2 py-0.5 rounded text-xs font-medium bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700">
                         {row.model}
                       </span>
                     </td>
                     <td className="p-3 text-right font-mono">{row.total_tokens.toLocaleString('en-US')}</td>
-                    <td className="p-3 text-right font-medium text-emerald-400">{formatCurrency(row.estimated_cost)}</td>
+                    <td className="p-3 text-right font-medium text-emerald-600 dark:text-emerald-400">{formatCurrency(row.estimated_cost)}</td>
                   </tr>
                 ))
               )}

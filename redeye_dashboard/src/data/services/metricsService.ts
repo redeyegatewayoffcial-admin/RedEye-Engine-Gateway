@@ -1,5 +1,8 @@
 // Data Service — Metrics API calls to RedEye Gateway
 // Fetches real-time token usage and estimated cost from GET /v1/admin/metrics/usage.
+// NOTE: All authenticated requests use credentials: 'include' to send HttpOnly cookies automatically.
+
+import { parseApiError, type StandardizedError } from '../utils/apiErrors';
 
 const GATEWAY_URL = 'http://localhost:8080';
 
@@ -15,23 +18,22 @@ export interface UsageMetrics {
 }
 
 /**
- * Generic fetcher that standardizes authentication headers, prevents CORS / 500 errors, 
- * and handles HTTP exceptions cleanly.
+ * Generic fetcher that standardizes authentication via HttpOnly cookies,
+ * prevents CORS / 500 errors, and handles HTTP exceptions cleanly.
+ * Uses credentials: 'include' to automatically send HttpOnly cookies.
+ * Returns standardized errors for consistent error handling.
  */
 async function fetchMetrics<T>(url: string): Promise<T> {
-  const token = localStorage.getItem('re_token');
-  if (!token) throw new Error('No authentication token found — please log in.');
-
   const res = await fetch(url, {
+    credentials: 'include', // Sends HttpOnly auth cookies automatically
     headers: {
-      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => res.statusText);
-    throw new Error(`Metrics fetch failed (${res.status}): ${body}`);
+    const error = await parseApiError(res);
+    throw error;
   }
   return res.json() as Promise<T>;
 }
@@ -39,7 +41,7 @@ async function fetchMetrics<T>(url: string): Promise<T> {
 /**
  * SWR-compatible fetcher for /v1/admin/metrics/usage.
  *
- * Reads the Bearer token from localStorage (set on login by authService).
+ * Authentication is handled automatically via HttpOnly cookies (credentials: 'include').
  * Returns graceful defaults `{ total_tokens: 0, estimated_cost: 0 }` rather
  * than throwing when ClickHouse is empty — the backend already handles that.
  *
