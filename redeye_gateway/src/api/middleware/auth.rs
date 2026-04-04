@@ -2,7 +2,7 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::{Request, StatusCode, header},
     middleware::Next,
     response::Response,
 };
@@ -60,6 +60,26 @@ pub async fn auth_middleware(
             if let Ok(token) = api_key_header.to_str() {
                 if token.starts_with("re_live_") {
                     token_opt = Some((token.to_string(), true));
+                }
+            }
+        }
+    }
+    
+    // 4. Cookie Fallback: Check for re_token cookie if no header auth found
+    if token_opt.is_none() {
+        if let Some(cookie_header) = req.headers().get(header::COOKIE) {
+            if let Ok(cookie_str) = cookie_header.to_str() {
+                // Parse cookies and look for re_token
+                for cookie in cookie_str.split(';') {
+                    let cookie = cookie.trim();
+                    if let Some(token) = cookie.strip_prefix("re_token=") {
+                        // Validate JWT format: 3 base64url parts separated by dots
+                        if token.split('.').count() == 3 && !token.is_empty() {
+                            token_opt = Some((token.to_string(), false));
+                            tracing::debug!("JWT extracted from re_token cookie");
+                            break;
+                        }
+                    }
                 }
             }
         }

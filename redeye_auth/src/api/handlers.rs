@@ -200,9 +200,14 @@ pub async fn login(
         "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
+    let jwt_cookie = format!(
+        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        token
+    );
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
+    headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
     Ok((headers, Json(AuthResponse {
         id: user_id,
@@ -287,7 +292,7 @@ pub async fn refresh(
 
     // Set new HttpOnly, Secure cookies with the new tokens
     let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
+        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         jwt
     );
     let refresh_cookie = format!(
@@ -573,8 +578,14 @@ pub async fn verify_otp(
         "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
+    let jwt_cookie = format!(
+        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        token
+    );
+
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
+    headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
     Ok((headers, Json(AuthResponse {
         id: user_id,
@@ -730,7 +741,7 @@ pub async fn google_callback(
     let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
     // Set JWT as HttpOnly Secure cookie instead of URL parameter
     let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
+        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         jwt
     );
 
@@ -907,7 +918,7 @@ pub async fn github_callback(
     let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
     // Set JWT as HttpOnly Secure cookie instead of URL fragment
     let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
+        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         jwt
     );
 
