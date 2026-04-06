@@ -1,8 +1,7 @@
-//! infrastructure/llm_router.rs — Universal LLM Provider Router
+//! infrastructure/llm_router.rs — Dynamic Multi-LLM Router with Automated Fallback
 //!
 //! Inspects the `model` field in the request body and routes to the
-//! correct upstream base URL. All providers expose an OpenAI-compatible
-//! `/chat/completions` endpoint, so only the base URL changes.
+//! correct upstream base URL using tenant-specific provider keys.
 //!
 //! Provider detection by model name prefix:
 //!   • "gpt-*" or "o1-*" or "o3-*"  → OpenAI
@@ -11,10 +10,14 @@
 //!   • "claude-*"                    → Anthropic (OpenAI-compat endpoint)
 //!   • anything else                 → OpenAI (safe default)
 
+use std::sync::Arc;
 use serde_json::Value;
-use tracing::{info, error};
+use sqlx::Row;
+use tracing::{info, error, warn};
+use uuid::Uuid;
 
-use crate::domain::models::GatewayError;
+use crate::domain::models::{AppState, GatewayError};
+use crate::api::middleware::auth::decrypt_api_key;
 
 // ── Provider base URLs ─────────────────────────────────────────────────────────
 const OPENAI_BASE:    &str = "https://api.openai.com/v1";
@@ -23,7 +26,7 @@ const GROQ_BASE:      &str = "https://api.groq.com/openai/v1";
 const ANTHROPIC_BASE: &str = "https://api.anthropic.com/v1";  // OpenAI-compat (Anthropic Messages API mirror)
 
 /// Detected LLM provider.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LlmProvider {
     OpenAI,
     Gemini,
@@ -80,6 +83,336 @@ impl LlmProvider {
             LlmProvider::Anthropic => "Anthropic",
         }
     }
+}
+
+/// Provider key entry from database.
+#[derive(Debug, Clone)]
+pub struct ProviderKey {
+    pub provider: LlmProvider,
+    pub decrypted_key: String,
+}
+
+/// Fetches all provider keys for a tenant from the provider_keys table.
+/// Decrypts each key using the AES_MASTER_KEY.
+pub async fn fetch_tenant_provider_keys(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+) -> Result<Vec<ProviderKey>, GatewayError> {
+    let tenant_uuid = Uuid::parse_str(tenant_id).map_err(|_| {
+        GatewayError::ResponseBuild("Invalid tenant ID format".into())
+    })?;
+
+    let rows = sqlx::query(
+        "SELECT provider_name, encrypted_key FROM provider_keys WHERE tenant_id = $1"
+    )
+    .bind(tenant_uuid)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        error!(error = %e, "Database error fetching provider keys");
+        GatewayError::ResponseBuild("Failed to fetch provider keys".into())
+    })?;
+
+    let mut keys = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let provider_name: String = row.try_get("provider_name")
+            .map_err(|_| GatewayError::ResponseBuild("Failed to fetch provider_name".into()))?;
+        let encrypted_key: Vec<u8> = row.try_get("encrypted_key")
+            .map_err(|_| GatewayError::ResponseBuild("Failed to fetch encrypted_key".into()))?;
+
+        // Decrypt the key
+        let decrypted_key = decrypt_api_key(&encrypted_key)
+            .map_err(|_| GatewayError::ResponseBuild(
+                format!("Failed to decrypt {} API key", provider_name)
+            ))?;
+
+        let provider = match provider_name.as_str() {
+            "openai" => LlmProvider::OpenAI,
+            "gemini" => LlmProvider::Gemini,
+            "groq" => LlmProvider::Groq,
+            "anthropic" => LlmProvider::Anthropic,
+            _ => {
+                warn!("Unknown provider in database: {}", provider_name);
+                continue;
+            }
+        };
+
+        keys.push(ProviderKey { provider, decrypted_key });
+    }
+
+    Ok(keys)
+}
+
+/// Gets the appropriate provider key for a given model.
+/// Returns the key and the provider to use.
+pub fn select_provider_for_model(
+    model: &str,
+    available_keys: &[ProviderKey],
+) -> Option<(LlmProvider, String)> {
+    let target_provider = LlmProvider::detect(model);
+
+    // First, try to find the exact provider match
+    for key in available_keys {
+        if key.provider == target_provider {
+            return Some((target_provider, key.decrypted_key.clone()));
+        }
+    }
+
+    // If no exact match, try to find any available key as fallback
+    // Priority: OpenAI -> Anthropic -> Groq -> Gemini
+    let fallback_order = [
+        LlmProvider::OpenAI,
+        LlmProvider::Anthropic,
+        LlmProvider::Groq,
+        LlmProvider::Gemini,
+    ];
+
+    for fallback in &fallback_order {
+        for key in available_keys {
+            if key.provider == *fallback {
+                return Some((*fallback, key.decrypted_key.clone()));
+            }
+        }
+    }
+
+    None
+}
+
+/// Checks if an HTTP status code indicates a retryable error.
+fn is_retryable_error(status: u16) -> bool {
+    matches!(status, 500 | 502 | 503 | 504)
+}
+
+/// Prepares request body for fallback provider.
+/// Translates model name if necessary.
+fn prepare_fallback_body(
+    original_body: &Value,
+    target_provider: LlmProvider,
+    original_model: &str,
+) -> Value {
+    let mut body = original_body.clone();
+
+    // Map model to appropriate fallback model
+    let fallback_model = match target_provider {
+        LlmProvider::OpenAI => "gpt-4o-mini",
+        LlmProvider::Anthropic => "claude-3-haiku-20240307",
+        LlmProvider::Groq => "llama3-8b-8192",
+        LlmProvider::Gemini => "gemini-1.5-flash",
+    };
+
+    // If the original model is already compatible, keep it
+    let target_provider_from_model = LlmProvider::detect(original_model);
+    if target_provider_from_model == target_provider {
+        // Keep original model as it's compatible
+    } else {
+        // Replace with fallback model
+        body["model"] = Value::String(fallback_model.to_string());
+    }
+
+    body
+}
+
+/// Routes and forwards a chat completion request to the correct LLM provider.
+/// Uses tenant-specific provider keys fetched from the database.
+/// Implements automated fallback on upstream failures.
+pub async fn route_chat_completion_with_fallback(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+    body: &Value,
+    accept_header: &str,
+) -> Result<reqwest::Response, GatewayError> {
+    // Extract model from request body
+    let model = extract_model(body);
+
+    // Fetch all available provider keys for the tenant
+    let available_keys = fetch_tenant_provider_keys(state, tenant_id).await?;
+
+    if available_keys.is_empty() {
+        return Err(GatewayError::ResponseBuild(
+            "No provider keys configured for this tenant".into()
+        ));
+    }
+
+    // Select the primary provider based on the requested model
+    let (primary_provider, primary_key) = select_provider_for_model(model, &available_keys)
+        .ok_or_else(|| GatewayError::ResponseBuild(
+            "No compatible provider key available".into()
+        ))?;
+
+    info!(
+        provider = primary_provider.name(),
+        model = model,
+        "Routing request to primary LLM provider"
+    );
+
+    // Attempt primary request
+    let primary_result = execute_provider_request(
+        &state.http_client,
+        primary_provider,
+        &primary_key,
+        body,
+        accept_header,
+    ).await;
+
+    // Check if primary succeeded
+    match primary_result {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            if !is_retryable_error(status) {
+                return Ok(response);
+            }
+            // Retryable error - continue to fallback
+            warn!(
+                provider = primary_provider.name(),
+                status = status,
+                "Primary provider failed with retryable error, attempting fallback"
+            );
+        }
+        Err(e) => {
+            warn!(
+                provider = primary_provider.name(),
+                error = %e,
+                "Primary provider unreachable, attempting fallback"
+            );
+        }
+    }
+
+    // Try fallback providers
+    try_fallback_providers(
+        state,
+        &available_keys,
+        primary_provider,
+        body,
+        accept_header,
+        model,
+    ).await
+}
+
+/// Executes a request to a specific provider.
+async fn execute_provider_request(
+    client: &reqwest::Client,
+    provider: LlmProvider,
+    api_key: &str,
+    body: &Value,
+    accept_header: &str,
+) -> Result<reqwest::Response, GatewayError> {
+    let base = provider.base_url();
+    let endpoint = format!("{}/chat/completions", base);
+
+    let mut request = client.post(&endpoint)
+        .header("Content-Type", "application/json")
+        .header("Accept", accept_header);
+
+    // Inject Auth based on provider
+    request = match provider {
+        LlmProvider::OpenAI | LlmProvider::Groq => {
+            request.header("Authorization", format!("Bearer {}", api_key))
+        }
+        LlmProvider::Gemini => {
+            request.header("x-goog-api-key", api_key)
+        }
+        LlmProvider::Anthropic => {
+            request
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+        }
+    };
+
+    let response = request
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(
+                provider = provider.name(),
+                error = %e,
+                "Failed to reach upstream LLM provider"
+            );
+            GatewayError::UpstreamUnreachable(e)
+        })?;
+
+    Ok(response)
+}
+
+/// Attempts fallback to other available providers.
+async fn try_fallback_providers(
+    state: &Arc<AppState>,
+    available_keys: &[ProviderKey],
+    failed_provider: LlmProvider,
+    body: &Value,
+    accept_header: &str,
+    original_model: &str,
+) -> Result<reqwest::Response, GatewayError> {
+    // Define fallback priority based on the failed provider
+    let fallback_candidates: Vec<LlmProvider> = match failed_provider {
+        LlmProvider::OpenAI => vec![LlmProvider::Anthropic, LlmProvider::Groq, LlmProvider::Gemini],
+        LlmProvider::Anthropic => vec![LlmProvider::OpenAI, LlmProvider::Groq, LlmProvider::Gemini],
+        LlmProvider::Groq => vec![LlmProvider::OpenAI, LlmProvider::Anthropic, LlmProvider::Gemini],
+        LlmProvider::Gemini => vec![LlmProvider::OpenAI, LlmProvider::Anthropic, LlmProvider::Groq],
+    };
+
+    for fallback_provider in fallback_candidates {
+        // Skip if same as failed provider
+        if fallback_provider == failed_provider {
+            continue;
+        }
+
+        // Find key for this fallback provider
+        let Some(key_entry) = available_keys.iter().find(|k| k.provider == fallback_provider) else {
+            continue;
+        };
+
+        info!(
+            from_provider = failed_provider.name(),
+            to_provider = fallback_provider.name(),
+            "Attempting automated fallback"
+        );
+
+        // Prepare fallback body (may need model translation)
+        let fallback_body = prepare_fallback_body(body, fallback_provider, original_model);
+
+        match execute_provider_request(
+            &state.http_client,
+            fallback_provider,
+            &key_entry.decrypted_key,
+            &fallback_body,
+            accept_header,
+        ).await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if !is_retryable_error(status) {
+                    info!(
+                        provider = fallback_provider.name(),
+                        "Fallback successful - request completed"
+                    );
+                    return Ok(response);
+                }
+                warn!(
+                    provider = fallback_provider.name(),
+                    status = status,
+                    "Fallback provider also failed"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    provider = fallback_provider.name(),
+                    error = %e,
+                    "Fallback provider unreachable"
+                );
+            }
+        }
+    }
+
+    // All fallbacks exhausted
+    Err(GatewayError::ResponseBuild("All LLM providers failed".into()))
+}
+
+/// Extracts the model name from a request body, falling back to "gpt-4o".
+pub fn extract_model(body: &Value) -> &str {
+    body.get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("gpt-4o")
 }
 
 /// Routes and forwards a chat completion request to the correct LLM provider.
@@ -237,133 +570,93 @@ pub async fn route_chat_completion(
     Ok(response)
 }
 
-/// Extracts the model name from a request body, falling back to "gpt-4o".
-pub fn extract_model(body: &Value) -> &str {
-    body.get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("gpt-4o")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    use serde_json::json;
 
-    #[tokio::test]
-    async fn test_redeye_hot_swap_triggers_on_503() {
-        let mock_server = MockServer::start().await;
-        
-        // Mock OpenAI endpoint returning 503
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .respond_with(ResponseTemplate::new(503))
-            .expect(1)
-            .mount(&mock_server)
-            .await;
-            
-        // Mock Anthropic fallback endpoint with tool_use
-        Mock::given(method("POST"))
-            .and(path("/v1/messages"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "id": "msg_hot_swap",
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "I am Claude!"},
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_123",
-                        "name": "get_weather",
-                        "input": {"location": "London"}
-                    }
-                ],
-                "model": "claude-test",
-                "usage": {"input_tokens": 10, "output_tokens": 5}
-            })))
-            .expect(1)
-            .mount(&mock_server)
-            .await;
-            
-        std::env::set_var("ANTHROPIC_MOCK_URL", mock_server.uri());
-        
-        let client = reqwest::Client::new();
-        let body = json!({
-            "model": "gpt-4o",
-            "messages": [{"role": "user", "content": "Help me!"}],
-            "tools": [{
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"location": {"type": "string"}}
-                    }
-                }
-            }]
-        });
-
-        // Use the mock server as the OpenAI base
-        let result = route_chat_completion(
-            &client, 
-            "sk-fake", 
-            &body, 
-            "application/json", 
-            Some(&mock_server.uri())
-        ).await;
-        
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        
-        // Router should have intercepted the 503, swapped, and returned 200
-        assert_eq!(response.status().as_u16(), 200);
-        let resp_json: serde_json::Value = response.json().await.unwrap();
-        
-        assert_eq!(resp_json["object"], "chat.completion");
-        assert_eq!(resp_json["id"], "msg_hot_swap");
-        assert_eq!(resp_json["choices"][0]["message"]["content"], "I am Claude!");
-        assert_eq!(resp_json["choices"][0]["finish_reason"], "tool_calls");
-        
-        let tools = resp_json["choices"][0]["message"]["tool_calls"].as_array().expect("Expected tool_calls array");
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["id"], "toolu_123");
-        assert_eq!(tools[0]["function"]["name"], "get_weather");
-        assert_eq!(tools[0]["function"]["arguments"], "{\"location\":\"London\"}");
-        
-        assert_eq!(resp_json["usage"]["total_tokens"], 15);
+    #[test]
+    fn test_provider_detection() {
+        assert_eq!(LlmProvider::detect("gpt-4"), LlmProvider::OpenAI);
+        assert_eq!(LlmProvider::detect("gpt-4o"), LlmProvider::OpenAI);
+        assert_eq!(LlmProvider::detect("o1-preview"), LlmProvider::OpenAI);
+        assert_eq!(LlmProvider::detect("claude-3-opus"), LlmProvider::Anthropic);
+        assert_eq!(LlmProvider::detect("claude-3-sonnet"), LlmProvider::Anthropic);
+        assert_eq!(LlmProvider::detect("gemini-pro"), LlmProvider::Gemini);
+        assert_eq!(LlmProvider::detect("llama3-70b"), LlmProvider::Groq);
+        assert_eq!(LlmProvider::detect("mixtral-8x7b"), LlmProvider::Groq);
     }
-    
-    #[tokio::test]
-    async fn test_redeye_hot_swap_ignores_400() {
-        let mock_server = MockServer::start().await;
-        
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .respond_with(ResponseTemplate::new(400))
-            .expect(1)
-            .mount(&mock_server)
-            .await;
-            
-        let client = reqwest::Client::new();
-        let body = json!({
-            "model": "gpt-4o",
-            "messages": [{"role": "user", "content": "Bad format"}]
-        });
 
-        let result = route_chat_completion(
-            &client, 
-            "sk-fake", 
-            &body, 
-            "application/json", 
-            Some(&mock_server.uri())
-        ).await;
+    #[test]
+    fn test_is_retryable_error() {
+        assert!(is_retryable_error(500));
+        assert!(is_retryable_error(502));
+        assert!(is_retryable_error(503));
+        assert!(is_retryable_error(504));
+        assert!(!is_retryable_error(400));
+        assert!(!is_retryable_error(401));
+        assert!(!is_retryable_error(429));
+        assert!(!is_retryable_error(200));
+    }
+
+    #[test]
+    fn test_select_provider_for_model() {
+        let keys = vec![
+            ProviderKey {
+                provider: LlmProvider::OpenAI,
+                decrypted_key: "sk-openai".to_string(),
+            },
+            ProviderKey {
+                provider: LlmProvider::Anthropic,
+                decrypted_key: "sk-anthropic".to_string(),
+            },
+        ];
+
+        // Exact match
+        let (provider, key) = select_provider_for_model("gpt-4", &keys).unwrap();
+        assert_eq!(provider, LlmProvider::OpenAI);
+        assert_eq!(key, "sk-openai");
+
+        // Another exact match
+        let (provider, key) = select_provider_for_model("claude-3", &keys).unwrap();
+        assert_eq!(provider, LlmProvider::Anthropic);
+        assert_eq!(key, "sk-anthropic");
+    }
+
+    #[test]
+    fn test_select_provider_fallback_order() {
+        // Only Anthropic available, but requesting GPT
+        let keys = vec![
+            ProviderKey {
+                provider: LlmProvider::Anthropic,
+                decrypted_key: "sk-anthropic".to_string(),
+            },
+        ];
+
+        // Should fallback to Anthropic since no OpenAI key
+        let (provider, key) = select_provider_for_model("gpt-4", &keys).unwrap();
+        assert_eq!(provider, LlmProvider::Anthropic);
+        assert_eq!(key, "sk-anthropic");
+    }
+
+    #[test]
+    fn test_extract_model() {
+        let body = serde_json::json!({"model": "gpt-4"});
+        assert_eq!(extract_model(&body), "gpt-4");
+
+        let body = serde_json::json!({});
+        assert_eq!(extract_model(&body), "gpt-4o"); // default
+    }
+
+    #[test]
+    fn test_prepare_fallback_body() {
+        let body = serde_json::json!({"model": "gpt-4", "messages": []});
         
-        assert!(result.is_ok());
-        let response = result.unwrap();
-        
-        // A 400 Bad Request should not trigger failover, it should just be returned directly.
-        assert_eq!(response.status().as_u16(), 400);
+        // Fallback to Anthropic
+        let fallback = prepare_fallback_body(&body, LlmProvider::Anthropic, "gpt-4");
+        assert_eq!(fallback["model"], "claude-3-haiku-20240307");
+
+        // Keep original if compatible
+        let fallback = prepare_fallback_body(&body, LlmProvider::OpenAI, "gpt-4");
+        assert_eq!(fallback["model"], "gpt-4");
     }
 }

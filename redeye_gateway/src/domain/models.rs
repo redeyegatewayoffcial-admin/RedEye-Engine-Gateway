@@ -1,4 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use uuid::Uuid;
 
 /// Application-wide shared state passed to every handler via Axum's `State` extractor.
 #[derive(Clone)]
@@ -266,4 +269,78 @@ mod tests {
         
         assert_eq!(original_val, serialized_val, "Serialized JSON did not match original cleanly");
     }
+}
+
+// ==============================================================================
+// Virtual API Key Phase 1: Multi-LLM Architecture Models
+// ==============================================================================
+
+/// Account type for tenant workspaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "VARCHAR", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum AccountType {
+    /// Individual user account (default)
+    Individual,
+    /// Team workspace account supporting multiple users and API keys
+    Team,
+}
+
+impl Default for AccountType {
+    fn default() -> Self {
+        AccountType::Individual
+    }
+}
+
+/// A tenant represents an organization or individual workspace.
+/// All resources are scoped to a tenant.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Tenant {
+    pub id: Uuid,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub is_active: bool,
+    pub onboarding_status: bool,
+    /// Account type: 'individual' or 'team'
+    pub account_type: AccountType,
+}
+
+/// A virtual API key issued to tenant applications for gateway authentication.
+/// The raw key is never stored; only a SHA-256 hash is persisted.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ApiKey {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    /// SHA-256 hash of the raw key (hex-encoded)
+    pub key_hash: String,
+    /// Human-readable name for the key (e.g., "Default Project", "Dev Key")
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+}
+
+/// Supported LLM providers for the provider_keys table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "VARCHAR", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderName {
+    OpenAI,
+    Anthropic,
+    Gemini,
+    Groq,
+}
+
+/// An encrypted upstream LLM provider API key.
+/// Each tenant can store multiple provider keys for multi-LLM support.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ProviderKey {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    /// The LLM provider (e.g., 'openai', 'anthropic')
+    pub provider_name: ProviderName,
+    /// AES-256-GCM encrypted provider API key
+    #[serde(skip_serializing)]
+    pub encrypted_key: Vec<u8>,
+    pub created_at: DateTime<Utc>,
 }

@@ -12,4 +12,5 @@ export interface User {
   openAiApiKey: string;
   onboardingComplete: boolean;
   redeyeApiKey?: string;
+  accountType: 'individual' | 'team';
 }

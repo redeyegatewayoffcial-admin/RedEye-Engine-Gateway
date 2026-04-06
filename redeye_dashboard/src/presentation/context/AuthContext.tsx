@@ -18,7 +18,7 @@ interface AuthContextValue {
   verifyMagicLink(email: string, otp: string): Promise<User>;
   ssoRedirect(provider: string): Promise<void>;
   syncOAuthState(token: string): Promise<void>;
-  completeOnboarding(workspaceName: string, provider: string, apiKey: string): Promise<User>;
+  completeOnboarding(workspaceName: string, provider: string, apiKey: string, accountType?: 'individual' | 'team'): Promise<User>;
   logout(): void;
 }
 
@@ -58,13 +58,14 @@ export function AuthProvider({ children, authUseCase }: AuthProviderProps) {
   }, [authUseCase]);
 
   const completeOnboarding = useCallback(
-    async (workspaceName: string, provider: string, apiKey: string) => {
+    async (workspaceName: string, provider: string, apiKey: string, accountType: 'individual' | 'team' = 'individual') => {
       if (!user) throw new Error('Not authenticated');
       const updated = await authUseCase.completeOnboarding(
         user.id,
         workspaceName,
         provider,
         apiKey,
+        accountType,
       );
       setUser(updated);
       return updated;

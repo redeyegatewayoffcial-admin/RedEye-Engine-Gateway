@@ -135,9 +135,14 @@ pub async fn signup(
         "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
         raw_refresh
     );
+    let jwt_cookie = format!(
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        token
+    );
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
+    headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
     Ok((headers, Json(AuthResponse { 
         id: user_id,
@@ -201,7 +206,7 @@ pub async fn login(
         raw_refresh
     );
     let jwt_cookie = format!(
-        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         token
     );
 
@@ -292,7 +297,7 @@ pub async fn refresh(
 
     // Set new HttpOnly, Secure cookies with the new tokens
     let jwt_cookie = format!(
-        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         jwt
     );
     let refresh_cookie = format!(
@@ -318,8 +323,9 @@ pub async fn refresh(
 }
 
 // --- POST /v1/auth/onboard ---
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct OnboardRequest {
+    pub account_type: String, // 'individual' or 'team'
     pub provider: String,
     pub api_key: String,
     pub workspace_name: Option<String>,
@@ -335,42 +341,94 @@ pub async fn onboard(
         AppError::Internal("Invalid tenant ID in token".into())
     })?;
     
-    let user_id = Uuid::parse_str(&claims.sub).unwrap_or_default();
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| {
+        AppError::Internal("Invalid user ID in token".into())
+    })?;
 
-    // Validate the API key against the provider
+    // Validate account_type
+    let account_type = payload.account_type.to_lowercase();
+    if account_type != "individual" && account_type != "team" {
+        return Err(AppError::BadRequest("account_type must be 'individual' or 'team'".into()));
+    }
+
+    // Validate the provider API key against the provider
     let is_valid = crate::infrastructure::llm_validator::validate_api_key(&payload.provider, &payload.api_key)
         .await
         .map_err(|e| AppError::Internal(e))?;
 
     if !is_valid {
-        return Err(AppError::BadRequest("Invalid API Key".into()));
+        return Err(AppError::BadRequest("Invalid Provider API Key".into()));
     }
 
-    // Encrypt the validated API key
+    // Encrypt the validated provider API key
     let encrypted_key = encrypt_api_key(&payload.api_key)?;
+    
+    // Generate RedEye Virtual API Key
     let redeye_api_key = generate_redeye_api_key();
     let key_hash = crate::infrastructure::security::hash_api_key(&redeye_api_key);
 
+    // Determine virtual key name based on account type
+    let key_name = if account_type == "team" {
+        payload.workspace_name.as_ref()
+            .map(|name| format!("{} Key", name))
+            .unwrap_or_else(|| "Team Key".to_string())
+    } else {
+        "Default".to_string()
+    };
+
     let mut tx = state.db_pool.begin().await?;
 
-    // Update ONBOARDING STATUS
+    // Update tenant: set onboarding_status, account_type, and optionally workspace_name
+    let final_workspace_name = if let Some(ref ws_name) = payload.workspace_name {
+        sqlx::query(
+            "UPDATE tenants SET onboarding_status = true, account_type = $1, name = $2 WHERE id = $3"
+        )
+        .bind(&account_type)
+        .bind(ws_name)
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+        ws_name.clone()
+    } else {
+        sqlx::query(
+            "UPDATE tenants SET onboarding_status = true, account_type = $1 WHERE id = $2"
+        )
+        .bind(&account_type)
+        .bind(tenant_id)
+        .execute(&mut *tx)
+        .await?;
+        
+        // Fetch current tenant name
+        sqlx::query("SELECT name FROM tenants WHERE id = $1")
+            .bind(tenant_id)
+            .fetch_one(&mut *tx)
+            .await?
+            .try_get::<String, _>("name")
+            .map_err(|_| AppError::Internal("Failed to fetch tenant name".into()))?
+    };
+
+    // Insert encrypted provider key into provider_keys table
     sqlx::query(
-        "UPDATE tenants SET onboarding_status = true WHERE id = $1"
+        "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)
+         ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3"
     )
     .bind(tenant_id)
+    .bind(&payload.provider)
+    .bind(&encrypted_key)
     .execute(&mut *tx)
     .await?;
 
-    // Insert keys into API_KEYS
+    // Insert virtual API key into api_keys table
     sqlx::query(
-        "INSERT INTO api_keys (tenant_id, key_hash, name) VALUES ($1, $2, 'default') ON CONFLICT DO NOTHING"
+        "INSERT INTO api_keys (tenant_id, key_hash, name) VALUES ($1, $2, $3)"
     )
     .bind(tenant_id)
     .bind(&key_hash)
+    .bind(&key_name)
     .execute(&mut *tx)
     .await?;
 
-    // UPSERT into LLM_ROUTES (supports multiple providers per tenant)
+    // Also update llm_routes for backward compatibility
     sqlx::query(
         "INSERT INTO llm_routes (tenant_id, provider, model, is_default, encrypted_api_key)
          VALUES ($1, $2, 'default', true, $3)
@@ -384,32 +442,14 @@ pub async fn onboard(
 
     tx.commit().await?;
     
-    // Optionally update workspace_name
-    let final_workspace_name = if let Some(ws_name) = &payload.workspace_name {
-        sqlx::query("UPDATE tenants SET name = $1 WHERE id = $2")
-            .bind(ws_name)
-            .bind(tenant_id)
-            .execute(&state.db_pool)
-            .await?;
-        ws_name.clone()
-    } else {
-        sqlx::query("SELECT name FROM tenants WHERE id = $1")
-            .bind(tenant_id)
-            .fetch_one(&state.db_pool)
-            .await?
-            .get("name")
-    };
-    
     let email: String = sqlx::query("SELECT email FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_one(&state.db_pool)
         .await?
-        .get("email");
+        .try_get("email")
+        .map_err(|_| AppError::Internal("Failed to fetch user email".into()))?;
 
-    // Note: In onboard, we don't have the Bearer token handy since it was stripped by middleware.
-    // However, for onboarding response, the dashboard might expect the token to be returned to stay logged in.
-    // We can potentially re-issue or just skip it if the dashboard doesn't strictly need it here.
-    // Given AuthResponse REQUIRES token, let's re-generate it.
+    // Re-generate token for the response
     let token = generate_jwt(user_id, tenant_id)?;
 
     Ok(Json(AuthResponse {
@@ -455,6 +495,96 @@ pub async fn get_api_keys(
         key_hash: row.try_get("key_hash").unwrap_or_default(),
         created_at: row.try_get("created_at").unwrap_or_else(|_| chrono::Utc::now()),
         status: "Active".to_string(), // In a real app we'd track revoked status in DB. For now they are Active
+    }).collect();
+
+    Ok(Json(keys))
+}
+
+// --- POST /v1/auth/provider-keys ---
+#[derive(Deserialize)]
+pub struct AddProviderKeyRequest {
+    pub provider_name: String,  // e.g., 'openai', 'anthropic', 'gemini', 'groq'
+    pub provider_api_key: String,
+}
+
+#[derive(Serialize)]
+pub struct ProviderKeyResponse {
+    pub id: Uuid,
+    pub provider_name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn add_provider_key(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<AddProviderKeyRequest>,
+) -> Result<Json<ProviderKeyResponse>, AppError> {
+    
+    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
+        AppError::Internal("Invalid tenant ID in token".into())
+    })?;
+
+    // Validate the provider API key against the provider
+    let is_valid = crate::infrastructure::llm_validator::validate_api_key(&payload.provider_name, &payload.provider_api_key)
+        .await
+        .map_err(|e| AppError::Internal(e))?;
+
+    if !is_valid {
+        return Err(AppError::BadRequest("Invalid Provider API Key".into()));
+    }
+
+    // Encrypt the validated provider API key
+    let encrypted_key = encrypt_api_key(&payload.provider_api_key)?;
+
+    // Insert or update the provider key
+    let row = sqlx::query(
+        "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)
+         ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3
+         RETURNING id, provider_name, created_at"
+    )
+    .bind(tenant_id)
+    .bind(&payload.provider_name)
+    .bind(&encrypted_key)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    let id: Uuid = row.try_get("id")
+        .map_err(|_| AppError::Internal("Failed to fetch provider key ID".into()))?;
+    let provider_name: String = row.try_get("provider_name")
+        .map_err(|_| AppError::Internal("Failed to fetch provider name".into()))?;
+    let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")
+        .map_err(|_| AppError::Internal("Failed to fetch created_at".into()))?;
+
+    tracing::info!("Added provider key for tenant {}: provider={}", tenant_id, provider_name);
+
+    Ok(Json(ProviderKeyResponse {
+        id,
+        provider_name,
+        created_at,
+    }))
+}
+
+// --- GET /v1/auth/provider-keys ---
+pub async fn get_provider_keys(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Vec<ProviderKeyResponse>>, AppError> {
+    
+    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
+        AppError::Internal("Invalid tenant ID in token".into())
+    })?;
+
+    let rows = sqlx::query(
+        "SELECT id, provider_name, created_at FROM provider_keys WHERE tenant_id = $1 ORDER BY created_at DESC"
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    let keys = rows.into_iter().map(|row| ProviderKeyResponse {
+        id: row.try_get("id").unwrap_or_default(),
+        provider_name: row.try_get("provider_name").unwrap_or_default(),
+        created_at: row.try_get("created_at").unwrap_or_else(|_| chrono::Utc::now()),
     }).collect();
 
     Ok(Json(keys))
@@ -579,7 +709,7 @@ pub async fn verify_otp(
         raw_refresh
     );
     let jwt_cookie = format!(
-        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         token
     );
 
@@ -741,7 +871,7 @@ pub async fn google_callback(
     let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
     // Set JWT as HttpOnly Secure cookie instead of URL parameter
     let jwt_cookie = format!(
-        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         jwt
     );
 
@@ -918,7 +1048,7 @@ pub async fn github_callback(
     let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
     // Set JWT as HttpOnly Secure cookie instead of URL fragment
     let jwt_cookie = format!(
-        "re_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
+        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
         jwt
     );
 

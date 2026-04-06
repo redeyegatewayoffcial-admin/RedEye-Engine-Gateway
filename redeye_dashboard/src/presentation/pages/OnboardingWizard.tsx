@@ -15,9 +15,12 @@ import {
   Copy,
   ShieldAlert,
   Terminal,
+  User,
+  Users,
 } from 'lucide-react';
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
+type AccountType = 'individual' | 'team';
 
 export function OnboardingWizard() {
   const navigate = useNavigate();
@@ -25,6 +28,7 @@ export function OnboardingWizard() {
 
   const [step, setStep] = useState<Step>(1);
   const [workspaceName, setWorkspaceName] = useState('');
+  const [accountType, setAccountType] = useState<AccountType>('individual');
   const [provider, setProvider] = useState('openai');
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -38,16 +42,21 @@ export function OnboardingWizard() {
     setStep(2);
   }
 
+  function handleStep2(selection: AccountType) {
+    setAccountType(selection);
+    setStep(3);
+  }
+
   async function handleFinish(e: FormEvent) {
     e.preventDefault();
     if (!apiKey.trim()) return;
     setError(null);
     setLoading(true);
     try {
-      const user = await completeOnboarding(workspaceName.trim(), provider, apiKey.trim());
+      const user = await completeOnboarding(workspaceName.trim(), provider, apiKey.trim(), accountType);
       if (user.redeyeApiKey) {
         setGeneratedRedEyeKey(user.redeyeApiKey);
-        setStep(3);
+        setStep(4);
       } else {
         navigate('/dashboard');
       }
@@ -86,7 +95,7 @@ export function OnboardingWizard() {
 
           {/* Step dots — neon cyan when active / complete, muted slate otherwise */}
           <div className="flex items-center gap-3">
-            {([1, 2, 3] as Step[]).map((s) => (
+            {([1, 2, 3, 4] as Step[]).map((s) => (
               <div key={s} className="relative flex items-center justify-center">
                 {s === step ? (
                   /* Active — glowing cyan dot */
@@ -136,9 +145,64 @@ export function OnboardingWizard() {
         )}
 
         {/* ══════════════════════════════════════════════════════════
-            STEP 2 — LLM API Key
+            STEP 2 — Account Type Selection
         ══════════════════════════════════════════════════════════ */}
         {step === 2 && (
+          <div className="glass-panel p-8">
+            <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/20 mb-5">
+              <Users className="w-5 h-5 text-cyan-400" />
+            </div>
+            <h1 className="text-xl font-bold text-slate-50 mb-1.5">How are you building?</h1>
+            <p className="text-sm text-slate-400 mb-7 leading-relaxed">
+              Select the option that best describes your setup. This helps us tailor your experience.
+            </p>
+
+            <div className="space-y-4">
+              {/* Individual Card */}
+              <button
+                onClick={() => handleStep2('individual')}
+                className="w-full group relative flex items-start gap-4 p-5 rounded-xl border border-slate-700/80 bg-slate-900/50 hover:border-cyan-500/50 hover:bg-slate-800/50 transition-all duration-200 text-left"
+              >
+                <div className="flex-none flex items-center justify-center w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 group-hover:bg-cyan-500/20 group-hover:border-cyan-500/40 transition-all duration-200">
+                  <User className="w-6 h-6 text-cyan-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-base font-semibold text-slate-100 mb-1">Individual</h3>
+                  <p className="text-sm text-slate-400">Single developer, freelancer, or personal projects.</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition-all duration-200 flex-none self-center" />
+              </button>
+
+              {/* Team Card */}
+              <button
+                onClick={() => handleStep2('team')}
+                className="w-full group relative flex items-start gap-4 p-5 rounded-xl border border-slate-700/80 bg-slate-900/50 hover:border-teal-500/50 hover:bg-slate-800/50 transition-all duration-200 text-left"
+              >
+                <div className="flex-none flex items-center justify-center w-12 h-12 rounded-xl bg-teal-500/10 border border-teal-500/20 group-hover:bg-teal-500/20 group-hover:border-teal-500/40 transition-all duration-200">
+                  <Users className="w-6 h-6 text-teal-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-base font-semibold text-slate-100 mb-1">Team</h3>
+                  <p className="text-sm text-slate-400">Startup, enterprise, or multi-developer organization.</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-teal-400 group-hover:translate-x-0.5 transition-all duration-200 flex-none self-center" />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setStep(1)}
+              className="mt-6 w-full rounded-xl border border-slate-700/80 bg-slate-900/50 px-4 py-3 text-sm font-semibold text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-all duration-200"
+            >
+              Back
+            </button>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════
+            STEP 3 — LLM API Key
+        ══════════════════════════════════════════════════════════ */}
+        {step === 3 && (
           <div className="glass-panel p-8">
             <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/20 mb-5">
               <KeyRound className="w-5 h-5 text-cyan-400" />
@@ -194,7 +258,7 @@ export function OnboardingWizard() {
               <div className="flex gap-3 pt-1">
                 <button
                   type="button"
-                  onClick={() => setStep(1)}
+                  onClick={() => setStep(2)}
                   className="flex-none rounded-xl border border-slate-700/80 bg-slate-900/50 px-4 py-3 text-sm font-semibold text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-all duration-200"
                 >
                   Back
@@ -221,9 +285,9 @@ export function OnboardingWizard() {
         )}
 
         {/* ══════════════════════════════════════════════════════════
-            STEP 3 — RedEye Key Reveal
+            STEP 4 — RedEye Key Reveal
         ══════════════════════════════════════════════════════════ */}
-        {step === 3 && (
+        {step === 4 && (
           <div className="glass-panel p-8">
             {/* Header */}
             <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-teal-500/10 border border-teal-500/20 mb-5">
@@ -281,7 +345,7 @@ export function OnboardingWizard() {
         )}
 
         {/* Step counter */}
-        <p className="mt-5 text-center text-xs text-slate-600">Step {step} of 3</p>
+        <p className="mt-5 text-center text-xs text-slate-600">Step {step} of 4</p>
       </div>
     </div>
   );

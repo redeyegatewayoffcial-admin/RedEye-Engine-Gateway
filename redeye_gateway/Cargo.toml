@@ -63,7 +63,12 @@ http = "1"
 # ── Async Stream Utilities ────────────────────────────────────────────────────
 # tokio-stream: Adapters for working with async streams (reqwest response body).
 tokio-stream = "0.1"
-uuid = { version = "1.22.0", features = ["v4"] }
+
+# ── Date/Time Handling ─────────────────────────────────────────────────────────
+# chrono: Date and time library for Rust. Required for DateTime<Utc> in domain models.
+chrono = { version = "0.4", features = ["serde"] }
+
+uuid = { version = "1.22.0", features = ["v4", "serde"] }
 tower-http = { version = "0.6.8", features = ["cors"] }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono"] }
 jsonwebtoken = "9"

@@ -25,6 +25,7 @@ interface AuthResponse {
   onboarding_complete: boolean;
   token?: string; // Legacy field - now sent via HttpOnly cookie
   redeye_api_key?: string;
+  account_type?: 'individual' | 'team';
 }
 
 function mapUser(resp: AuthResponse): User {
@@ -38,6 +39,7 @@ function mapUser(resp: AuthResponse): User {
     openAiApiKey: '', // We don't hold this client-side directly
     onboardingComplete: resp.onboarding_complete ?? false,
     redeyeApiKey: resp.redeye_api_key,
+    accountType: resp.account_type ?? 'individual',
   };
 }
 
@@ -80,16 +82,15 @@ export const authService: IAuthUseCaseExtended = {
     workspaceName: string,
     provider: string,
     apiKey: string,
+    accountType: string // Add this parameter!
   ): Promise<User> {
-    // Use credentials: 'include' to send HttpOnly auth cookie automatically
     const res = await fetch(`${BASE_URL}/onboard`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      credentials: 'include', // Sends HttpOnly cookies automatically
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({
-        provider,
+        account_type: accountType,
+        provider: provider,
         api_key: apiKey,
         workspace_name: workspaceName,
       })

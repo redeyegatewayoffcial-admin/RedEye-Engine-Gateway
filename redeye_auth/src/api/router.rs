@@ -5,7 +5,7 @@ use axum::{
 use axum::http::{Method, HeaderValue};
 use tower_http::cors::CorsLayer;
 use std::env;
-use super::handlers::{signup, login, onboard, refresh, get_api_keys, request_otp, verify_otp, google_login, google_callback, github_login, github_callback};
+use super::handlers::{signup, login, onboard, refresh, get_api_keys, request_otp, verify_otp, google_login, google_callback, github_login, github_callback, add_provider_key, get_provider_keys};
 use crate::AppState;
 
 pub fn create_router(state: AppState) -> Router {
@@ -14,6 +14,8 @@ pub fn create_router(state: AppState) -> Router {
     let protected_routes = Router::new()
         .route("/onboard", post(onboard))
         .route("/api-keys", get(get_api_keys))
+        .route("/provider-keys", post(add_provider_key))
+        .route("/provider-keys", get(get_provider_keys))
         .route_layer(axum::middleware::from_fn(crate::api::middleware::auth::auth_middleware));
 
     Router::new()

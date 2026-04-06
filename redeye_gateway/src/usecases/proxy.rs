@@ -179,21 +179,23 @@ pub async fn execute_proxy(
     }
 
     // ── Stage 1.8: Circuit-Breaker / Adaptive Fallback ────────────────────────
-    let (mut resolved_model, mut provider) = select_provider_with_fallback(state, tenant_id, model_name).await;
+    let provider = llm_router::LlmProvider::detect(model_name);
 
-    // ── Stage 2: Resolve Provider API Key ─────────────────────────────────────
-    let resolved_key = resolve_api_key(state, tenant_id, provider.as_str()).await?;
+    // ── Stage 2 & 3: Dynamic Provider Key Resolution and Routing with Fallback ─
+    let upstream_response = llm_router::route_chat_completion_with_fallback(
+        state, tenant_id, body, accept_header
+    ).await?;
 
-    // ── Stage 3: Route to LLM (with circuit-breaker retry) ────────────────────
-    let upstream_response = route_with_circuit_breaker(
-        state, tenant_id, body, accept_header,
-        &mut resolved_model, &mut provider, &resolved_key,
-    )
-    .await?;
-
-    let requested_provider = llm_router::LlmProvider::detect(model_name).as_str().to_string();
-    let mut executed_provider = provider.as_str().to_string();
-    let mut is_hot_swapped: u8 = 0;
+    let requested_provider = provider.as_str().to_string();
+    let executed_provider = upstream_response.headers()
+        .get("x-redeye-executed-provider")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(provider.as_str())
+        .to_string();
+    let is_hot_swapped: u8 = upstream_response.headers()
+        .get("x-redeye-hot-swapped")
+        .map(|v| if v == "1" { 1 } else { 0 })
+        .unwrap_or(0);
 
     let upstream_status = upstream_response.status().as_u16();
     let content_type = upstream_response
@@ -202,13 +204,6 @@ pub async fn execute_proxy(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json")
         .to_string();
-
-    if let Some(hs) = upstream_response.headers().get("x-redeye-hot-swapped") {
-        if hs == "1" { is_hot_swapped = 1; }
-    }
-    if let Some(ep) = upstream_response.headers().get("x-redeye-executed-provider") {
-        if let Ok(ep_str) = ep.to_str() { executed_provider = ep_str.to_string(); }
-    }
 
     info!(status = upstream_status, provider = executed_provider.as_str(), "Received response from upstream LLM provider");
 
@@ -319,162 +314,6 @@ async fn enforce_token_bucket(
     }
 
     Ok(())
-}
-
-/// Returns the `(model, provider)` pair to use, switching to the Groq fallback
-/// when the primary provider's circuit is open in Redis.
-async fn select_provider_with_fallback(
-    state: &Arc<AppState>,
-    tenant_id: &str,
-    model_name: &str,
-) -> (String, llm_router::LlmProvider) {
-    let mut model = model_name.to_string();
-    let mut provider = llm_router::LlmProvider::detect(&model);
-
-    let cb_key = format!("cb:open:{}:{}", tenant_id, provider.as_str());
-    let mut conn = state.redis_conn.clone();
-
-    use redis::AsyncCommands;
-    let is_open: Option<String> = conn.get(&cb_key).await.ok();
-
-    if is_open.is_some() {
-        warn!(provider = provider.as_str(), "Primary circuit is OPEN — falling back to Groq");
-        model = FALLBACK_MODEL.to_string();
-        provider = llm_router::LlmProvider::Groq;
-    }
-
-    (model, provider)
-}
-
-/// Looks up the API key for `(tenant_id, provider)`, checking Redis before the DB.
-/// Caches DB results back into Redis with a short TTL.
-async fn resolve_api_key(
-    state: &Arc<AppState>,
-    tenant_id: &str,
-    provider_str: &str,
-) -> Result<String, GatewayError> {
-    use redis::AsyncCommands;
-
-    let redis_key = format!("tenant_provider_key:{}:{}", tenant_id, provider_str);
-    let mut conn = state.redis_conn.clone();
-
-    // Fast path: Redis cache hit
-    if let Ok(cached_key) = conn.get::<_, String>(&redis_key).await {
-        return Ok(cached_key);
-    }
-
-    // Slow path: Postgres lookup
-    let row = sqlx::query(
-        "SELECT encrypted_api_key FROM llm_routes WHERE tenant_id = $1 AND provider = $2",
-    )
-    .bind(uuid::Uuid::parse_str(tenant_id).unwrap_or_default())
-    .bind(provider_str)
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| {
-        error!("DB error fetching provider key: {}", e);
-        GatewayError::ResponseBuild("Internal server error".into())
-    })?;
-
-    let Some(r) = row else {
-        warn!(tenant_id = %tenant_id, provider = provider_str, "Provider API key not configured");
-        return Err(GatewayError::ResponseBuild("Provider API key not configured".into()));
-    };
-
-    let encrypted_data: Vec<u8> = r.get(0);
-    let decrypted = crate::api::middleware::auth::decrypt_api_key(&encrypted_data)
-        .map_err(|_| GatewayError::ResponseBuild("Failed to decrypt API key".into()))?;
-
-    // Write-through to Redis
-    let _: Result<(), _> = conn.set_ex(&redis_key, &decrypted, API_KEY_CACHE_TTL_SECS).await;
-
-    Ok(decrypted)
-}
-
-/// Routes the request to the upstream LLM.  On 5xx / timeout:
-/// - Increments the circuit-breaker error counter.
-/// - Opens the circuit when the threshold is reached.
-/// - Retries immediately on Groq (if not already Groq).
-async fn route_with_circuit_breaker(
-    state: &Arc<AppState>,
-    tenant_id: &str,
-    body: &Value,
-    accept_header: &str,
-    resolved_model: &mut String,
-    provider: &mut llm_router::LlmProvider,
-    resolved_key: &str,
-) -> Result<reqwest::Response, GatewayError> {
-    let mut response_res =
-        llm_router::route_chat_completion(&state.http_client, resolved_key, body, accept_header, state.llm_api_base_url.as_deref()).await;
-
-    let is_failure = match &response_res {
-        Ok(r) if r.status().is_server_error() => true,
-        Err(_) => true,
-        _ => false,
-    };
-
-    if is_failure {
-        record_circuit_breaker_error(state, tenant_id, provider.as_str()).await;
-
-        // Immediate seamless fallback to Groq if primary was not already Groq.
-        if *provider != llm_router::LlmProvider::Groq {
-            info!("Attempting seamless immediate fallback to Groq");
-            *resolved_model = FALLBACK_MODEL.to_string();
-
-            let groq_key = resolve_provider_key_from_db(state, tenant_id, "groq").await?;
-
-            let mut fallback_body = body.clone();
-            fallback_body["model"] = json!(FALLBACK_MODEL);
-
-            response_res =
-                llm_router::route_chat_completion(&state.http_client, &groq_key, &fallback_body, accept_header, state.llm_api_base_url.as_deref()).await;
-        }
-    }
-
-    response_res.map_err(Into::into)
-}
-
-/// Increments the per-`(tenant, provider)` error counter and opens the circuit
-/// when the threshold is reached.
-async fn record_circuit_breaker_error(state: &Arc<AppState>, tenant_id: &str, provider_str: &str) {
-    use redis::AsyncCommands;
-
-    error!(provider = provider_str, "Primary provider failed — tracking circuit-breaker error");
-
-    let mut conn = state.redis_conn.clone();
-    let err_key = format!("cb:errors:{}:{}", tenant_id, provider_str);
-
-    let count: i32 = conn.incr(&err_key, 1).await.unwrap_or(0);
-    let _: Result<(), _> = conn.expire(&err_key, CB_ERROR_WINDOW_SECS as i64).await;
-
-    if count >= CB_ERROR_THRESHOLD {
-        error!("Circuit breaker triggered — opening circuit for {}", provider_str);
-        let open_key = format!("cb:open:{}:{}", tenant_id, provider_str);
-        let _: Result<(), _> = conn.set_ex(&open_key, "1", CB_OPEN_TTL_SECS).await;
-    }
-}
-
-/// Fetches and decrypts an API key directly from Postgres (skips Redis).
-/// Used during fallback when the primary circuit has opened.
-async fn resolve_provider_key_from_db(
-    state: &Arc<AppState>,
-    tenant_id: &str,
-    provider_str: &str,
-) -> Result<String, GatewayError> {
-    let row = sqlx::query(
-        "SELECT encrypted_api_key FROM llm_routes WHERE tenant_id = $1 AND provider = $2",
-    )
-    .bind(uuid::Uuid::parse_str(tenant_id).unwrap_or_default())
-    .bind(provider_str)
-    .fetch_optional(&state.db_pool)
-    .await
-    .ok()
-    .flatten();
-
-    let r = row.ok_or_else(|| GatewayError::ResponseBuild("Fallback provider key not found".into()))?;
-    let encrypted_data: Vec<u8> = r.try_get(0).unwrap_or_default();
-    crate::api::middleware::auth::decrypt_api_key(&encrypted_data)
-        .map_err(|_| GatewayError::ResponseBuild("Failed to decrypt fallback API key".into()))
 }
 
 /// Handles SSE streaming: fans out events to a channel, fires telemetry on completion.
