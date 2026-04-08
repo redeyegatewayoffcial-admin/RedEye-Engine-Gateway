@@ -93,7 +93,7 @@ pub async fn execute_proxy(
     .map_err(|e| GatewayError::ResponseBuild(format!("Regex task error: {}", e)))?;
 
     let sanitized_storage: Option<Value> = if is_pii_match {
-        Some(call_compliance_redact(&state.http_client, &state.compliance_url, body).await?)
+        Some(call_compliance_redact(&state.http_client, &state.compliance_url, body, trace_ctx).await?)
     } else {
         None
     };
@@ -101,7 +101,7 @@ pub async fn execute_proxy(
 
     // ── Stage 1: Semantic Cache Lookup ────────────────────────────────────────
     if let Some(cached_content) =
-        cache_client::lookup_cache(&state.http_client, &state.cache_url, tenant_id, model_name, raw_prompt).await
+        cache_client::lookup_cache(&state.http_client, &state.cache_url, tenant_id, model_name, raw_prompt, trace_ctx).await
     {
         return handle_cache_hit(state, cached_content, tenant_id, model_name, raw_prompt, trace_ctx, start_time);
     }
@@ -502,7 +502,7 @@ async fn fire_async_telemetry(
     if !cache_hit && status_code == 200 && !response_content.is_empty() {
         cache_client::store_in_cache(
             &state.http_client, &state.cache_url,
-            tenant_id, model_name, raw_prompt, &response_content,
+            tenant_id, model_name, raw_prompt, &response_content, trace_ctx,
         )
         .await;
     }
@@ -528,12 +528,15 @@ async fn call_compliance_redact(
     http_client: &reqwest::Client,
     compliance_url: &str,
     payload: &Value,
+    trace_ctx: &TraceContext,
 ) -> Result<Value, GatewayError> {
     let endpoint = format!("{}/api/v1/compliance/redact", compliance_url.trim_end_matches('/'));
     debug!(endpoint = %endpoint, "Calling compliance redaction service");
 
     let resp = http_client
         .post(&endpoint)
+        .header("x-redeye-trace-id", &trace_ctx.trace_id)
+        .header("x-redeye-session-id", &trace_ctx.session_id)
         .json(payload)
         .send()
         .await

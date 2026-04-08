@@ -2,6 +2,7 @@
 **/target/
 **/audit/
 **/build/
+**/.windsurf/
 **/.env
 **/*.exe
 **/*.msi

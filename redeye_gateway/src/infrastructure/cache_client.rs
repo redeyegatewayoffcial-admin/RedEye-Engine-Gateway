@@ -9,6 +9,7 @@ pub async fn lookup_cache(
     tenant_id: &str,
     model: &str,
     raw_prompt: &str,
+    trace_ctx: &crate::domain::models::TraceContext,
 ) -> Option<String> {
     let base = cache_base_url.trim_end_matches('/');
     let cache_url = format!("{}/v1/cache/lookup", base);
@@ -18,7 +19,12 @@ pub async fn lookup_cache(
         "prompt": raw_prompt
     });
 
-    if let Ok(res) = client.post(cache_url).json(&payload).send().await {
+    let req = client.post(cache_url)
+        .header("x-redeye-trace-id", &trace_ctx.trace_id)
+        .header("x-redeye-session-id", &trace_ctx.session_id)
+        .json(&payload);
+    
+    if let Ok(res) = req.send().await {
         if res.status().is_success() {
             if let Ok(data) = res.json::<Value>().await {
                 if data["hit"].as_bool() == Some(true) {
@@ -40,6 +46,7 @@ pub async fn store_in_cache(
     model: &str,
     raw_prompt: &str,
     response_content: &str,
+    trace_ctx: &crate::domain::models::TraceContext,
 ) {
     let base = cache_base_url.trim_end_matches('/');
     let cache_store_url = format!("{}/v1/cache/store", base);
@@ -50,6 +57,10 @@ pub async fn store_in_cache(
         "response_content": response_content
     });
 
-    let _ = client.post(cache_store_url).json(&payload).send().await;
+    let req = client.post(cache_store_url)
+        .header("x-redeye-trace-id", &trace_ctx.trace_id)
+        .header("x-redeye-session-id", &trace_ctx.session_id)
+        .json(&payload);
+    let _ = req.send().await;
     info!("Async task dispatched response to semantic cache tier");
 }

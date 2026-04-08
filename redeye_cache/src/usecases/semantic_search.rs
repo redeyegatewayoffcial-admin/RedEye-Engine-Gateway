@@ -62,6 +62,8 @@ impl SemanticSearchUseCase {
             .filter(|c| !c.is_alphanumeric() && !c.is_whitespace())
             .collect();
             
-        xxhash_rust::xxh3::xxh3_64(skeleton.as_bytes()) as i64
+        let word_count = prompt.split_whitespace().count();
+        let combined = format!("{}_{}", skeleton, word_count);
+        xxhash_rust::xxh3::xxh3_64(combined.as_bytes()) as i64
     }
 }

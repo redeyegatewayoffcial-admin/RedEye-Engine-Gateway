@@ -555,14 +555,15 @@ pub async fn route_chat_completion(
             }
         });
 
-        let body_bytes = serde_json::to_vec(&mock_openai_resp).unwrap();
+        let body_bytes = serde_json::to_vec(&mock_openai_resp)
+            .map_err(|_| GatewayError::ResponseBuild("Failed to serialize fallback JSON".into()))?;
         let hr = axum::http::Response::builder()
             .status(200)
             .header("content-type", "application/json")
             .header("x-redeye-hot-swapped", "1")
             .header("x-redeye-executed-provider", "anthropic")
             .body(reqwest::Body::from(body_bytes))
-            .unwrap();
+            .map_err(|_| GatewayError::ResponseBuild("Failed to build HTTP response".into()))?;
         
         response = reqwest::Response::from(hr);
     }

@@ -26,6 +26,9 @@ pub struct PiiEngine {
     ssn_regex: Regex,
     cc_regex: Regex,
     email_regex: Regex,
+    aadhaar_regex: Regex,
+    ifsc_regex: Regex,
+    bank_account_regex: Regex,
 }
 
 impl PiiEngine {
@@ -34,6 +37,9 @@ impl PiiEngine {
             ssn_regex: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
             cc_regex: Regex::new(r"\b(?:\d[ -]*?){13,16}\b").unwrap(),
             email_regex: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b").unwrap(),
+            aadhaar_regex: Regex::new(r"\b\d{4}[ -]?\d{4}[ -]?\d{4}\b").unwrap(),
+            ifsc_regex: Regex::new(r"\b[A-Z]{4}0[A-Z0-9]{6}\b").unwrap(),
+            bank_account_regex: Regex::new(r"\b\d{9,18}\b").unwrap(),
         }
     }
 
@@ -60,6 +66,9 @@ impl PiiEngine {
                 new_text = self.redact_pattern(&new_text, &self.ssn_regex, "<SSN_REDACTED>", token_map, count);
                 new_text = self.redact_pattern(&new_text, &self.cc_regex, "<CREDIT_CARD_REDACTED>", token_map, count);
                 new_text = self.redact_pattern(&new_text, &self.email_regex, "<EMAIL_REDACTED>", token_map, count);
+                new_text = self.redact_pattern(&new_text, &self.aadhaar_regex, "<AADHAAR_REDACTED>", token_map, count);
+                new_text = self.redact_pattern(&new_text, &self.ifsc_regex, "<IFSC_REDACTED>", token_map, count);
+                new_text = self.redact_pattern(&new_text, &self.bank_account_regex, "<BANK_ACCOUNT_REDACTED>", token_map, count);
                 
                 *text = new_text;
             }

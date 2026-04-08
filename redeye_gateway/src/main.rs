@@ -87,7 +87,10 @@ async fn main() {
         .build()
         .expect("Failed to construct reqwest HTTP client");
 
-    let db_pool = sqlx::PgPool::connect(&db_url)
+    let db_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(50)
+        .min_connections(5)
+        .connect(&db_url)
         .await
         .expect("Failed to connect to Postgres DB");
 
