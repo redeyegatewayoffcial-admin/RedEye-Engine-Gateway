@@ -5,26 +5,19 @@ use std::time::Duration;
 /// Returns Err on network/timeout errors.
 pub async fn validate_api_key(provider: &str, api_key: &str) -> Result<bool, String> {
     let (url, headers) = match provider {
-        "openai" => (
-            "https://api.openai.com/v1/models",
-            vec![("Authorization", format!("Bearer {}", api_key))],
-        ),
-        "gemini" => (
-            "https://generativelanguage.googleapis.com/v1/models",
-            vec![("x-goog-api-key", api_key.to_string())],
-        ),
-        "groq" => (
-            "https://api.groq.com/openai/v1/models",
-            vec![("Authorization", format!("Bearer {}", api_key))],
-        ),
-        "anthropic" => (
-            "https://api.anthropic.com/v1/models",
-            vec![
-                ("x-api-key", api_key.to_string()),
-                ("anthropic-version", "2023-06-01".to_string()),
-            ],
-        ),
-        _ => return Err(format!("Unsupported provider: {}", provider)),
+        "openai" => ("https://api.openai.com/v1/models".to_string(), vec![("Authorization", format!("Bearer {}", api_key))]),
+        "gemini" => ("https://generativelanguage.googleapis.com/v1/models".to_string(), vec![("x-goog-api-key", api_key.to_string())]),
+        "groq" => ("https://api.groq.com/openai/v1/models".to_string(), vec![("Authorization", format!("Bearer {}", api_key))]),
+        "anthropic" => ("https://api.anthropic.com/v1/models".to_string(), vec![("x-api-key", api_key.to_string()), ("anthropic-version", "2023-06-01".to_string())]),
+        "deepseek" => ("https://api.deepseek.com/models".to_string(), vec![("Authorization", format!("Bearer {}", api_key))]),
+        "openrouter" => ("https://openrouter.ai/api/v1/models".to_string(), vec![("Authorization", format!("Bearer {}", api_key))]),
+        "together" => ("https://api.together.xyz/v1/models".to_string(), vec![("Authorization", format!("Bearer {}", api_key))]),
+        _ => {
+            // FALLBACK: For unknown providers, we assume an OpenAI-compatible /v1/models endpoint.
+            // If we don't know the URL, we skip strict validation by returning Ok(true) to avoid blocking the user.
+            tracing::warn!("Unknown provider '{}'. Skipping strict API key validation.", provider);
+            return Ok(true); 
+        }
     };
 
     let client = reqwest::Client::builder()

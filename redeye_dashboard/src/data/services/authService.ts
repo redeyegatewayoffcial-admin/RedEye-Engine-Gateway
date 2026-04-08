@@ -82,7 +82,7 @@ export const authService: IAuthUseCaseExtended = {
     workspaceName: string,
     provider: string,
     apiKey: string,
-    accountType: string // Add this parameter!
+    accountType?: 'individual' | 'team'
   ): Promise<User> {
     const res = await fetch(`${BASE_URL}/onboard`, {
       method: 'POST',

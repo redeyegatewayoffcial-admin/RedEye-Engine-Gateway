@@ -1,16 +1,8 @@
 //! infrastructure/llm_router.rs — Dynamic Multi-LLM Router with Automated Fallback
-//!
-//! Inspects the `model` field in the request body and routes to the
-//! correct upstream base URL using tenant-specific provider keys.
-//!
-//! Provider detection by model name prefix:
-//!   • "gpt-*" or "o1-*" or "o3-*"  → OpenAI
-//!   • "gemini-*"                    → Google Gemini (OpenAI-compat endpoint)
-//!   • "llama*" / "mixtral*" / "whisper-*" → Groq
-//!   • "claude-*"                    → Anthropic (OpenAI-compat endpoint)
-//!   • anything else                 → OpenAI (safe default)
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
 use serde_json::Value;
 use sqlx::Row;
 use tracing::{info, error, warn};
@@ -19,81 +11,77 @@ use uuid::Uuid;
 use crate::domain::models::{AppState, GatewayError};
 use crate::api::middleware::auth::decrypt_api_key;
 
-// ── Provider base URLs ─────────────────────────────────────────────────────────
-const OPENAI_BASE:    &str = "https://api.openai.com/v1";
-const GEMINI_BASE:    &str = "https://generativelanguage.googleapis.com/v1beta/openai";
-const GROQ_BASE:      &str = "https://api.groq.com/openai/v1";
-const ANTHROPIC_BASE: &str = "https://api.anthropic.com/v1";  // OpenAI-compat (Anthropic Messages API mirror)
+// ── Dynamic Config Structs ───────────────────────────────────────────────────
 
-/// Detected LLM provider.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum LlmProvider {
-    OpenAI,
-    Gemini,
-    Groq,
-    Anthropic,
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthScheme {
+    Bearer,
+    XApiKey,
+    GoogleApiKey,
 }
 
-impl LlmProvider {
-    /// Detect provider from model name string.
-    pub fn detect(model: &str) -> Self {
-        let m = model.to_lowercase();
-        if m.starts_with("gemini-") {
-            LlmProvider::Gemini
-        } else if m.starts_with("llama")
-            || m.starts_with("mixtral")
-        {
-            LlmProvider::Groq
-        } else if m.starts_with("claude-") {
-            LlmProvider::Anthropic
-        } else if m.starts_with("gpt-") || m.starts_with("o1-") {
-            LlmProvider::OpenAI
-        } else {
-            // Default: OpenAI
-            LlmProvider::OpenAI
-        }
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub enum SchemaFormat {
+    OpenAI,
+    Anthropic,
+    Gemini,
+}
 
-    /// Returns the lowercase string identifier for the provider (matches DB).
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LlmProvider::OpenAI => "openai",
-            LlmProvider::Gemini => "gemini",
-            LlmProvider::Groq => "groq",
-            LlmProvider::Anthropic => "anthropic",
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct ProviderConfig {
+    pub id: &'static str,
+    pub base_url: &'static str,
+    pub auth_scheme: AuthScheme,
+    pub schema_format: SchemaFormat,
+}
 
-    /// Returns the base URL for this provider's chat completions endpoint.
-    pub fn base_url(&self) -> &'static str {
-        match self {
-            LlmProvider::OpenAI    => OPENAI_BASE,
-            LlmProvider::Gemini    => GEMINI_BASE,
-            LlmProvider::Groq      => GROQ_BASE,
-            LlmProvider::Anthropic => ANTHROPIC_BASE,
-        }
-    }
+// ── Global Provider Registry ──────────────────────────────────────────────────
 
-    /// Human-readable name for logging.
-    pub fn name(&self) -> &'static str {
-        match self {
-            LlmProvider::OpenAI    => "OpenAI",
-            LlmProvider::Gemini    => "Google Gemini",
-            LlmProvider::Groq      => "Groq",
-            LlmProvider::Anthropic => "Anthropic",
+pub fn get_provider_registry() -> &'static HashMap<&'static str, ProviderConfig> {
+    static PROVIDER_REGISTRY: OnceLock<HashMap<&'static str, ProviderConfig>> = OnceLock::new();
+    PROVIDER_REGISTRY.get_or_init(|| {
+        let mut m = HashMap::new();
+        let configs = vec![
+            ("openai", "https://api.openai.com/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("anthropic", "https://api.anthropic.com/v1", AuthScheme::XApiKey, SchemaFormat::Anthropic),
+            ("gemini", "https://generativelanguage.googleapis.com/v1beta/models", AuthScheme::GoogleApiKey, SchemaFormat::Gemini),
+            ("groq", "https://api.groq.com/openai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("openrouter", "https://openrouter.ai/api/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("deepseek", "https://api.deepseek.com/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("together", "https://api.together.xyz/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("mistral", "https://api.mistral.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("xai", "https://api.x.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("cerebras", "https://api.cerebras.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("fireworks", "https://api.fireworks.ai/inference/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("siliconflow", "https://api.siliconflow.cn/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("perplexity", "https://api.perplexity.ai", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            ("cohere", "https://api.cohere.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+        ];
+
+        for (id, url, auth, schema) in configs {
+            m.insert(id, ProviderConfig {
+                id,
+                base_url: url,
+                auth_scheme: auth,
+                schema_format: schema,
+            });
         }
-    }
+        m
+    })
+}
+
+pub fn get_provider_config(provider_name: &str) -> Option<ProviderConfig> {
+    get_provider_registry().get(provider_name).cloned()
 }
 
 /// Provider key entry from database.
 #[derive(Debug, Clone)]
 pub struct ProviderKey {
-    pub provider: LlmProvider,
+    pub provider_id: String,
     pub decrypted_key: String,
 }
 
 /// Fetches all provider keys for a tenant from the provider_keys table.
-/// Decrypts each key using the AES_MASTER_KEY.
 pub async fn fetch_tenant_provider_keys(
     state: &Arc<AppState>,
     tenant_id: &str,
@@ -115,117 +103,129 @@ pub async fn fetch_tenant_provider_keys(
 
     let mut keys = Vec::with_capacity(rows.len());
 
+    let registry = get_provider_registry();
+
     for row in rows {
         let provider_name: String = row.try_get("provider_name")
             .map_err(|_| GatewayError::ResponseBuild("Failed to fetch provider_name".into()))?;
         let encrypted_key: Vec<u8> = row.try_get("encrypted_key")
             .map_err(|_| GatewayError::ResponseBuild("Failed to fetch encrypted_key".into()))?;
 
-        // Decrypt the key
         let decrypted_key = decrypt_api_key(&encrypted_key)
             .map_err(|_| GatewayError::ResponseBuild(
                 format!("Failed to decrypt {} API key", provider_name)
             ))?;
 
-        let provider = match provider_name.as_str() {
-            "openai" => LlmProvider::OpenAI,
-            "gemini" => LlmProvider::Gemini,
-            "groq" => LlmProvider::Groq,
-            "anthropic" => LlmProvider::Anthropic,
-            _ => {
-                warn!("Unknown provider in database: {}", provider_name);
-                continue;
-            }
-        };
-
-        keys.push(ProviderKey { provider, decrypted_key });
+        if registry.contains_key(provider_name.as_str()) {
+            keys.push(ProviderKey { provider_id: provider_name, decrypted_key });
+        } else {
+            warn!("Unknown provider in database: {}", provider_name);
+        }
     }
 
     Ok(keys)
 }
 
+/// Detect provider ID from model name string (helper for generic routing).
+pub fn detect_primary_provider(model: &str) -> &'static str {
+    let m = model.to_lowercase();
+    if m.starts_with("gemini-") { "gemini" }
+    else if m.starts_with("claude-") { "anthropic" }
+    else if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") { "openai" }
+    else if m.starts_with("mistral") { "mistral" }
+    else if m.starts_with("deepseek") { "deepseek" }
+    else if m.starts_with("cohere") { "cohere" }
+    else if m.contains("llama") || m.contains("mixtral") || m.contains("qwen") { "openrouter" } // Default preferred open-source router
+    else { "openai" } // Safe default
+}
+
+/// Helper method used by proxy.rs
+pub fn detect_provider(model: &str) -> &'static str {
+    detect_primary_provider(model)
+}
+
 /// Gets the appropriate provider key for a given model.
-/// Returns the key and the provider to use.
 pub fn select_provider_for_model(
     model: &str,
     available_keys: &[ProviderKey],
-) -> Option<(LlmProvider, String)> {
-    let target_provider = LlmProvider::detect(model);
+) -> Option<(String, String)> {
+    let target_provider = detect_primary_provider(model);
 
-    // First, try to find the exact provider match
+    // First, try exact map
     for key in available_keys {
-        if key.provider == target_provider {
-            return Some((target_provider, key.decrypted_key.clone()));
+        if key.provider_id == target_provider {
+            return Some((key.provider_id.clone(), key.decrypted_key.clone()));
         }
     }
 
-    // If no exact match, try to find any available key as fallback
-    // Priority: OpenAI -> Anthropic -> Groq -> Gemini
-    let fallback_order = [
-        LlmProvider::OpenAI,
-        LlmProvider::Anthropic,
-        LlmProvider::Groq,
-        LlmProvider::Gemini,
+    // Smart fallback logic matching user instruction priority
+    let fallback_order = vec![
+        "openrouter",
+        "together",
+        "groq",
+        "anthropic",
+        "openai",
+        "gemini",
+        "mistral",
+        "deepseek",
+        "xai",
     ];
 
     for fallback in &fallback_order {
         for key in available_keys {
-            if key.provider == *fallback {
-                return Some((*fallback, key.decrypted_key.clone()));
+            if key.provider_id == *fallback {
+                return Some((key.provider_id.clone(), key.decrypted_key.clone()));
             }
         }
+    }
+    
+    // Pick first available
+    if let Some(key) = available_keys.first() {
+        return Some((key.provider_id.clone(), key.decrypted_key.clone()));
     }
 
     None
 }
 
-/// Checks if an HTTP status code indicates a retryable error.
 fn is_retryable_error(status: u16) -> bool {
-    matches!(status, 500 | 502 | 503 | 504)
+    matches!(status, 429 | 500 | 502 | 503 | 504)
 }
 
-/// Prepares request body for fallback provider.
-/// Translates model name if necessary.
 fn prepare_fallback_body(
     original_body: &Value,
-    target_provider: LlmProvider,
+    target_provider_id: &str,
     original_model: &str,
 ) -> Value {
     let mut body = original_body.clone();
 
-    // Map model to appropriate fallback model
-    let fallback_model = match target_provider {
-        LlmProvider::OpenAI => "gpt-4o-mini",
-        LlmProvider::Anthropic => "claude-3-haiku-20240307",
-        LlmProvider::Groq => "llama3-8b-8192",
-        LlmProvider::Gemini => "gemini-1.5-flash",
+    // Mapping fallback models for target providers
+    let fallback_model = match target_provider_id {
+        "openai" => "gpt-4o-mini",
+        "anthropic" => "claude-3-haiku-20240307",
+        "groq" => "llama3-8b-8192",
+        "gemini" => "gemini-1.5-flash",
+        "mistral" => "open-mistral-7b",
+        "deepseek" => "deepseek-coder",
+        _ => "meta-llama/Llama-3-8b-chat-hf", // GenAI open source fallback
     };
 
-    // If the original model is already compatible, keep it
-    let target_provider_from_model = LlmProvider::detect(original_model);
-    if target_provider_from_model == target_provider {
-        // Keep original model as it's compatible
+    let target_provider_from_model = detect_primary_provider(original_model);
+    if target_provider_from_model == target_provider_id {
+        // Keep original
     } else {
-        // Replace with fallback model
         body["model"] = Value::String(fallback_model.to_string());
     }
 
     body
 }
 
-/// Routes and forwards a chat completion request to the correct LLM provider.
-/// Uses tenant-specific provider keys fetched from the database.
-/// Implements automated fallback on upstream failures.
 pub async fn route_chat_completion_with_fallback(
     state: &Arc<AppState>,
     tenant_id: &str,
     body: &Value,
     accept_header: &str,
 ) -> Result<reqwest::Response, GatewayError> {
-    // Extract model from request body
     let model = extract_model(body);
-
-    // Fetch all available provider keys for the tenant
     let available_keys = fetch_tenant_provider_keys(state, tenant_id).await?;
 
     if available_keys.is_empty() {
@@ -234,98 +234,159 @@ pub async fn route_chat_completion_with_fallback(
         ));
     }
 
-    // Select the primary provider based on the requested model
     let (primary_provider, primary_key) = select_provider_for_model(model, &available_keys)
         .ok_or_else(|| GatewayError::ResponseBuild(
             "No compatible provider key available".into()
         ))?;
 
     info!(
-        provider = primary_provider.name(),
-        model = model,
+        provider = %primary_provider,
+        model = %model,
         "Routing request to primary LLM provider"
     );
 
-    // Attempt primary request
     let primary_result = execute_provider_request(
         &state.http_client,
-        primary_provider,
+        &primary_provider,
         &primary_key,
         body,
         accept_header,
+        None,
     ).await;
 
-    // Check if primary succeeded
     match primary_result {
         Ok(response) => {
             let status = response.status().as_u16();
             if !is_retryable_error(status) {
                 return Ok(response);
             }
-            // Retryable error - continue to fallback
             warn!(
-                provider = primary_provider.name(),
+                provider = %primary_provider,
                 status = status,
                 "Primary provider failed with retryable error, attempting fallback"
             );
         }
         Err(e) => {
             warn!(
-                provider = primary_provider.name(),
+                provider = %primary_provider,
                 error = %e,
                 "Primary provider unreachable, attempting fallback"
             );
         }
     }
 
-    // Try fallback providers
     try_fallback_providers(
         state,
         &available_keys,
-        primary_provider,
+        &primary_provider,
         body,
         accept_header,
         model,
     ).await
 }
 
-/// Executes a request to a specific provider.
+pub fn translate_model_name(original_model: &str, target_provider_id: &str) -> String {
+    let m = original_model.to_lowercase();
+    
+    match target_provider_id {
+        "openai" | "anthropic" => {
+            if m.contains("llama") || m.contains("mixtral") || m.contains("qwen") {
+                if target_provider_id == "openai" {
+                    return "gpt-4o-mini".to_string();
+                } else {
+                    return "claude-3-haiku-20240307".to_string();
+                }
+            }
+        }
+        "openrouter" => {
+            if m == "llama-3.3-70b-versatile" {
+                return "meta-llama/llama-3.3-70b-instruct".to_string();
+            } else if m == "llama3-8b" || m == "llama-3-8b" {
+                return "meta-llama/llama-3-8b-instruct".to_string();
+            }
+        }
+        "groq" => {
+            if m == "meta-llama/llama-3.3-70b-instruct" {
+                return "llama-3.3-70b-versatile".to_string();
+            } else if m.contains("llama-3") || m.contains("llama3") {
+                if m.contains("70b") {
+                    return "llama-3.3-70b-versatile".to_string();
+                } else if m.contains("8b") {
+                    return "llama3-8b-8192".to_string();
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    original_model.to_string()
+}
+
 async fn execute_provider_request(
     client: &reqwest::Client,
-    provider: LlmProvider,
+    provider_id: &str,
     api_key: &str,
     body: &Value,
     accept_header: &str,
+    base_url_override: Option<&str>,
 ) -> Result<reqwest::Response, GatewayError> {
-    let base = provider.base_url();
-    let endpoint = format!("{}/chat/completions", base);
+    let config = get_provider_config(provider_id)
+        .ok_or_else(|| GatewayError::ResponseBuild(format!("Provider config missing for {}", provider_id)))?;
+
+    let base_url = base_url_override.unwrap_or(config.base_url);
+
+    let endpoint = if config.schema_format == SchemaFormat::Anthropic {
+        format!("{}/messages", base_url)
+    } else {
+        format!("{}/chat/completions", base_url)
+    };
 
     let mut request = client.post(&endpoint)
         .header("Content-Type", "application/json")
         .header("Accept", accept_header);
 
-    // Inject Auth based on provider
-    request = match provider {
-        LlmProvider::OpenAI | LlmProvider::Groq => {
-            request.header("Authorization", format!("Bearer {}", api_key))
-        }
-        LlmProvider::Gemini => {
-            request.header("x-goog-api-key", api_key)
-        }
-        LlmProvider::Anthropic => {
-            request
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
+    request = match config.auth_scheme {
+        AuthScheme::Bearer => request.header("Authorization", format!("Bearer {}", api_key)),
+        AuthScheme::GoogleApiKey => request.header("x-goog-api-key", api_key),
+        AuthScheme::XApiKey => {
+            if config.schema_format == SchemaFormat::Anthropic {
+                request.header("x-api-key", api_key).header("anthropic-version", "2023-06-01")
+            } else {
+                request.header("x-api-key", api_key)
+            }
         }
     };
 
+    let mut final_body = body.clone();
+    
+    let original_model = extract_model(body);
+    let translated_model = translate_model_name(original_model, config.id);
+    final_body["model"] = Value::String(translated_model);
+    
+    if config.schema_format == SchemaFormat::Anthropic {
+        use crate::infrastructure::translators::{OpenAIChatRequest, AnthropicRequest};
+        use crate::domain::models::RedEyeConversation;
+
+        let openai_req: OpenAIChatRequest = serde_json::from_value(final_body.clone())
+            .map_err(|e| GatewayError::ResponseBuild(format!("OpenAI parse error for Anthropic format: {}", e)))?;
+        
+        let conv: RedEyeConversation = openai_req.try_into()
+            .map_err(|e| GatewayError::ResponseBuild(format!("To UMS error: {}", e)))?;
+            
+        let anthropic_req: AnthropicRequest = conv.try_into()
+            .map_err(|e| GatewayError::ResponseBuild(format!("To Anthropic error: {}", e)))?;
+            
+        final_body = serde_json::to_value(anthropic_req)
+            .map_err(|e| GatewayError::ResponseBuild(format!("Json Serialization Error: {}", e)))?;
+    }
+
     let response = request
-        .json(body)
+        .json(&final_body)
         .send()
         .await
         .map_err(|e| {
             error!(
-                provider = provider.name(),
+                provider = %config.id,
                 error = %e,
                 "Failed to reach upstream LLM provider"
             );
@@ -335,41 +396,33 @@ async fn execute_provider_request(
     Ok(response)
 }
 
-/// Attempts fallback to other available providers.
 async fn try_fallback_providers(
     state: &Arc<AppState>,
     available_keys: &[ProviderKey],
-    failed_provider: LlmProvider,
+    failed_provider: &str,
     body: &Value,
     accept_header: &str,
     original_model: &str,
 ) -> Result<reqwest::Response, GatewayError> {
-    // Define fallback priority based on the failed provider
-    let fallback_candidates: Vec<LlmProvider> = match failed_provider {
-        LlmProvider::OpenAI => vec![LlmProvider::Anthropic, LlmProvider::Groq, LlmProvider::Gemini],
-        LlmProvider::Anthropic => vec![LlmProvider::OpenAI, LlmProvider::Groq, LlmProvider::Gemini],
-        LlmProvider::Groq => vec![LlmProvider::OpenAI, LlmProvider::Anthropic, LlmProvider::Gemini],
-        LlmProvider::Gemini => vec![LlmProvider::OpenAI, LlmProvider::Anthropic, LlmProvider::Groq],
-    };
+    let fallback_candidates = vec![
+        "openrouter", "together", "groq", "anthropic", "openai", "gemini", "mistral", "deepseek"
+    ];
 
     for fallback_provider in fallback_candidates {
-        // Skip if same as failed provider
         if fallback_provider == failed_provider {
             continue;
         }
 
-        // Find key for this fallback provider
-        let Some(key_entry) = available_keys.iter().find(|k| k.provider == fallback_provider) else {
+        let Some(key_entry) = available_keys.iter().find(|k| k.provider_id == fallback_provider) else {
             continue;
         };
 
         info!(
-            from_provider = failed_provider.name(),
-            to_provider = fallback_provider.name(),
+            from_provider = failed_provider,
+            to_provider = fallback_provider,
             "Attempting automated fallback"
         );
 
-        // Prepare fallback body (may need model translation)
         let fallback_body = prepare_fallback_body(body, fallback_provider, original_model);
 
         match execute_provider_request(
@@ -378,25 +431,26 @@ async fn try_fallback_providers(
             &key_entry.decrypted_key,
             &fallback_body,
             accept_header,
+            None,
         ).await {
             Ok(response) => {
                 let status = response.status().as_u16();
                 if !is_retryable_error(status) {
                     info!(
-                        provider = fallback_provider.name(),
+                        provider = fallback_provider,
                         "Fallback successful - request completed"
                     );
                     return Ok(response);
                 }
                 warn!(
-                    provider = fallback_provider.name(),
+                    provider = fallback_provider,
                     status = status,
                     "Fallback provider also failed"
                 );
             }
             Err(e) => {
                 warn!(
-                    provider = fallback_provider.name(),
+                    provider = fallback_provider,
                     error = %e,
                     "Fallback provider unreachable"
                 );
@@ -404,19 +458,15 @@ async fn try_fallback_providers(
         }
     }
 
-    // All fallbacks exhausted
     Err(GatewayError::ResponseBuild("All LLM providers failed".into()))
 }
 
-/// Extracts the model name from a request body, falling back to "gpt-4o".
 pub fn extract_model(body: &Value) -> &str {
     body.get("model")
         .and_then(|v| v.as_str())
         .unwrap_or("gpt-4o")
 }
 
-/// Routes and forwards a chat completion request to the correct LLM provider.
-/// The `api_key` comes from the decrypted tenant key stored in `llm_routes`.
 pub async fn route_chat_completion(
     client: &reqwest::Client,
     api_key: &str,
@@ -424,55 +474,21 @@ pub async fn route_chat_completion(
     accept_header: &str,
     base_url_override: Option<&str>,
 ) -> Result<reqwest::Response, GatewayError> {
-    // Extract model from request body
     let model = extract_model(body);
+    let provider_id = detect_primary_provider(model);
+    
+    let mut response = execute_provider_request(
+        client,
+        provider_id,
+        api_key,
+        body,
+        accept_header,
+        base_url_override,
+    ).await?;
 
-    let provider = LlmProvider::detect(model);
-    let base = base_url_override.unwrap_or_else(|| provider.base_url());
-    let endpoint = format!("{}/chat/completions", base);
-
-    info!(
-        provider = provider.name(),
-        model = model,
-        endpoint = %endpoint,
-        "Routing request to LLM provider"
-    );
-
-    let mut request = client.post(&endpoint)
-        .header("Content-Type", "application/json")
-        .header("Accept", accept_header);
-
-    // Inject Auth based on provider
-    request = match provider {
-        LlmProvider::OpenAI | LlmProvider::Groq => {
-            request.header("Authorization", format!("Bearer {}", api_key))
-        }
-        LlmProvider::Gemini => {
-            request.header("x-goog-api-key", api_key)
-        }
-        LlmProvider::Anthropic => {
-            request
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-        }
-    };
-
-    let mut response = request
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| {
-            error!(
-                provider = provider.name(),
-                error = %e,
-                "Failed to reach upstream LLM provider"
-            );
-            GatewayError::UpstreamUnreachable(e)
-        })?;
-
-    // Agentic Hot-Swap Feature
-    if provider == LlmProvider::OpenAI && (response.status().as_u16() == 503 || response.status().as_u16() == 429) {
-        tracing::warn!("Primary provider failed. Triggering RedEye Hot-Swap...");
+    // Agentic Hot-Swap Feature Support for basic internal retry logic
+    if provider_id == "openai" && (response.status().as_u16() == 503 || response.status().as_u16() == 429) {
+        tracing::warn!("Primary provider failed. Triggering RedEye Hot-Swap to Anthropic Mock...");
 
         let anthropic_key = std::env::var("ANTHROPIC_BACKUP_KEY").unwrap_or_else(|_| "mock_backup_key".to_string());
         
@@ -481,7 +497,7 @@ pub async fn route_chat_completion(
         use crate::domain::models::RedEyeConversation;
 
         let openai_req: OpenAIChatRequest = serde_json::from_value(body.clone())
-            .map_err(|e| GatewayError::ResponseBuild(format!("Hot-Swap parse error: {}", e)))?;
+            .map_err(|_| GatewayError::ResponseBuild("Hot-Swap parse error for OpenAI request".to_string()))?;
         
         let conv: RedEyeConversation = openai_req.try_into()
             .map_err(|e| GatewayError::ResponseBuild(format!("Hot-Swap to internal struct failed: {}", e)))?;
@@ -489,8 +505,8 @@ pub async fn route_chat_completion(
         let anthropic_req: AnthropicRequest = conv.try_into()
             .map_err(|e| GatewayError::ResponseBuild(format!("Hot-Swap to Anthropic struct failed: {}", e)))?;
 
-        let anthropic_base = std::env::var("ANTHROPIC_MOCK_URL").unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-        let anthropic_endpoint = format!("{}/v1/messages", anthropic_base);
+        let anthropic_base = std::env::var("ANTHROPIC_MOCK_URL").unwrap_or_else(|_| "https://api.anthropic.com/v1".to_string());
+        let anthropic_endpoint = format!("{}/messages", anthropic_base.trim_end_matches('/'));
         
         // Fire request to Anthropic
         let anthropic_resp = client.post(&anthropic_endpoint)
@@ -577,25 +593,25 @@ mod tests {
 
     #[test]
     fn test_provider_detection() {
-        assert_eq!(LlmProvider::detect("gpt-4"), LlmProvider::OpenAI);
-        assert_eq!(LlmProvider::detect("gpt-4o"), LlmProvider::OpenAI);
-        assert_eq!(LlmProvider::detect("o1-preview"), LlmProvider::OpenAI);
-        assert_eq!(LlmProvider::detect("claude-3-opus"), LlmProvider::Anthropic);
-        assert_eq!(LlmProvider::detect("claude-3-sonnet"), LlmProvider::Anthropic);
-        assert_eq!(LlmProvider::detect("gemini-pro"), LlmProvider::Gemini);
-        assert_eq!(LlmProvider::detect("llama3-70b"), LlmProvider::Groq);
-        assert_eq!(LlmProvider::detect("mixtral-8x7b"), LlmProvider::Groq);
+        assert_eq!(detect_primary_provider("gpt-4"), "openai");
+        assert_eq!(detect_primary_provider("gpt-4o"), "openai");
+        assert_eq!(detect_primary_provider("o1-preview"), "openai");
+        assert_eq!(detect_primary_provider("claude-3-opus"), "anthropic");
+        assert_eq!(detect_primary_provider("claude-3-sonnet"), "anthropic");
+        assert_eq!(detect_primary_provider("gemini-pro"), "gemini");
+        assert_eq!(detect_primary_provider("meta-llama/Llama-3-70b"), "openrouter");
+        assert_eq!(detect_primary_provider("mixtral-8x7b"), "openrouter");
     }
 
     #[test]
     fn test_is_retryable_error() {
+        assert!(is_retryable_error(429));
         assert!(is_retryable_error(500));
         assert!(is_retryable_error(502));
         assert!(is_retryable_error(503));
         assert!(is_retryable_error(504));
         assert!(!is_retryable_error(400));
         assert!(!is_retryable_error(401));
-        assert!(!is_retryable_error(429));
         assert!(!is_retryable_error(200));
     }
 
@@ -603,23 +619,23 @@ mod tests {
     fn test_select_provider_for_model() {
         let keys = vec![
             ProviderKey {
-                provider: LlmProvider::OpenAI,
+                provider_id: "openai".to_string(),
                 decrypted_key: "sk-openai".to_string(),
             },
             ProviderKey {
-                provider: LlmProvider::Anthropic,
+                provider_id: "anthropic".to_string(),
                 decrypted_key: "sk-anthropic".to_string(),
             },
         ];
 
         // Exact match
         let (provider, key) = select_provider_for_model("gpt-4", &keys).unwrap();
-        assert_eq!(provider, LlmProvider::OpenAI);
+        assert_eq!(provider, "openai");
         assert_eq!(key, "sk-openai");
 
         // Another exact match
         let (provider, key) = select_provider_for_model("claude-3", &keys).unwrap();
-        assert_eq!(provider, LlmProvider::Anthropic);
+        assert_eq!(provider, "anthropic");
         assert_eq!(key, "sk-anthropic");
     }
 
@@ -628,14 +644,14 @@ mod tests {
         // Only Anthropic available, but requesting GPT
         let keys = vec![
             ProviderKey {
-                provider: LlmProvider::Anthropic,
+                provider_id: "anthropic".to_string(),
                 decrypted_key: "sk-anthropic".to_string(),
             },
         ];
 
         // Should fallback to Anthropic since no OpenAI key
         let (provider, key) = select_provider_for_model("gpt-4", &keys).unwrap();
-        assert_eq!(provider, LlmProvider::Anthropic);
+        assert_eq!(provider, "anthropic");
         assert_eq!(key, "sk-anthropic");
     }
 
@@ -653,11 +669,11 @@ mod tests {
         let body = serde_json::json!({"model": "gpt-4", "messages": []});
         
         // Fallback to Anthropic
-        let fallback = prepare_fallback_body(&body, LlmProvider::Anthropic, "gpt-4");
+        let fallback = prepare_fallback_body(&body, "anthropic", "gpt-4");
         assert_eq!(fallback["model"], "claude-3-haiku-20240307");
 
         // Keep original if compatible
-        let fallback = prepare_fallback_body(&body, LlmProvider::OpenAI, "gpt-4");
+        let fallback = prepare_fallback_body(&body, "openai", "gpt-4");
         assert_eq!(fallback["model"], "gpt-4");
     }
 }

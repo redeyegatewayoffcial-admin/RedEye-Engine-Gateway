@@ -2,7 +2,7 @@
 // Fetches real-time token usage and estimated cost from GET /v1/admin/metrics/usage.
 // NOTE: All authenticated requests use credentials: 'include' to send HttpOnly cookies automatically.
 
-import { parseApiError, type StandardizedError } from '../utils/apiErrors';
+import { parseApiError } from '../utils/apiErrors';
 
 const GATEWAY_URL = 'http://localhost:8080';
 

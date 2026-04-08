@@ -133,7 +133,7 @@ pub async fn execute_proxy(
             prompt_content: raw_prompt.to_string(),
             response_content: "".to_string(),
             error_message: e.to_string(),
-            requested_provider: llm_router::LlmProvider::detect(model_name).as_str().to_string(),
+            requested_provider: llm_router::detect_provider(model_name).to_string(),
             executed_provider: "".to_string(),
             is_hot_swapped: 0,
         }).unwrap_or_else(|_| json!({}));
@@ -167,7 +167,7 @@ pub async fn execute_proxy(
             prompt_content: raw_prompt.to_string(),
             response_content: "".to_string(),
             error_message: e.to_string(),
-            requested_provider: llm_router::LlmProvider::detect(model_name).as_str().to_string(),
+            requested_provider: llm_router::detect_provider(model_name).to_string(),
             executed_provider: "".to_string(),
             is_hot_swapped: 0,
         }).unwrap_or_else(|_| json!({}));
@@ -179,18 +179,18 @@ pub async fn execute_proxy(
     }
 
     // ── Stage 1.8: Circuit-Breaker / Adaptive Fallback ────────────────────────
-    let provider = llm_router::LlmProvider::detect(model_name);
+    let provider = llm_router::detect_provider(model_name);
 
     // ── Stage 2 & 3: Dynamic Provider Key Resolution and Routing with Fallback ─
     let upstream_response = llm_router::route_chat_completion_with_fallback(
         state, tenant_id, body, accept_header
     ).await?;
 
-    let requested_provider = provider.as_str().to_string();
+    let requested_provider = provider.to_string();
     let executed_provider = upstream_response.headers()
         .get("x-redeye-executed-provider")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or(provider.as_str())
+        .unwrap_or(provider)
         .to_string();
     let is_hot_swapped: u8 = upstream_response.headers()
         .get("x-redeye-hot-swapped")
@@ -251,7 +251,7 @@ fn handle_cache_hit(
     let bytes = serde_json::to_vec(&mock_response).unwrap_or_default();
     let latency_ms = start_time.elapsed().as_millis() as u32;
 
-    let requested_provider = llm_router::LlmProvider::detect(model_name).as_str().to_string();
+    let requested_provider = llm_router::detect_provider(model_name).to_string();
 
     spawn_telemetry(
         state, tenant_id, model_name, raw_prompt, trace_ctx,

@@ -4,11 +4,12 @@
 // Theme: "Cool Revival / Neon Crimson" — Dark Red/Glass aesthetic
 
 import { useState } from 'react';
-import { Key, Plus, Trash2, X, AlertTriangle, ShieldCheck, Copy, Check, Globe, Loader2, Lock, Server, User, Users, ArrowRight, Sparkles, Zap, Shield } from 'lucide-react';
+import { Key, Plus, Trash2, X, AlertTriangle, ShieldCheck, Copy, Check, Globe, Loader2, Lock, Server, User, Users, ArrowRight, Sparkles, Shield } from 'lucide-react';
 import useSWR from 'swr';
 import { useAuth } from '../context/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { SUPPORTED_PROVIDERS } from '../../data/constants/providers';
 
 export interface ApiKey {
   id: string;
@@ -126,8 +127,6 @@ export function ApiKeysView() {
     alert('Generate endpoint not yet implemented');
     setIsKeyModalOpen(false);
   };
-
-  const activeKeysCount = keys?.filter(k => k.status === 'Active').length || 0;
 
   return (
     <motion.div 
@@ -537,10 +536,11 @@ export function ApiKeysView() {
                       onChange={(e) => setNewProviderName(e.target.value)}
                       className="w-full rounded-lg bg-white dark:bg-slate-950/70 border border-slate-300 dark:border-slate-700 px-4 py-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-200"
                     >
-                      <option value="openai">OpenAI</option>
-                      <option value="anthropic">Anthropic</option>
-                      <option value="gemini">Google Gemini</option>
-                      <option value="groq">Groq</option>
+                      {SUPPORTED_PROVIDERS.map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 

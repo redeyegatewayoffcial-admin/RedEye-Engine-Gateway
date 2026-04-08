@@ -51,16 +51,7 @@ pub struct ApiKey {
     pub is_active: bool,
 }
 
-/// Supported LLM providers for the provider_keys table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "VARCHAR", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderName {
-    OpenAI,
-    Anthropic,
-    Gemini,
-    Groq,
-}
+
 
 /// An encrypted upstream LLM provider API key.
 /// Each tenant can store multiple provider keys for multi-LLM support.
@@ -69,7 +60,7 @@ pub struct ProviderKey {
     pub id: Uuid,
     pub tenant_id: Uuid,
     /// The LLM provider (e.g., 'openai', 'anthropic')
-    pub provider_name: ProviderName,
+    pub provider_name: String,
     /// AES-256-GCM encrypted provider API key
     #[serde(skip_serializing)]
     pub encrypted_key: Vec<u8>,
