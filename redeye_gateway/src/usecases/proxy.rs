@@ -22,6 +22,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::domain::models::{AppState, GatewayError, TraceContext};
 use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
+use crate::infrastructure::routing_strategy::RoutingStrategy;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -81,6 +82,7 @@ pub async fn execute_proxy(
     raw_prompt: &str,
     accept_header: &str,
     trace_ctx: &TraceContext,
+    strategy: RoutingStrategy,
 ) -> Result<ProxyResult, GatewayError> {
     let start_time = std::time::Instant::now();
 
@@ -183,7 +185,7 @@ pub async fn execute_proxy(
 
     // ── Stage 2 & 3: Dynamic Provider Key Resolution and Routing with Fallback ─
     let upstream_response = llm_router::route_chat_completion_with_fallback(
-        state, tenant_id, body, accept_header
+        state, tenant_id, body, accept_header, strategy
     ).await?;
 
     let requested_provider = provider.to_string();

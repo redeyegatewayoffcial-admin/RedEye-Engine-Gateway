@@ -1,5 +1,7 @@
 //! Shared error types for RedEye Compliance microservice.
 //! Provides standardized error handling with safe user-facing messages.
+//!
+//! POLICY: No `.unwrap()`, `.expect()`, or `panic!()` in this module.
 
 use axum::{
     http::StatusCode,
@@ -19,6 +21,8 @@ pub enum ErrorCode {
     RateLimited,
     PolicyViolation,
     ServiceUnavailable,
+    RegionLockViolation,
+    PiiEngineFailure,
 }
 
 impl ErrorCode {
@@ -32,6 +36,8 @@ impl ErrorCode {
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::PolicyViolation => "POLICY_VIOLATION",
             ErrorCode::ServiceUnavailable => "SERVICE_UNAVAILABLE",
+            ErrorCode::RegionLockViolation => "REGION_LOCK_VIOLATION",
+            ErrorCode::PiiEngineFailure => "PII_ENGINE_FAILURE",
         }
     }
 }
@@ -56,6 +62,11 @@ pub enum AppError {
     PolicyViolation(String),
     /// Service unavailable - upstream dependency failed
     ServiceUnavailable(String),
+    /// Data residency region lock violation (DPDP strict border enforcement)
+    /// Returned when an Indian-region request targets a US-only model.
+    RegionLockViolation(String),
+    /// PII engine or Presidio backend failure (fail-closed: block, don't leak)
+    PiiEngineFailure(String),
 }
 
 impl AppError {
@@ -70,6 +81,8 @@ impl AppError {
             AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::PolicyViolation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             AppError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::RegionLockViolation(_) => StatusCode::FORBIDDEN,
+            AppError::PiiEngineFailure(_) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -84,6 +97,8 @@ impl AppError {
             AppError::RateLimited(_) => ErrorCode::RateLimited,
             AppError::PolicyViolation(_) => ErrorCode::PolicyViolation,
             AppError::ServiceUnavailable(_) => ErrorCode::ServiceUnavailable,
+            AppError::RegionLockViolation(_) => ErrorCode::RegionLockViolation,
+            AppError::PiiEngineFailure(_) => ErrorCode::PiiEngineFailure,
         }
     }
 
@@ -98,6 +113,10 @@ impl AppError {
             AppError::RateLimited(msg) => msg.clone(),
             AppError::PolicyViolation(msg) => msg.clone(),
             AppError::ServiceUnavailable(msg) => msg.clone(),
+            AppError::RegionLockViolation(msg) => msg.clone(),
+            AppError::PiiEngineFailure(_) => {
+                "PII protection engine unavailable. Request blocked for data safety.".to_string()
+            }
         }
     }
 }
@@ -118,12 +137,20 @@ impl IntoResponse for AppError {
                     "Internal compliance error occurred"
                 );
             }
-            AppError::ServiceUnavailable(internal_msg) => {
+            AppError::ServiceUnavailable(internal_msg) | AppError::PiiEngineFailure(internal_msg) => {
                 tracing::error!(
                     error_code = %code.as_str(),
                     status = %status.as_u16(),
                     service_details = %internal_msg,
-                    "Service unavailable error occurred"
+                    "Service unavailable / PII engine failure"
+                );
+            }
+            AppError::RegionLockViolation(details) => {
+                tracing::warn!(
+                    error_code = %code.as_str(),
+                    status = %status.as_u16(),
+                    details = %details,
+                    "DPDP region lock violation — request blocked"
                 );
             }
             _ => {

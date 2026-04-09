@@ -3,3 +3,4 @@ pub mod clickhouse_logger;
 pub mod cache_client;
 pub mod translators;
 pub mod schema_mapper;
+pub mod routing_strategy;

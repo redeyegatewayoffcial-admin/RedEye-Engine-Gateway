@@ -41,6 +41,18 @@ impl ClickHouseRepo {
             ) ENGINE = MergeTree ORDER BY (tenant_id, created_at)
             TTL created_at + INTERVAL 365 DAY;
         "#,
+        r#"
+            CREATE TABLE IF NOT EXISTS RedEye_telemetry.compliance_engine_metrics (
+                trace_id          UUID,
+                tenant_id         String,
+                compliance_action String,
+                detected_region   String,
+                entity_type       String  DEFAULT '',
+                entity_count      UInt32  DEFAULT 0,
+                created_at        DateTime DEFAULT now()
+            ) ENGINE = MergeTree ORDER BY (tenant_id, created_at)
+            TTL created_at + INTERVAL 90 DAY;
+        "#,
     ];
 
     for stmt in statements {
@@ -58,7 +70,7 @@ impl ClickHouseRepo {
         }
     }
 
-    info!("ClickHouse schema verified (agent_traces + compliance_audit_log)");
+    info!("ClickHouse schema verified (agent_traces + compliance_audit_log + compliance_engine_metrics)");
     Ok(())
 }
 
@@ -147,5 +159,10 @@ impl ClickHouseRepo {
         }
 
         res.json::<Value>().await.map_err(|e| e.to_string())
+    }
+
+    /// Public wrapper for arbitrary read queries (used by latency_worker).
+    pub async fn raw_query(&self, query: &str) -> Result<Value, String> {
+        self.run_query(query).await
     }
 }

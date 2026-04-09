@@ -43,12 +43,12 @@ function mapUser(resp: AuthResponse): User {
   };
 }
 
-async function postJson<T>(url: string, body: unknown, includeCredentials = false): Promise<T> {
+async function postJson<T>(url: string, body: unknown, _includeCredentials = false): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    credentials: includeCredentials ? 'include' : 'same-origin',
+    credentials: 'include',
   });
 
   if (!res.ok) {

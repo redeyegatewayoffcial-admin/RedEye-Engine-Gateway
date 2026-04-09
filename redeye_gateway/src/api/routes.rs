@@ -85,6 +85,6 @@ fn create_cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(origins)
         .allow_credentials(true)
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::DELETE])
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::DELETE, axum::http::Method::OPTIONS])
         .allow_headers([AUTHORIZATION, CONTENT_TYPE])
 }

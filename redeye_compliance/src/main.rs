@@ -38,9 +38,13 @@ async fn main() {
         default_endpoint: "https://api.openai.com/v1".into(),
         eu_endpoint: "https://api.eu.openai.com/v1".into(),
         us_endpoint: "https://api.us.openai.com/v1".into(),
+        in_endpoint: "https://api.in.redeye.ai/v1".into(),
     });
 
-    let pii_engine = Arc::new(crate::usecases::pii_engine::PiiEngine::new());
+    let pii_engine = Arc::new(
+        crate::usecases::pii_engine::PiiEngine::new()
+            .expect("FATAL: PII engine failed to initialize — cannot start without compliance")
+    );
     
     let opa = Arc::new(crate::usecases::opa_client::OpaClient::new(
         "http://opa-server:8181".into() // Mock production OPA URL
@@ -100,6 +104,6 @@ fn create_cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_origin(origins)
         .allow_credentials(true)
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::DELETE])
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::DELETE, axum::http::Method::OPTIONS])
         .allow_headers([AUTHORIZATION, CONTENT_TYPE])
 }

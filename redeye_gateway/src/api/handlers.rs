@@ -45,10 +45,16 @@ pub async fn chat_completions(
     let accept = headers.get("accept")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json");
+
+    // Extract routing strategy from header
+    let strategy = crate::infrastructure::routing_strategy::RoutingStrategy::from_header(
+        headers.get("x-redeye-routing-strategy")
+            .and_then(|v| v.to_str().ok())
+    );
         
     // Delegate to use case
     let result = proxy::execute_proxy(
-        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx
+        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx, strategy
     ).await?;
 
     // Build Axum response

@@ -36,13 +36,19 @@ pub async fn rate_limit_middleware(
     next: Next,
 ) -> Result<Response, StatusCode> {
     // Extract identifier: prefer x-tenant-id if present and valid, otherwise use peer IP
-    let identifier = headers
+    let tenant_id = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| addr.ip().to_string());
 
-    let redis_key = format!("rl:tenant:{}", identifier);
+    let user_id = headers
+        .get("x-user-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "anon_user".to_string());
+
+    let redis_key = format!("rl:{}:u:{}", tenant_id, user_id);
 
     let mut conn = state.redis_conn.clone();
 
@@ -60,7 +66,7 @@ pub async fn rate_limit_middleware(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    debug!(tenant = identifier, requests = current_requests, limit = limit, "Rate limit check");
+    debug!(tenant_id = %tenant_id, user_id = %user_id, requests = current_requests, limit = limit, "Rate limit check");
 
     let remaining = i64::max(0, limit as i64 - current_requests);
     let ttl: i64 = match current_requests {
@@ -69,7 +75,7 @@ pub async fn rate_limit_middleware(
     };
 
     if current_requests > (limit as i64) {
-        warn!(tenant = identifier, "Rate limit exceeded (429)");
+        warn!(tenant_id = %tenant_id, user_id = %user_id, "Rate limit exceeded (429)");
         let mut response = Json(json!({
             "error": {"code": 429, "message": format!("Rate limit exceeded. Maximum {} requests per {} seconds.", limit, window_secs)}
         })).into_response();

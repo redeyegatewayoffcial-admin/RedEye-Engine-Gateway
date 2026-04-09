@@ -1,4 +1,9 @@
 //! infrastructure/llm_router.rs — Dynamic Multi-LLM Router with Automated Fallback
+//!
+//! Supports three routing strategies:
+//! - **Default**: Primary provider detection → fallback chain
+//! - **Least Latency**: Redis-backed EMA P95 ranking → fallback chain
+//! - **Cost Optimized**: tiktoken token estimation → cheapest provider → fallback chain
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -10,6 +15,7 @@ use uuid::Uuid;
 
 use crate::domain::models::{AppState, GatewayError};
 use crate::api::middleware::auth::decrypt_api_key;
+use crate::infrastructure::routing_strategy::{self, RoutingStrategy};
 
 // ── Dynamic Config Structs ───────────────────────────────────────────────────
 
@@ -224,6 +230,7 @@ pub async fn route_chat_completion_with_fallback(
     tenant_id: &str,
     body: &Value,
     accept_header: &str,
+    strategy: RoutingStrategy,
 ) -> Result<reqwest::Response, GatewayError> {
     let model = extract_model(body);
     let available_keys = fetch_tenant_provider_keys(state, tenant_id).await?;
@@ -234,7 +241,49 @@ pub async fn route_chat_completion_with_fallback(
         ));
     }
 
-    let (primary_provider, primary_key) = select_provider_for_model(model, &available_keys)
+    // ── Strategy-based provider selection ─────────────────────────────────
+    let strategy_provider = match strategy {
+        RoutingStrategy::LeastLatency => {
+            let mut redis_conn = state.redis_conn.clone();
+            match routing_strategy::resolve_least_latency(&mut redis_conn, &available_keys).await {
+                Some(provider_id) => {
+                    info!(
+                        provider = %provider_id,
+                        strategy = "least_latency",
+                        "Strategy selected provider"
+                    );
+                    // Find the key for this provider
+                    available_keys.iter()
+                        .find(|k| k.provider_id == provider_id)
+                        .map(|k| (k.provider_id.clone(), k.decrypted_key.clone()))
+                }
+                None => None,
+            }
+        }
+        RoutingStrategy::CostOptimized => {
+            let estimated_tokens = routing_strategy::estimate_input_tokens(body);
+            match routing_strategy::resolve_cost_optimized(model, estimated_tokens, &available_keys) {
+                Some((provider_id, est_cost)) => {
+                    info!(
+                        provider = %provider_id,
+                        strategy = "cost_optimized",
+                        estimated_tokens,
+                        estimated_cost_usd = est_cost,
+                        "Strategy selected cheapest provider"
+                    );
+                    available_keys.iter()
+                        .find(|k| k.provider_id == provider_id)
+                        .map(|k| (k.provider_id.clone(), k.decrypted_key.clone()))
+                }
+                None => None,
+            }
+        }
+        RoutingStrategy::Default => None,
+    };
+
+    // Use strategy result, or fall back to default model-based selection.
+    let (primary_provider, primary_key) = strategy_provider
+        .or_else(|| select_provider_for_model(model, &available_keys))
         .ok_or_else(|| GatewayError::ResponseBuild(
             "No compatible provider key available".into()
         ))?;
@@ -242,6 +291,7 @@ pub async fn route_chat_completion_with_fallback(
     info!(
         provider = %primary_provider,
         model = %model,
+        strategy = ?strategy,
         "Routing request to primary LLM provider"
     );
 
