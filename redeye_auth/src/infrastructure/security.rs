@@ -184,3 +184,62 @@ pub fn hash_api_key(api_key: &str) -> String {
     let result = hasher.finalize();
     hex::encode(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use chrono::{Utc, Duration};
+    use uuid::Uuid;
+
+    #[test]
+    fn test_jwt_lifecycle() {
+        env::set_var("JWT_SECRET", "super_secret_key");
+        
+        // 1. Success
+        let user_id = Uuid::new_v4();
+        let tenant_id = Uuid::new_v4();
+        let token = generate_jwt(user_id.clone(), tenant_id.clone()).unwrap();
+        let claims = verify_jwt(&token).unwrap();
+        assert_eq!(claims.sub, user_id.to_string());
+        assert_eq!(claims.tenant_id, tenant_id.to_string());
+        
+        // 2. Failure: Expired
+        let expired_claims = Claims {
+            sub: Uuid::new_v4().to_string(),
+            tenant_id: Uuid::new_v4().to_string(),
+            exp: Utc::now().checked_sub_signed(Duration::days(1)).unwrap().timestamp() as usize,
+        };
+        let expired_token = encode(
+            &Header::new(Algorithm::HS256),
+            &expired_claims,
+            &EncodingKey::from_secret("super_secret_key".as_bytes()),
+        ).unwrap();
+        assert!(verify_jwt(&expired_token).is_err());
+
+        // 3. Failure: Invalid Signature
+        let mut invalid_token = generate_jwt(Uuid::new_v4(), Uuid::new_v4()).unwrap();
+        invalid_token.push_str("invalid");
+        assert!(verify_jwt(&invalid_token).is_err());
+    }
+
+    #[test]
+    fn test_aes_lifecycle() {
+        // 1. Success
+        env::set_var("AES_MASTER_KEY", "12345678901234567890123456789012");
+        let plaintext = "re_live_testing123";
+        let encrypted = encrypt_api_key(plaintext).unwrap();
+        let decrypted = decrypt_api_key(&encrypted).unwrap();
+        assert_eq!(plaintext, decrypted);
+
+        // 2. Failure: Wrong Key
+        let encrypted_for_fail = encrypt_api_key("test_data").unwrap();
+        env::set_var("AES_MASTER_KEY", "00000000000000000000000000000000");
+        assert!(decrypt_api_key(&encrypted_for_fail).is_err());
+
+        // 3. Failure: Malformed Input
+        env::set_var("AES_MASTER_KEY", "12345678901234567890123456789012");
+        let short_data = vec![0u8; 10]; // Minimum is 12 bytes
+        assert!(decrypt_api_key(&short_data).is_err());
+    }
+}

@@ -67,3 +67,44 @@ impl SemanticSearchUseCase {
         xxhash_rust::xxh3::xxh3_64(combined.as_bytes()) as i64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_success_cache_key_generation() {
+        // Generating reproducible cache keys for identical prompts
+        let p1 = "How do I reverse a string in Rust?";
+        let p2 = "How do I reverse a string in Rust?";
+        assert_eq!(
+            SemanticSearchUseCase::compute_ast_hash(p1),
+            SemanticSearchUseCase::compute_ast_hash(p2)
+        );
+    }
+
+    #[test]
+    fn test_failure_cache_key_generation_miss() {
+        // Different punctuation/structure should yield different keys
+        let p1 = "How do I reverse a string in Rust?";
+        let p2 = "How do I reverse a string in Python?";
+        // Notice the word count is the same, and punctuation is '?', so wait:
+        // skeleton of p1 = "?" 
+        // skeleton of p2 = "?"
+        // Is hash identical? Let's check logic:
+        // `skeleton: String = prompt.chars().filter(|c| !c.is_alphanumeric() && !c.is_whitespace()).collect();`
+        // So `?` is the only non-alphanumeric. word_count is 8.
+        // Wait, AST Hash strips ALL semantics! It only hashes structure + word_count.
+        // Therefore p1 and p2 WILL have the SAME ast_hash! 
+        // That's exactly why pgvector is needed in stage 2.
+        
+        let hash1 = SemanticSearchUseCase::compute_ast_hash(p1);
+        let hash2 = SemanticSearchUseCase::compute_ast_hash(p2);
+        assert_eq!(hash1, hash2, "Structural hashes match for same word count and punctuation");
+        
+        // This causes a true MISS structurally:
+        let p3 = "How can I reverse string in Rust programming language!!";
+        let hash3 = SemanticSearchUseCase::compute_ast_hash(p3);
+        assert_ne!(hash1, hash3, "Different skeleton/word count must miss");
+    }
+}

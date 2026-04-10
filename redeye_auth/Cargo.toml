@@ -24,3 +24,10 @@ sha2 = "0.10"
 hex = "0.4"
 reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }
 oauth2 = "4.4"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+wiremock = "0.6"

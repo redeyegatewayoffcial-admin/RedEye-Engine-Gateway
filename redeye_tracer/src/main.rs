@@ -9,14 +9,10 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-mod domain;
-mod usecases;
-mod infrastructure;
-mod api;
-mod error;
+use redeye_tracer::api;
 
-use infrastructure::clickhouse_repo::ClickHouseRepo;
-use infrastructure::latency_worker::LatencyWorker;
+use redeye_tracer::infrastructure::clickhouse_repo::ClickHouseRepo;
+use redeye_tracer::infrastructure::latency_worker::LatencyWorker;
 
 #[tokio::main]
 async fn main() {

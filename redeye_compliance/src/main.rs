@@ -5,18 +5,12 @@
 
 use std::{net::SocketAddr, sync::Arc, env};
 use axum::{routing::get, Router};
-use tower_http::cors::{Any, CorsLayer};
+use redeye_compliance::api::middleware::geo_routing::SharedConfig;
+use redeye_compliance::api::routes;
+use tower_http::cors::CorsLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-mod domain;
-mod api;
-mod usecases;
-mod infrastructure;
-mod error;
-
-use api::middleware::geo_routing::SharedConfig;
 
 #[tokio::main]
 async fn main() {
@@ -42,36 +36,36 @@ async fn main() {
     });
 
     let pii_engine = Arc::new(
-        crate::usecases::pii_engine::PiiEngine::new()
+        redeye_compliance::usecases::pii_engine::PiiEngine::new()
             .expect("FATAL: PII engine failed to initialize — cannot start without compliance")
     );
     
-    let opa = Arc::new(crate::usecases::opa_client::OpaClient::new(
+    let opa = Arc::new(redeye_compliance::usecases::opa_client::OpaClient::new(
         "http://opa-server:8181".into() // Mock production OPA URL
     ));
 
-    let clickhouse = Arc::new(crate::infrastructure::clickhouse::ClickHouseLogger::new(
+    let clickhouse = Arc::new(redeye_compliance::infrastructure::clickhouse::ClickHouseLogger::new(
         "http://user:password@clickhouse-server:8123".into() // Mock setup
     ));
 
-    let compliance_policy = Arc::new(domain::models::CompliancePolicy {
+    let compliance_policy = Arc::new(redeye_compliance::domain::models::CompliancePolicy {
         active_frameworks: vec!["GDPR".into(), "DPDP".into()],
         enable_pii_redaction: true,
         target_entities: vec!["CREDIT_CARD".into(), "SSN".into(), "EMAIL".into()],
         fail_closed: true, // Strict enterprise security
     });
 
-    let security_state = api::middleware::security::SecurityState {
+    let security_state = redeye_compliance::api::middleware::security::SecurityState {
         opa,
         compliance_policy,
         clickhouse,
     };
 
-    let state = api::routes::AppState { config, pii_engine, security_state };
+    let state = routes::AppState { config, pii_engine, security_state };
 
     let app = Router::new()
         .route("/health", get(|| async { axum::Json(serde_json::json!({"status": "ok", "service": "redeye_compliance"})) }))
-        .nest("/api", api::routes::create_router(state))
+        .nest("/api", routes::create_router(state))
         .layer(cors)
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)); // 10MB limit
 

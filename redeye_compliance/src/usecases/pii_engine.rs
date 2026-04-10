@@ -626,4 +626,51 @@ mod tests {
         assert!(text.contains("hello world"));
         assert!(text.contains("you are helpful"));
     }
+
+    #[tokio::test]
+    async fn test_failure_empty_string_payload() {
+        let (mock, _) = MockPresidio::new();
+        let engine = PiiEngine::with_analyzer(Arc::new(mock)).unwrap();
+        let payload = json!({ "key": "", "nested": { "val": "" } });
+        let result = engine.scan(payload.clone()).await.unwrap();
+        
+        assert_eq!(result.sanitized_payload, payload);
+        assert_eq!(result.redacted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_failure_oversized_payload() {
+        let (mock, _) = MockPresidio::new();
+        let engine = PiiEngine::with_analyzer(Arc::new(mock)).unwrap();
+        let huge_string = "A".repeat(100_000);
+        let payload = json!({ "data": huge_string });
+        let result = engine.scan(payload).await.unwrap();
+        assert_eq!(result.redacted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_success_nested_json_bypassing_attempt() {
+        let (mock, _) = MockPresidio::new();
+        let engine = PiiEngine::with_analyzer(Arc::new(mock)).unwrap();
+        let payload = json!({
+            "level1": { "level2": [ { "level3": "My SSN is 123-45-6789" } ] }
+        });
+        let result = engine.scan(payload).await.unwrap();
+        assert_eq!(result.redacted_count, 1);
+        let sanitized = result.sanitized_payload.to_string();
+        assert!(!sanitized.contains("123-45-6789"));
+        assert!(sanitized.contains("SSN_REDACTED"));
+    }
+
+    #[tokio::test]
+    async fn test_failure_malformed_utf8() {
+        let (mock, _) = MockPresidio::new();
+        let engine = PiiEngine::with_analyzer(Arc::new(mock)).unwrap();
+        // Since it's stored in a Rust String inside Value, it's technically valid UTF-8
+        // but might contain replacement characters or null bytes.
+        let weird_unicode = "Weird chars: \u{FFFD}\u{0000}\u{FFFF} 123-45-6789";
+        let payload = json!({ "msg": weird_unicode });
+        let result = engine.scan(payload).await.unwrap();
+        assert_eq!(result.redacted_count, 1); 
+    }
 }

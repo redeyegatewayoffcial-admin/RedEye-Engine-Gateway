@@ -1,18 +1,8 @@
-pub mod api;
-pub mod domain;
-pub mod error;
-pub mod infrastructure;
-pub mod usecases;
-
-use infrastructure::db::setup_db_pool;
-use api::router::create_router;
-use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db_pool: sqlx::PgPool,
-}
+use std::net::SocketAddr;
+use redeye_auth::AppState;
+use redeye_auth::infrastructure::db::setup_db_pool;
+use redeye_auth::api::router::create_router;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

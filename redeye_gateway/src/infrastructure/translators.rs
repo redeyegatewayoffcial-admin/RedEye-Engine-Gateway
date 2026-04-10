@@ -371,4 +371,46 @@ mod tests {
         );
         assert!(is_anthropic_tool, "Tool call translation to Anthropic failed");
     }
+
+    #[test]
+    fn test_failure_translation_unknown_role() {
+        let openai_json = json!({
+            "messages": [
+                {
+                    "role": "unknown_role_123",
+                    "content": "Perform a task."
+                }
+            ]
+        });
+
+        let req: Result<OpenAIChatRequest, _> = serde_json::from_value(openai_json);
+        assert!(req.is_ok());
+
+        let conv: Result<RedEyeConversation, AppError> = req.unwrap().try_into();
+        assert!(conv.is_err());
+        if let Err(AppError::TranslationError(msg)) = conv {
+            assert!(msg.contains("Unknown OpenAI role"));
+        } else {
+            panic!("Expected TranslationError");
+        }
+    }
+
+    #[test]
+    fn test_success_schema_mapper_empty_content() {
+        // OpenAI sometimes sends empty text content blocks
+        let openai_json = json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": ""
+                }
+            ]
+        });
+        
+        let req: OpenAIChatRequest = serde_json::from_value(openai_json).unwrap();
+        let conv: RedEyeConversation = req.try_into().unwrap();
+        
+        // Empty text string might be parsed as an empty content vec
+        assert_eq!(conv.messages.len(), 0); // Our code pushes only if !contents.is_empty()
+    }
 }

@@ -235,6 +235,9 @@ pub async fn route_chat_completion_with_fallback(
     let model = extract_model(body);
     let available_keys = fetch_tenant_provider_keys(state, tenant_id).await?;
 
+    // In tests, llm_api_base_url is set to the wiremock server URI to intercept all calls.
+    let base_url_override: Option<&str> = state.llm_api_base_url.as_deref();
+
     if available_keys.is_empty() {
         return Err(GatewayError::ResponseBuild(
             "No provider keys configured for this tenant".into()
@@ -252,7 +255,6 @@ pub async fn route_chat_completion_with_fallback(
                         strategy = "least_latency",
                         "Strategy selected provider"
                     );
-                    // Find the key for this provider
                     available_keys.iter()
                         .find(|k| k.provider_id == provider_id)
                         .map(|k| (k.provider_id.clone(), k.decrypted_key.clone()))
@@ -301,7 +303,7 @@ pub async fn route_chat_completion_with_fallback(
         &primary_key,
         body,
         accept_header,
-        None,
+        base_url_override,
     ).await;
 
     match primary_result {
@@ -332,6 +334,7 @@ pub async fn route_chat_completion_with_fallback(
         body,
         accept_header,
         model,
+        base_url_override,
     ).await
 }
 
@@ -453,6 +456,7 @@ async fn try_fallback_providers(
     body: &Value,
     accept_header: &str,
     original_model: &str,
+    base_url_override: Option<&str>,
 ) -> Result<reqwest::Response, GatewayError> {
     let fallback_candidates = vec![
         "openrouter", "together", "groq", "anthropic", "openai", "gemini", "mistral", "deepseek"
@@ -481,7 +485,7 @@ async fn try_fallback_providers(
             &key_entry.decrypted_key,
             &fallback_body,
             accept_header,
-            None,
+            base_url_override,
         ).await {
             Ok(response) => {
                 let status = response.status().as_u16();

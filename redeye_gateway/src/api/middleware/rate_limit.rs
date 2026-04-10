@@ -28,14 +28,8 @@ const RATE_LIMIT_LUA: &str = r#"
     return current
 "#;
 
-pub async fn rate_limit_middleware(
-    State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    request: Request<Body>,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    // Extract identifier: prefer x-tenant-id if present and valid, otherwise use peer IP
+
+pub fn extract_identifiers(headers: &HeaderMap, addr: &SocketAddr) -> (String, String) {
     let tenant_id = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
@@ -47,6 +41,26 @@ pub async fn rate_limit_middleware(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "anon_user".to_string());
+
+    (tenant_id, user_id)
+}
+
+pub async fn rate_limit_middleware(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // ConnectInfo is only available with a real TcpListener (not in oneshot tests).
+    // Gracefully fall back to a loopback addr so in-process integration tests work.
+    let fallback_addr = SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0);
+    let addr = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0)
+        .unwrap_or(fallback_addr);
+
+    let headers = request.headers().clone();
+    let (tenant_id, user_id) = extract_identifiers(&headers, &addr);
 
     let redis_key = format!("rl:{}:u:{}", tenant_id, user_id);
 
@@ -94,4 +108,36 @@ pub async fn rate_limit_middleware(
     h.insert("x-ratelimit-reset", HeaderValue::from(ttl));
 
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn test_success_extract_identifiers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-tenant-id", HeaderValue::from_static("tenant_123"));
+        headers.insert("x-user-id", HeaderValue::from_static("user_456"));
+        
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let (tenant, user) = extract_identifiers(&headers, &addr);
+        
+        assert_eq!(tenant, "tenant_123");
+        assert_eq!(user, "user_456");
+    }
+
+    #[test]
+    fn test_failure_handling_missing_headers() {
+        let headers = HeaderMap::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 8080);
+        
+        // Tenant ID missing -> fallback to IP address
+        // User ID missing -> fallback to "anon_user"
+        let (tenant, user) = extract_identifiers(&headers, &addr);
+        
+        assert_eq!(tenant, "192.168.1.100");
+        assert_eq!(user, "anon_user");
+    }
 }

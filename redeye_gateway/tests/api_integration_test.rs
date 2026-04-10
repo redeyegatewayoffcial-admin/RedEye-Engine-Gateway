@@ -64,6 +64,8 @@ async fn setup_test_environment() -> TestEnv {
     std::env::set_var("AES_MASTER_KEY", "01234567890123456789012345678901");
     // Also inject generic dev db credentials to appease sqlx::migrate! at compile-time/runtime defaults if needed
     std::env::set_var("JWT_SECRET", "secret");
+
+    
     // 2. Start Ephemeral Containers
     let redis_node = Redis::default().start().await.expect("Failed to start Redis container");
     let postgres_node = Postgres::default().start().await.expect("Failed to start Postgres container");
@@ -90,20 +92,21 @@ async fn setup_test_environment() -> TestEnv {
         .execute(&db_pool).await.expect("Failed to create tenants table");
     sqlx::query("CREATE TABLE api_keys (tenant_id UUID, key_hash TEXT, is_active BOOLEAN)")
         .execute(&db_pool).await.expect("Failed to create api_keys table");
-    sqlx::query("CREATE TABLE llm_routes (tenant_id UUID, provider TEXT, encrypted_api_key BYTEA)")
-        .execute(&db_pool).await.expect("Failed to create llm_routes table");
+    // provider_keys is the table queried by fetch_tenant_provider_keys in llm_router.rs
+    sqlx::query("CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, encrypted_key BYTEA, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name))")
+        .execute(&db_pool).await.expect("Failed to create provider_keys table");
     
     // 5. Database Fixture setup for an authorized tenant
     let tenant_id = Uuid::new_v4().to_string();
     let encrypted_key = encrypt_test_api_key("sk-mock-openai-key-123", "01234567890123456789012345678901");
     
-    sqlx::query("INSERT INTO llm_routes (tenant_id, provider, encrypted_api_key) VALUES ($1, $2, $3)")
+    sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)")
         .bind(Uuid::parse_str(&tenant_id).unwrap())
         .bind("openai")
         .bind(&encrypted_key)
         .execute(&db_pool)
         .await
-        .expect("Failed to insert mock llm route fixture");
+        .expect("Failed to insert mock openai provider key fixture");
         
     // 6. Spawn WireMock
     let mock_server = MockServer::start().await;
@@ -308,4 +311,106 @@ async fn test_rate_limit_exhaustion() {
     
     assert_eq!(successes, rate_max, "Exactly rate_limit_max requests should succeed");
     assert_eq!(too_many, 1, "Exactly 1 request should be rate limited");
+}
+
+/// Dynamic Hot-Swap Routine Evaluation: Circuit Breaks OpenAI -> Routes Anthropic seamlessly
+#[tokio::test]
+async fn test_hot_swap_failover() {
+    let env = setup_test_environment().await;
+    let app = create_router(env.state.clone());
+    let jwt = generate_test_jwt(&env.tenant_id);
+
+    // 1. Reset mock server to drop the default 200 OK behaviors installed by the test env builder
+    env.mock_server.reset().await;
+    
+    // 2. Remount Compliance Redaction Service (Required in pipeline)
+    Mock::given(method("POST"))
+        .and(path("/api/v1/compliance/redact"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "sanitized_payload": {
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hi fallback"}]
+            }
+        })))
+        .mount(&env.mock_server)
+        .await;
+
+    // 3. Mount Primary Provider (OpenAI) returning 503 Service Unavailable triggering circuit break
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("OpenAI is overloaded"))
+        .mount(&env.mock_server)
+        .await;
+
+    // 4. Mount Secondary Provider (Anthropic Fallback)
+    // execute_provider_request builds: {base_url}/messages where base_url = mock_server.uri()
+    // So the effective path is /messages (not /v1/messages)
+    Mock::given(method("POST"))
+        .and(path("/messages"))
+        .respond_with(ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello from Anthropic Fallback Mock!"
+                    }
+                ],
+                "model": "claude-3-opus-20240229",
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 15
+                }
+            }))
+        )
+        .mount(&env.mock_server)
+        .await;
+        
+    // 5. Ensure Anthropic API Key is in DB for this tenant (hot-swap fallback target)
+    let encrypted_anthropic_key = encrypt_test_api_key("sk-mock-anthropic-key-456", "01234567890123456789012345678901");
+    sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3")
+        .bind(uuid::Uuid::parse_str(&env.tenant_id).unwrap())
+        .bind("anthropic")
+        .bind(&encrypted_anthropic_key)
+        .execute(&env.state.db_pool)
+        .await
+        .unwrap();
+
+    // The client calls standard OpenAI route mapped via redeye universal schema
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions") 
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", jwt))
+        .body(Body::from(
+            serde_json::json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hi fallback"}]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK, "Expected Hot-Swap to recover with 200 OK");
+    
+    let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let resp_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    
+    // The fallback Anthropic response may be in OpenAI-translated format (choices[0].message.content)
+    // or raw Anthropic format (content[0].text). Accept either.
+    let content = resp_json["choices"][0]["message"]["content"]
+        .as_str()
+        .or_else(|| resp_json["content"][0]["text"].as_str())
+        .expect("Expected content in either OpenAI or Anthropic response format");
+    
+    assert!(
+        content.contains("Anthropic") || content.contains("Hello"),
+        "Expected Anthropic fallback content, got: {}",
+        content
+    );
 }

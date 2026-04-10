@@ -2385,6 +2385,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "hex",
+ "http-body-util",
  "jsonwebtoken",
  "oauth2",
  "rand 0.8.5",
@@ -2393,11 +2394,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
  "tokio",
+ "tower",
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2425,16 +2430,21 @@ version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "axum 0.8.8",
+ "http-body-util",
  "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tower-http 0.6.8",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2480,16 +2490,21 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.8",
  "dotenvy",
+ "http-body-util",
  "redis 0.27.6",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
  "tower-http 0.6.8",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
