@@ -1,0 +1,4 @@
+# cargo-fuzz artifacts — DO NOT COMMIT
+target/
+artifacts/
+coverage/

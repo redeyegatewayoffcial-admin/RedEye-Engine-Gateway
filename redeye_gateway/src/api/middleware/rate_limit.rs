@@ -70,15 +70,18 @@ pub async fn rate_limit_middleware(
     let limit = state.rate_limit_max;
     let window_secs = state.rate_limit_window;
 
-    let current_requests: i64 = script
+    let current_requests: i64 = match script
         .key(&redis_key)
         .arg(window_secs)
         .invoke_async(&mut conn)
         .await
-        .map_err(|e| {
-            error!(error = %e, "Redis rate limit script execution failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "Redis rate limit failed, bypassing cache (fail-open)");
+            0
+        }
+    };
 
     debug!(tenant_id = %tenant_id, user_id = %user_id, requests = current_requests, limit = limit, "Rate limit check");
 

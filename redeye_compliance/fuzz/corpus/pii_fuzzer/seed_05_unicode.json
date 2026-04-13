@@ -1,0 +1,1 @@
+{"model":"gpt-4o","messages":[{"role":"user","content":"Weird chars: \uFFFD\u0000\uFFFF SSN 123-45-6789 email test@example.com"}]}

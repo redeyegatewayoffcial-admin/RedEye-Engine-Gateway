@@ -7,5 +7,6 @@ members = [
     "redeye_cache",
     "redeye_tracer",
     "redeye_compliance",
+    "redeye_compliance/fuzz",
     "redeye_auth"
 ]

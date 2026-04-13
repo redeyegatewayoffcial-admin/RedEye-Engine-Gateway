@@ -87,11 +87,21 @@ impl axum::response::IntoResponse for GatewayError {
                 "INTERNAL_ERROR",
                 "An internal error occurred while building the response.",
             ),
-            GatewayError::UpstreamUnreachable(_) => (
-                StatusCode::BAD_GATEWAY,
-                "UPSTREAM_ERROR",
-                "The upstream LLM service is currently unreachable.",
-            ),
+            GatewayError::UpstreamUnreachable(e) => {
+                if e.is_timeout() {
+                    (
+                        StatusCode::GATEWAY_TIMEOUT,
+                        "GATEWAY_TIMEOUT",
+                        "The upstream request timed out.",
+                    )
+                } else {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "UPSTREAM_ERROR",
+                        "The upstream LLM service is currently unreachable.",
+                    )
+                }
+            },
             GatewayError::ComplianceFailure(_) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "COMPLIANCE_ERROR",

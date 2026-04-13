@@ -306,7 +306,7 @@ pub async fn route_chat_completion_with_fallback(
         base_url_override,
     ).await;
 
-    match primary_result {
+    let primary_error = match primary_result {
         Ok(response) => {
             let status = response.status().as_u16();
             if !is_retryable_error(status) {
@@ -317,6 +317,7 @@ pub async fn route_chat_completion_with_fallback(
                 status = status,
                 "Primary provider failed with retryable error, attempting fallback"
             );
+            GatewayError::ResponseBuild(format!("Primary provider returned {}", status))
         }
         Err(e) => {
             warn!(
@@ -324,8 +325,9 @@ pub async fn route_chat_completion_with_fallback(
                 error = %e,
                 "Primary provider unreachable, attempting fallback"
             );
+            e
         }
-    }
+    };
 
     try_fallback_providers(
         state,
@@ -335,6 +337,7 @@ pub async fn route_chat_completion_with_fallback(
         accept_header,
         model,
         base_url_override,
+        primary_error,
     ).await
 }
 
@@ -457,6 +460,7 @@ async fn try_fallback_providers(
     accept_header: &str,
     original_model: &str,
     base_url_override: Option<&str>,
+    mut final_error: GatewayError,
 ) -> Result<reqwest::Response, GatewayError> {
     let fallback_candidates = vec![
         "openrouter", "together", "groq", "anthropic", "openai", "gemini", "mistral", "deepseek"
@@ -501,6 +505,7 @@ async fn try_fallback_providers(
                     status = status,
                     "Fallback provider also failed"
                 );
+                final_error = GatewayError::ResponseBuild(format!("Fallback provider returned {}", status));
             }
             Err(e) => {
                 warn!(
@@ -508,11 +513,12 @@ async fn try_fallback_providers(
                     error = %e,
                     "Fallback provider unreachable"
                 );
+                final_error = e;
             }
         }
     }
 
-    Err(GatewayError::ResponseBuild("All LLM providers failed".into()))
+    Err(final_error)
 }
 
 pub fn extract_model(body: &Value) -> &str {

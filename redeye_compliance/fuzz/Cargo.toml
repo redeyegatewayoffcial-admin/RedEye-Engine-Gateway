@@ -1,0 +1,50 @@
+[package]
+name = "redeye_compliance_fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# The libFuzzer glue crate — must match the version cargo-fuzz expects.
+libfuzzer-sys = "0.4"
+
+# Drive the async PiiEngine::scan without spinning up a real runtime binary.
+tokio = { version = "1.0", features = ["rt", "macros"] }
+
+# We access the engine's public API through the library target.
+redeye_compliance = { path = "..", features = [] }
+
+# Needed to construct arbitrary serde_json::Value trees from raw bytes.
+serde_json = "1.0"
+
+# Fast, deterministic arbitrary data generation — lets the fuzzer build
+# structured JSON instead of purely random bytes (structure-aware fuzzing).
+arbitrary = { version = "1", features = ["derive"] }
+
+[[bin]]
+name = "pii_fuzzer"
+path = "fuzz_targets/pii_fuzzer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "json_depth_fuzzer"
+path = "fuzz_targets/json_depth_fuzzer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "regex_fuzzer"
+path = "fuzz_targets/regex_fuzzer.rs"
+test = false
+doc = false
+
+# ----- profile overrides -----
+# Optimise for coverage-guided speed; keep debug info for stack traces.
+[profile.release]
+debug = 1
+opt-level = 3
+lto = "thin"
