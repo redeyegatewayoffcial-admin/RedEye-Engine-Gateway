@@ -1,0 +1,558 @@
+openapi: 3.1.0
+info:
+  title: RedEye AI Engine API
+  version: 1.0.0
+  description: OpenAPI specification for the RedEye AI Engine. Includes endpoints for the Gateway proxy, Auth workspace and key management, Tracer telemetry ingestion, Compliance PII redaction, and Semantic Cache services.
+servers:
+  - url: http://localhost:8080
+    description: Gateway Service
+  - url: http://localhost:8081
+    description: Auth Service
+  - url: http://localhost:8082
+    description: Tracer Service
+  - url: http://localhost:8083
+    description: Compliance Service
+  - url: http://localhost:8084
+    description: Cache Service
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ChatCompletionRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          example: "meta-llama/llama-3.3-70b-instruct"
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+                example: "user"
+              content:
+                type: string
+                example: "Hello world"
+    
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              message:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  content:
+                    type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        tenant_id:
+          type: string
+        workspace_name:
+          type: string
+        onboarding_complete:
+          type: boolean
+        token:
+          type: string
+
+    SignupRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+        company_name:
+          type: string
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+
+    OnboardRequest:
+      type: object
+      properties:
+        account_type:
+          type: string
+        provider:
+          type: string
+        api_key:
+          type: string
+        workspace_name:
+          type: string
+
+    ProviderKeyRequest:
+      type: object
+      properties:
+        provider_name:
+          type: string
+        provider_api_key:
+          type: string
+          
+    OtpRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          
+    OtpVerifyRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        otp_code:
+          type: string
+
+    TraceIngestPayload:
+      type: object
+      properties:
+        trace_id:
+          type: string
+        session_id:
+          type: string
+        tenant_id:
+          type: string
+        model:
+          type: string
+        status:
+          type: integer
+        latency_ms:
+          type: integer
+        total_tokens:
+          type: integer
+        cache_hit:
+          type: boolean
+        prompt_content:
+          type: string
+        response_content:
+          type: string
+
+    ComplianceRedactPayload:
+      type: object
+      properties:
+        text:
+          type: string
+
+    CacheLookupRequest:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        model:
+          type: string
+        prompt:
+          type: string
+
+    CacheStoreRequest:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        model:
+          type: string
+        prompt:
+          type: string
+        response_content:
+          type: string
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health Check
+      tags: [Gateway]
+      security: []
+      servers:
+        - url: http://localhost:8080
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  version:
+                    type: string
+
+  /v1/chat/completions:
+    post:
+      summary: Proxy an LLM chat completion request
+      tags: [Gateway]
+      servers:
+        - url: http://localhost:8080
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-redeye-routing-strategy
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: Successful Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+        "429":
+          description: Rate limit exceeded
+        "500":
+          description: Internal Server Error
+
+  /v1/admin/metrics:
+    get:
+      summary: Live gateway usage metrics summary
+      tags: [Gateway]
+      servers:
+        - url: http://localhost:8080
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /v1/admin/metrics/usage:
+    get:
+      summary: Gateway usage token metrics 
+      tags: [Gateway]
+      servers:
+        - url: http://localhost:8080
+      responses:
+        "200":
+          description: OK
+
+  /v1/admin/traces:
+    get:
+      summary: View trace logs from gateway
+      tags: [Gateway]
+      servers:
+        - url: http://localhost:8080
+      responses:
+        "200":
+          description: OK
+
+  /v1/admin/billing/breakdown:
+    get:
+      summary: Admin billing breakdown
+      tags: [Gateway]
+      servers:
+        - url: http://localhost:8080
+      responses:
+        "200":
+          description: OK
+
+  /v1/auth/signup:
+    post:
+      summary: Register a new workspace tenant and user
+      tags: [Auth]
+      security: []
+      servers:
+        - url: http://localhost:8081
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupRequest"
+      responses:
+        "200":
+          description: Successfully signed up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /v1/auth/login:
+    post:
+      summary: Authenticate user with password
+      tags: [Auth]
+      security: []
+      servers:
+        - url: http://localhost:8081
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /v1/auth/refresh:
+    post:
+      summary: Refresh JWT access token
+      tags: [Auth]
+      security: []
+      servers:
+        - url: http://localhost:8081
+      responses:
+        "200":
+          description: Refreshed
+
+  /v1/auth/onboard:
+    post:
+      summary: Setup LLM provider keys and generate virtual RedEye key
+      tags: [Auth]
+      servers:
+        - url: http://localhost:8081
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OnboardRequest"
+      responses:
+        "200":
+          description: Onboarding complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /v1/auth/api-keys:
+    get:
+      summary: List virtual API keys for the workspace
+      tags: [Auth]
+      servers:
+        - url: http://localhost:8081
+      responses:
+        "200":
+          description: OK
+          
+  /v1/auth/provider-keys:
+    get:
+      summary: List upstream provider API keys
+      tags: [Auth]
+      servers:
+        - url: http://localhost:8081
+      responses:
+        "200":
+          description: OK
+    post:
+      summary: Add or Update an upstream provider API key
+      tags: [Auth]
+      servers:
+        - url: http://localhost:8081
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderKeyRequest"
+      responses:
+        "200":
+          description: Added
+
+  /v1/auth/request-otp:
+    post:
+      summary: Send a one-time magic link/code
+      tags: [Auth]
+      security: []
+      servers:
+        - url: http://localhost:8081
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OtpRequest"
+      responses:
+        "200":
+          description: OK
+
+  /v1/auth/verify-otp:
+    post:
+      summary: Verify the OTP
+      tags: [Auth]
+      security: []
+      servers:
+        - url: http://localhost:8081
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OtpVerifyRequest"
+      responses:
+        "200":
+          description: Verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /v1/traces/ingest:
+    post:
+      summary: Ingest trace payload from gateway
+      tags: [Tracer]
+      servers:
+        - url: http://localhost:8082
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TraceIngestPayload"
+      responses:
+        "200":
+          description: OK
+
+  /v1/traces:
+    get:
+      summary: Query traces by session
+      tags: [Tracer]
+      servers:
+        - url: http://localhost:8082
+      parameters:
+        - name: session_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+          
+  /v1/audit:
+    get:
+      summary: Query compliance audit logs by tenant
+      tags: [Tracer]
+      servers:
+        - url: http://localhost:8082
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: OK
+
+  /v1/compliance/redact:
+    post:
+      summary: Applies PII redaction rules to a given prompt payload
+      tags: [Compliance]
+      servers:
+        - url: http://localhost:8083
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                payload:
+                  $ref: "#/components/schemas/ComplianceRedactPayload"
+      responses:
+        "200":
+          description: Redacted payload
+          
+  /v1/cache/lookup:
+    post:
+      summary: REST fallback to check semantic cache
+      tags: [Cache]
+      servers:
+        - url: http://localhost:8084
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CacheLookupRequest"
+      responses:
+        "200":
+          description: OK
+
+  /v1/cache/store:
+    post:
+      summary: Store LLM completion into Semantic Cache
+      tags: [Cache]
+      servers:
+        - url: http://localhost:8084
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CacheStoreRequest"
+      responses:
+        "201":
+          description: Stored
