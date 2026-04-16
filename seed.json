@@ -1,6 +1,0 @@
-{
-  "tenant_id": "cachetest4",
-  "model": "gpt-3.5-turbo",
-  "prompt": "{\"model\":\"gpt-3.5-turbo\",\"messages\":[{\"role\":\"user\",\"content\":\"Explain quantum computing in one sentence.\"}]}",
-  "response_content": "Quantum computing processes complex logic exponentially faster."
-}

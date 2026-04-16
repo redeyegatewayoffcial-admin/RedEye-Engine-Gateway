@@ -19,12 +19,13 @@ use redeye_gateway::infrastructure;
 use redeye_gateway::usecases;
 
 use domain::models::AppState;
+use infrastructure::cache_client::CacheGrpcClient;
 
 // ── Config defaults ───────────────────────────────────────────────────────────
 
 const DEFAULT_PORT: &str = "8080";
 const DEFAULT_TRACER_URL: &str = "http://localhost:8082";
-const DEFAULT_CACHE_URL: &str = "http://localhost:8081";
+const DEFAULT_CACHE_GRPC_ENDPOINT: &str = "http://localhost:50051";
 const DEFAULT_COMPLIANCE_URL: &str = "http://localhost:8083";
 const DEFAULT_RATE_LIMIT_MAX: &str = "60";
 const DEFAULT_RATE_LIMIT_WINDOW: &str = "60";
@@ -64,15 +65,15 @@ async fn main() {
         .init();
 
     // ── Config ────────────────────────────────────────────────────────────────
-    let port: u16            = parse_env("GATEWAY_PORT", DEFAULT_PORT);
-    let redis_url            = require_env("REDIS_URL");
-    let clickhouse_url       = require_env("CLICKHOUSE_URL");
-    let db_url               = require_env("DATABASE_URL");
-    let tracer_url           = optional_env("TRACER_URL", DEFAULT_TRACER_URL);
-    let cache_url            = optional_env("CACHE_URL", DEFAULT_CACHE_URL);
-    let compliance_url       = optional_env("COMPLIANCE_URL", DEFAULT_COMPLIANCE_URL);
-    let dashboard_url        = optional_env("DASHBOARD_URL", "http://localhost:5173");
-    let rate_limit_max: u32  = parse_env("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX);
+    let port: u16              = parse_env("GATEWAY_PORT", DEFAULT_PORT);
+    let redis_url              = require_env("REDIS_URL");
+    let clickhouse_url         = require_env("CLICKHOUSE_URL");
+    let db_url                 = require_env("DATABASE_URL");
+    let tracer_url             = optional_env("TRACER_URL", DEFAULT_TRACER_URL);
+    let cache_grpc_endpoint    = optional_env("CACHE_GRPC_ENDPOINT", DEFAULT_CACHE_GRPC_ENDPOINT);
+    let compliance_url         = optional_env("COMPLIANCE_URL", DEFAULT_COMPLIANCE_URL);
+    let dashboard_url          = optional_env("DASHBOARD_URL", "http://localhost:5173");
+    let rate_limit_max: u32    = parse_env("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX);
     let rate_limit_window: u32 = parse_env("RATE_LIMIT_WINDOW_SECS", DEFAULT_RATE_LIMIT_WINDOW);
 
     // ── Infrastructure clients ────────────────────────────────────────────────
@@ -97,9 +98,29 @@ async fn main() {
     // ── App state ─────────────────────────────────────────────────────────────
     let (telemetry_tx, mut telemetry_rx) = tokio::sync::mpsc::channel(5000);
 
+    // ── gRPC Channel (L2 Cache) — built once, pooled, fail-open ──────────────
+    let cache_grpc_client = match tonic::transport::Channel::from_shared(cache_grpc_endpoint.clone())
+        .map(|endpoint| endpoint.connect_lazy())
+    {
+        Ok(channel) => {
+            info!(endpoint = %cache_grpc_endpoint, "gRPC channel to L2 cache established (lazy)");
+            CacheGrpcClient::new(channel)
+        }
+        Err(e) => {
+            // Non-fatal: gateway can still serve requests; all cache calls will fail-open.
+            tracing::warn!(error = %e, endpoint = %cache_grpc_endpoint, "Failed to build gRPC channel — cache will be bypassed");
+            // Fall back to a dummy channel pointing at a no-op loopback.
+            let fallback = tonic::transport::Channel::from_static("http://127.0.0.1:0").connect_lazy();
+            CacheGrpcClient::new(fallback)
+        }
+    };
+
+    let l1_cache = Arc::new(infrastructure::l1_cache::L1Cache::new(500 * 1024 * 1024)
+        .expect("Failed to initialize Hybrid L1 Cache"));
+
     let state = Arc::new(AppState {
         http_client: http_client.clone(),
-        cache_url: cache_url.clone(),
+        cache_grpc_client,
         compliance_url,
         redis_conn,
         db_pool,
@@ -110,6 +131,7 @@ async fn main() {
         dashboard_url,
         llm_api_base_url: None,
         telemetry_tx,
+        l1_cache,
     });
 
     // ── Background Workers ────────────────────────────────────────────────────

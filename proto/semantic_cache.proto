@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package semantic_cache;
+
+// ── Service Definition ──────────────────────────────────────────────────────
+
+service CacheService {
+  // Look up a prompt in the semantic cache. Always returns a response;
+  // `hit = false` means a cache miss and the caller should query the LLM.
+  rpc LookupCache(CacheRequest) returns (CacheResponse);
+
+  // Store a prompt → response pair in the semantic cache.
+  // Fire-and-forget: gateway imposes a client-side 2s deadline.
+  rpc StoreCache(StoreRequest) returns (StoreAck);
+}
+
+// ── Request / Response Messages ─────────────────────────────────────────────
+
+message CacheRequest {
+  string tenant_id  = 1;
+  string model      = 2;
+  string prompt     = 3;
+  string trace_id   = 4;
+  string session_id = 5;
+}
+
+message CacheResponse {
+  bool   hit     = 1;
+  string content = 2; // Non-empty only when hit = true
+}
+
+message StoreRequest {
+  string tenant_id        = 1;
+  string model            = 2;
+  string prompt           = 3;
+  string response_content = 4;
+  string trace_id         = 5;
+  string session_id       = 6;
+}
+
+message StoreAck {
+  bool stored = 1;
+}

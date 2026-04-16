@@ -58,7 +58,17 @@ export function DashboardView() {
   const { data: metrics, error, isLoading } = useSWR<Metrics>(
     'http://localhost:8080/v1/admin/metrics',
     fetcher,
-    { refreshInterval: 3000, errorRetryCount: 3 }
+    {
+      refreshInterval: 3000,
+      errorRetryCount: 3,
+      // Stop retrying immediately on 401 — user is not logged in.
+      onErrorRetry: (error, _key, _config, revalidate, { retryCount }) => {
+        const msg: string = error?.message ?? '';
+        if (msg.includes('401') || msg.includes('403')) return;
+        if (retryCount >= 3) return;
+        setTimeout(() => revalidate({ retryCount }), 5000);
+      },
+    }
   );
 
   const {
@@ -67,7 +77,16 @@ export function DashboardView() {
   } = useSWR<UsageMetrics>(
     USAGE_METRICS_URL,
     fetchUsageMetrics,
-    { refreshInterval: 30_000, errorRetryCount: 3 }
+    {
+      refreshInterval: 30_000,
+      errorRetryCount: 3,
+      onErrorRetry: (error, _key, _config, revalidate, { retryCount }) => {
+        const msg: string = error?.message ?? '';
+        if (msg.includes('401') || msg.includes('403')) return;
+        if (retryCount >= 3) return;
+        setTimeout(() => revalidate({ retryCount }), 5000);
+      },
+    }
   );
 
   return (

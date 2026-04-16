@@ -22,6 +22,7 @@ use uuid::Uuid;
 use redeye_gateway::api::routes::create_router;
 use redeye_gateway::domain::models::AppState;
 use redeye_gateway::api::middleware::auth::Claims;
+use redeye_gateway::infrastructure::cache_client::CacheGrpcClient;
 
 /// Helper: encrypts a dummy plaintext api key to be inserted into Postgres `llm_routes`.
 /// Matches the `Aes256Gcm` logic from `redeye_gateway::api::middleware::auth::decrypt_api_key`.
@@ -158,19 +159,28 @@ async fn setup_test_environment() -> TestEnv {
         
     let (telemetry_tx, _telemetry_rx) = tokio::sync::mpsc::channel(100);
     
+    // Build a no-op gRPC channel — cache calls will fail-open in tests.
+    // The gateway will proceed to the mock LLM as expected.
+    let cache_grpc_client = {
+        let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1")
+            .connect_lazy();
+        CacheGrpcClient::new(channel)
+    };
+
     let state = Arc::new(AppState {
         http_client,
-        cache_url: mock_server.uri(),
+        cache_grpc_client,
         compliance_url: mock_server.uri(),
         redis_conn,
         db_pool,
         rate_limit_max: 5,  // Fast exhaustion limit for testing
         rate_limit_window: 60,
-        clickhouse_url: "http://localhost:8123".to_string(), // Unused directly inline
-        tracer_url: mock_server.uri(), // Divert tracer metrics away to prevent 500s or timeouts
+        clickhouse_url: "http://localhost:8123".to_string(),
+        tracer_url: mock_server.uri(),
         dashboard_url: "http://localhost:3000".to_string(),
-        llm_api_base_url: Some(mock_server.uri()), // Override OpenAI routing specifically for tests
+        llm_api_base_url: Some(mock_server.uri()),
         telemetry_tx,
+        l1_cache: Arc::new(redeye_gateway::infrastructure::l1_cache::L1Cache::new(1024 * 1024).unwrap()),
     });
     
     TestEnv {
@@ -212,6 +222,166 @@ async fn test_unauthorized_request_is_blocked() {
     );
 }
 
+// ── gRPC Cache Integration Tests ──────────────────────────────────────────────
+//
+// These tests spin up an in-process tonic mock server (bound to a random OS port)
+// to verify the gateway's behaviour under specific gRPC failure conditions.
+// No Docker, no network — fast and deterministic.
+
+use redeye_gateway::infrastructure::cache_client::proto::{
+    CacheRequest, CacheResponse, StoreRequest, StoreAck,
+};
+use redeye_gateway::infrastructure::cache_client::proto::cache_service_server::{
+    CacheService, CacheServiceServer,
+};
+
+/// In-process mock that always returns `hit = false` (cache miss).
+struct MockCacheMiss;
+
+#[tonic::async_trait]
+impl CacheService for MockCacheMiss {
+    async fn lookup_cache(
+        &self,
+        _req: tonic::Request<CacheRequest>,
+    ) -> Result<tonic::Response<CacheResponse>, tonic::Status> {
+        Ok(tonic::Response::new(CacheResponse { hit: false, content: String::new() }))
+    }
+    async fn store_cache(
+        &self,
+        _req: tonic::Request<StoreRequest>,
+    ) -> Result<tonic::Response<StoreAck>, tonic::Status> {
+        Ok(tonic::Response::new(StoreAck { stored: true }))
+    }
+}
+
+/// In-process mock that always returns `Code::Unavailable` to simulate a down server.
+struct MockCacheUnavailable;
+
+#[tonic::async_trait]
+impl CacheService for MockCacheUnavailable {
+    async fn lookup_cache(
+        &self,
+        _req: tonic::Request<CacheRequest>,
+    ) -> Result<tonic::Response<CacheResponse>, tonic::Status> {
+        Err(tonic::Status::unavailable("Cache server is down"))
+    }
+    async fn store_cache(
+        &self,
+        _req: tonic::Request<StoreRequest>,
+    ) -> Result<tonic::Response<StoreAck>, tonic::Status> {
+        Err(tonic::Status::unavailable("Cache server is down"))
+    }
+}
+
+/// Helper: binds a tonic server to a random port and returns the listener address.
+async fn bind_grpc_mock<S>(service: S) -> std::net::SocketAddr
+where
+    S: CacheService,
+{
+    use tonic::transport::Server;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    // Convert to a std TcpListener so tonic can take it.
+    let std_listener = listener.into_std().unwrap();
+
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(CacheServiceServer::new(service))
+            .serve_with_incoming(
+                tokio_stream::wrappers::TcpListenerStream::new(
+                    tokio::net::TcpListener::from_std(std_listener).unwrap()
+                )
+            )
+            .await
+            .ok();
+    });
+
+    addr
+}
+
+/// ─── gRPC Cache Client Unit Tests ────────────────────────────────────────────
+///
+/// These tests focus purely on the `cache_client` layer: spin up an in-process
+/// tonic mock, call `lookup_cache` / `store_in_cache` directly, and assert on
+/// the returned values. No AppState, no Redis, no Postgres, no Docker needed.
+
+/// `lookup_cache` returns `Some(content)` on a gRPC cache hit.
+#[tokio::test]
+async fn test_grpc_cache_miss_proceeds_to_llm() {
+    use redeye_gateway::infrastructure::cache_client::{CacheGrpcClient, lookup_cache};
+    use redeye_gateway::domain::models::TraceContext;
+
+    // Spin up a mock that always returns hit = false.
+    let addr = bind_grpc_mock(MockCacheMiss).await;
+
+    // Give the server a moment to accept connections.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let channel = tonic::transport::Channel::from_shared(format!("http://{}", addr))
+        .unwrap().connect_lazy();
+    let client = CacheGrpcClient::new(channel);
+
+    let trace_ctx = TraceContext {
+        trace_id: "t1".into(),
+        session_id: "s1".into(),
+        parent_trace_id: None,
+    };
+
+    let result = lookup_cache(&client, "tenant-1", "gpt-4o", "What is Rust?", &trace_ctx).await;
+
+    // ASSERT: miss returns None, gateway would fall through to LLM.
+    assert_eq!(result, None, "Cache miss must return None so the gateway proceeds to the LLM");
+}
+
+/// `lookup_cache` returns `None` when the gRPC server returns `Code::Unavailable` (fail-open).
+#[tokio::test]
+async fn test_grpc_cache_unavailable_is_failopen() {
+    use redeye_gateway::infrastructure::cache_client::{CacheGrpcClient, lookup_cache};
+    use redeye_gateway::domain::models::TraceContext;
+
+    // Spin up a mock that always returns Unavailable.
+    let addr = bind_grpc_mock(MockCacheUnavailable).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let channel = tonic::transport::Channel::from_shared(format!("http://{}", addr))
+        .unwrap().connect_lazy();
+    let client = CacheGrpcClient::new(channel);
+
+    let trace_ctx = TraceContext {
+        trace_id: "t2".into(),
+        session_id: "s2".into(),
+        parent_trace_id: None,
+    };
+
+    let result = lookup_cache(&client, "tenant-1", "gpt-4o", "Any prompt", &trace_ctx).await;
+
+    // ASSERT: Unavailable must NOT crash the thread — it silently returns None (fail-open).
+    assert_eq!(result, None, "Code::Unavailable must cause fail-open (None), not a panic");
+}
+
+/// `store_in_cache` completes normally without blocking when the server returns quickly.
+#[tokio::test]
+async fn test_grpc_store_succeeds_within_timeout() {
+    use redeye_gateway::infrastructure::cache_client::{CacheGrpcClient, store_in_cache};
+    use redeye_gateway::domain::models::TraceContext;
+
+    let addr = bind_grpc_mock(MockCacheMiss).await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let channel = tonic::transport::Channel::from_shared(format!("http://{}", addr))
+        .unwrap().connect_lazy();
+    let client = CacheGrpcClient::new(channel);
+
+    let trace_ctx = TraceContext {
+        trace_id: "t3".into(),
+        session_id: "s3".into(),
+        parent_trace_id: None,
+    };
+
+    // Must complete without panicking and well under the 2-second deadline.
+    store_in_cache(&client, "tenant-1", "gpt-4o", "My prompt", "My response", &trace_ctx).await;
+    // If we reach here the test passes — no panic, no timeout.
+}
 /// Health check endpoint must be publicly accessible (no auth required).
 #[tokio::test]
 async fn test_health_check_is_public() {

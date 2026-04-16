@@ -23,6 +23,7 @@ use uuid::Uuid;
 use redeye_gateway::api::middleware::auth::Claims;
 use redeye_gateway::api::routes::create_router;
 use redeye_gateway::domain::models::AppState;
+use redeye_gateway::infrastructure::cache_client::CacheGrpcClient;
 
 /// Helper: encrypts a dummy plaintext api key (matches AES logic in auth).
 fn encrypt_test_api_key(plaintext: &str, master_key: &str) -> Vec<u8> {
@@ -116,9 +117,15 @@ impl ChaosTestEnv {
 
         let (telemetry_tx, _telemetry_rx) = tokio::sync::mpsc::channel(100);
 
+        let cache_grpc_client = {
+            let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1")
+                .connect_lazy();
+            CacheGrpcClient::new(channel)
+        };
+
         let state = Arc::new(AppState {
             http_client,
-            cache_url: mock_server.uri(),
+            cache_grpc_client,
             compliance_url: mock_server.uri(),
             redis_conn,
             db_pool,
@@ -129,6 +136,7 @@ impl ChaosTestEnv {
             dashboard_url: "http://localhost:3000".to_string(),
             llm_api_base_url: Some(mock_server.uri()),
             telemetry_tx,
+            l1_cache: Arc::new(redeye_gateway::infrastructure::l1_cache::L1Cache::new(1024 * 1024).unwrap()),
         });
 
         Self {

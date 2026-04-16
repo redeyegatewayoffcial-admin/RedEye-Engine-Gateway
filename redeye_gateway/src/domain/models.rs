@@ -7,7 +7,9 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct AppState {
     pub http_client: reqwest::Client,
-    pub cache_url: String,
+    /// gRPC client to the L2 semantic cache (redeye_cache:50051).
+    /// Replaces the old `cache_url` String — the channel is pooled at startup.
+    pub cache_grpc_client: crate::infrastructure::cache_client::CacheGrpcClient,
     pub compliance_url: String,
     pub redis_conn: redis::aio::MultiplexedConnection,
     pub db_pool: sqlx::PgPool,
@@ -18,6 +20,7 @@ pub struct AppState {
     pub dashboard_url: String,
     pub llm_api_base_url: Option<String>,
     pub telemetry_tx: tokio::sync::mpsc::Sender<serde_json::Value>,
+    pub l1_cache: std::sync::Arc<crate::infrastructure::l1_cache::L1Cache>,
 }
 
 /// Trace context propagated through every request.

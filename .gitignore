@@ -1,12 +1,78 @@
+# ==============================================================================
+# RedEye AI Engine - Strict Production Gitignore
+# ==============================================================================
+
+# ── Rust / Cargo ─────────────────────────────────────────────────────────────
+# Removed the leading slash so it ignores target folders in ALL sub-directories
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# ── Node.js / Frontend ────────────────────────────────────────────────────────
 **/node_modules/
-**/target/
-**/audit/
+**/src-tauri/
+**/dist/
 **/build/
-**/.windsurf/
-**/.env
-**/*.exe
-**/*.msi
-**/*.pdb
-**/Prompt_temp.md/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+node_modules/
+.npm
+redeye_dashboard/dist/
+
+# ── Environment & Secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.cert
+
+# ── OS & IDE Files ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+.windsurf/
+
+# ── Logs & Debug ─────────────────────────────────────────────────────────────
+*.log
+logs/
+reports/
+audit/
+errors.txt
+logs.txt
+
+# ── Compiled Binaries & OS Artifacts ──────────────────────────────────────────
+*.exe
+*.dll
+*.so
+*.dylib
+*.msi
+*.pdb
+*.obj
+app.exe
+/now()
+/String
+/u64
+/usize
+
+# ── Tooling Artifacts ────────────────────────────────────────────────────────
 **/*aider/
-mnt/
+**/Prompt_temp.md/
+.fastembed_cache/
+
+# ── Infrastructure & Mounts ──────────────────────────────────────────────────
+/mnt/
+/data/
+/sqlite_data/
+/clickhouse_data/
+/postgres_data/
+/redis_data/
+/audit/
+/reports/
+/logs/

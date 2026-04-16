@@ -88,10 +88,16 @@ pub async fn auth_middleware(
     match token_opt {
         Some((token, true)) => handle_api_key(&state, &token, req, next).await,
         Some((token, false)) => handle_jwt(&token, req, next).await,
-        None => {
+    None => {
+        // Use debug level — unauthenticated dashboard polling on metrics endpoints
+        // is expected and not actionable. Only the proxy route (/v1/chat) warrants a warn.
+        if path.starts_with("/v1/chat") {
             tracing::warn!("Missing authentication credentials for {} {}", req.method(), path);
-            Err(StatusCode::UNAUTHORIZED)
+        } else {
+            tracing::debug!("Unauthenticated request to {} {} — returning 401", req.method(), path);
         }
+        Err(StatusCode::UNAUTHORIZED)
+    }
     }
 }
 

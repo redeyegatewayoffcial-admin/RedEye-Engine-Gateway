@@ -101,9 +101,18 @@ pub async fn execute_proxy(
     };
     let body = sanitized_storage.as_ref().unwrap_or(body);
 
-    // ── Stage 1: Semantic Cache Lookup ────────────────────────────────────────
+    // ── Stage 1: L1 Exact & Semantic Cache Check ──────────────────────────────
+    if let Some(cached_content) = state.l1_cache.get_exact(raw_prompt).await {
+        return handle_cache_hit(state, cached_content, tenant_id, model_name, raw_prompt, trace_ctx, start_time);
+    }
+
+    if let Some(cached_content) = state.l1_cache.get_semantic(raw_prompt).await {
+        return handle_cache_hit(state, cached_content, tenant_id, model_name, raw_prompt, trace_ctx, start_time);
+    }
+
+    // ── Stage 2: L2 gRPC Cache Check ──────────────────────────────────────────
     if let Some(cached_content) =
-        cache_client::lookup_cache(&state.http_client, &state.cache_url, tenant_id, model_name, raw_prompt, trace_ctx).await
+        cache_client::lookup_cache(&state.cache_grpc_client, tenant_id, model_name, raw_prompt, trace_ctx).await
     {
         return handle_cache_hit(state, cached_content, tenant_id, model_name, raw_prompt, trace_ctx, start_time);
     }
@@ -502,11 +511,25 @@ async fn fire_async_telemetry(
 
     // 3. Cache injection for successful misses
     if !cache_hit && status_code == 200 && !response_content.is_empty() {
-        cache_client::store_in_cache(
-            &state.http_client, &state.cache_url,
-            tenant_id, model_name, raw_prompt, &response_content, trace_ctx,
-        )
-        .await;
+        // Smart Token-based Routing & Background Sync
+        if tokens < 1000 {
+            // Save in BOTH L1 and L2
+            if let Err(e) = state.l1_cache.insert(raw_prompt, &response_content).await {
+                tracing::warn!("Failed to store in L1 cache: {}", e);
+            }
+            cache_client::store_in_cache(
+                &state.cache_grpc_client,
+                tenant_id, model_name, raw_prompt, &response_content, trace_ctx,
+            )
+            .await;
+        } else {
+            // Tokens >= 1000: Bulk response, L2 only to prevent L1 OOM
+            cache_client::store_in_cache(
+                &state.cache_grpc_client,
+                tenant_id, model_name, raw_prompt, &response_content, trace_ctx,
+            )
+            .await;
+        }
     }
 }
 

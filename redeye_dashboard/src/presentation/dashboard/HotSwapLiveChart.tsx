@@ -48,12 +48,31 @@ export const HotSwapLiveChart = () => {
   };
 
   useEffect(() => {
-    // Initial fetch
-    fetchData();
+    let intervalId: ReturnType<typeof setInterval>;
 
-    // Poll every 2 seconds
-    const interval = setInterval(fetchData, 2000);
-    return () => clearInterval(interval);
+    const fetchAndSchedule = async () => {
+      try {
+        const json = await fetcher(HOT_SWAPS_URL);
+        setData(json);
+        setError(null);
+      } catch (err: any) {
+        const message: string = err.message || 'An unknown error occurred.';
+        setError(message);
+        // Stop polling on 401 — user is unauthenticated; retrying is pointless
+        // and floods the gateway logs. The effect will re-run on re-mount (page navigation).
+        if (message.includes('401') || message.includes('Unauthorized')) {
+          clearInterval(intervalId);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Initial fetch
+    fetchAndSchedule();
+    // Poll every 2 seconds — cleared above on 401
+    intervalId = setInterval(fetchAndSchedule, 2000);
+    return () => clearInterval(intervalId);
   }, []);
 
   return (

@@ -55,7 +55,16 @@ export function SecurityView() {
   const { data, error, isLoading } = useSWR<SecurityData>(
     'http://localhost:8080/v1/admin/security/alerts',
     fetcher,
-    { refreshInterval: 5000, errorRetryCount: 3 },
+    {
+      refreshInterval: 5000,
+      errorRetryCount: 3,
+      onErrorRetry: (error, _key, _config, revalidate, { retryCount }) => {
+        const msg: string = error?.message ?? '';
+        if (msg.includes('401') || msg.includes('403')) return;
+        if (retryCount >= 3) return;
+        setTimeout(() => revalidate({ retryCount }), 5000);
+      },
+    },
   );
 
   return (
