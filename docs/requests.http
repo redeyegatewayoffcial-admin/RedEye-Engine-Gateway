@@ -1,0 +1,157 @@
+### RedEye AI Engine REST API Collection
+### Compatible with VS Code REST Client extension
+@base_url = http://localhost:8080
+@auth_url = http://localhost:8081
+@tracer_url = http://localhost:8082
+@compliance_url = http://localhost:8083
+@cache_url = http://localhost:8084
+@api_key = your_virtual_redeye_key
+@jwt_token = your_jwt_access_token
+@tenant_id = your_tenant_uuid
+
+### ==========================================
+### GATEWAY (Client facing)
+### ==========================================
+
+### Health Check
+GET {{base_url}}/health
+
+### Chat Completions Proxy
+POST {{base_url}}/v1/chat/completions
+Authorization: Bearer {{api_key}}
+x-tenant-id: {{tenant_id}}
+Content-Type: application/json
+
+{
+  "model": "openai:gpt-4",
+  "messages": [
+    { "role": "user", "content": "Hello, how are you today?" }
+  ]
+}
+
+### Admin - Metrics
+GET {{base_url}}/v1/admin/metrics
+Authorization: Bearer {{jwt_token}}
+
+### Admin - Usage
+GET {{base_url}}/v1/admin/metrics/usage
+Authorization: Bearer {{jwt_token}}
+
+### Admin - Traces
+GET {{base_url}}/v1/admin/traces
+Authorization: Bearer {{jwt_token}}
+
+### Admin - Billing
+GET {{base_url}}/v1/admin/billing/breakdown
+Authorization: Bearer {{jwt_token}}
+
+
+### ==========================================
+### AUTH SERVICE
+### ==========================================
+
+### Signup
+POST {{auth_url}}/v1/auth/signup
+Content-Type: application/json
+
+{
+  "email": "test@redeye.ai",
+  "password": "Password123!",
+  "company_name": "RedEye Labs"
+}
+
+### Login
+POST {{auth_url}}/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@redeye.ai",
+  "password": "Password123!"
+}
+
+### Refresh Token (Relies on cookies)
+POST {{auth_url}}/v1/auth/refresh
+
+### Onboard Tenant Strategy
+POST {{auth_url}}/v1/auth/onboard
+Authorization: Bearer {{jwt_token}}
+Content-Type: application/json
+
+{
+  "account_type": "individual",
+  "provider": "openai",
+  "api_key": "sk-your-openai-key-here",
+  "workspace_name": "Personal"
+}
+
+### List API Keys
+GET {{auth_url}}/v1/auth/api-keys
+Authorization: Bearer {{jwt_token}}
+
+### Request OTP
+POST {{auth_url}}/v1/auth/request-otp
+Content-Type: application/json
+
+{
+  "email": "test@redeye.ai"
+}
+
+### Verify OTP
+POST {{auth_url}}/v1/auth/verify-otp
+Content-Type: application/json
+
+{
+  "email": "test@redeye.ai",
+  "otp_code": "123456"
+}
+
+
+### ==========================================
+### COMPLIANCE SERVICE
+### ==========================================
+
+### Redact Prompt manually
+POST {{compliance_url}}/v1/compliance/redact
+Content-Type: application/json
+
+{
+  "text": "Call me at 917-555-0123"
+}
+
+### ==========================================
+### TRACER SERVICE
+### ==========================================
+
+### Ingest Trace manually
+POST {{tracer_url}}/v1/traces/ingest
+Content-Type: application/json
+
+{
+  "trace_id": "test-trace-abc",
+  "session_id": "test-sess",
+  "tenant_id": "{{tenant_id}}",
+  "model": "gpt-4",
+  "status": 200,
+  "latency_ms": 250,
+  "total_tokens": 12,
+  "cache_hit": false,
+  "prompt_content": "ping",
+  "response_content": "pong"
+}
+
+### Get Audit Logs
+GET {{tracer_url}}/v1/audit?tenant_id={{tenant_id}}&limit=10
+
+### ==========================================
+### CACHE SERVICE
+### ==========================================
+
+### Rest Cache Lookup
+POST {{cache_url}}/v1/cache/lookup
+Content-Type: application/json
+
+{
+  "tenant_id": "{{tenant_id}}",
+  "model": "gpt-4",
+  "prompt": "Will it rain tomorrow?"
+}
