@@ -42,7 +42,7 @@ describe('ApiKeysView Component', () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByText('API Keys & Providers')).toBeInTheDocument();
+    expect(screen.getByText('API Keys & Providers')).toBeInTheDocument(); 
     expect(await screen.findByText('Prod Key')).toBeInTheDocument();
     expect(await screen.findByText('openai')).toBeInTheDocument();
   });
