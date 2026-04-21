@@ -61,5 +61,6 @@ fn create_cors_layer() -> CorsLayer {
             axum::http::header::CONTENT_TYPE,
             axum::http::header::AUTHORIZATION,
             axum::http::header::ACCEPT,
+            "x-csrf-token".parse().unwrap(),
         ])
 }

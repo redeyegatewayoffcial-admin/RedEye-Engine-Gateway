@@ -20,7 +20,7 @@ const fetcher = async (url: string) => {
   // Authentication handled via HttpOnly cookies (credentials: 'include')
   const res = await fetch(url, { 
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' }
+    headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' }
   });
   if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
   return res.json();

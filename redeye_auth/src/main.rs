@@ -21,7 +21,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = setup_db_pool().await?;
 
     tracing::info!("Running SQLx database migrations");
-    sqlx::migrate!("./migrations")
+    let mut migrator = sqlx::migrate!("./migrations");
+    migrator.set_ignore_missing(true);
+    migrator
         .run(&pool)
         .await
         .map_err(|e| {

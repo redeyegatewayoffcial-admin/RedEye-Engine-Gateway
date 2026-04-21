@@ -29,6 +29,7 @@ async function fetchMetrics<T>(url: string): Promise<T> {
     credentials: 'include', // Sends HttpOnly auth cookies automatically
     headers: {
       'Content-Type': 'application/json',
+      'x-csrf-token': '1',
     },
   });
 

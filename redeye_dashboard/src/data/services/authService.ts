@@ -46,7 +46,7 @@ function mapUser(resp: AuthResponse): User {
 async function postJson<T>(url: string, body: unknown, _includeCredentials = false): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
     body: JSON.stringify(body),
     credentials: 'include',
   });
@@ -86,7 +86,7 @@ export const authService: IAuthUseCaseExtended = {
   ): Promise<User> {
     const res = await fetch(`${BASE_URL}/onboard`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
       credentials: 'include',
       body: JSON.stringify({
         account_type: accountType,
@@ -109,7 +109,7 @@ export const authService: IAuthUseCaseExtended = {
     try {
       const res = await fetch(`${BASE_URL}/refresh`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
         credentials: 'include' // Sends HttpOnly refresh_token cookie automatically
       });
 

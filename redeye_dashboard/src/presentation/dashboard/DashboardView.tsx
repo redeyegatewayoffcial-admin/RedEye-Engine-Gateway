@@ -31,7 +31,7 @@ const fetcher = async (url: string) => {
   // Authentication handled via HttpOnly cookies (credentials: 'include')
   const res = await fetch(url, { 
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' }
+    headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' }
   });
   if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
   return res.json();
@@ -182,7 +182,7 @@ export function DashboardView() {
                   await fetch('http://localhost:8080/v1/admin/toggle-chaos', {
                     method: 'POST',
                     credentials: 'include', // Sends HttpOnly cookies automatically
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' }
                   });
                 } catch (e) {
                   console.error('Failed to trigger chaos', e);

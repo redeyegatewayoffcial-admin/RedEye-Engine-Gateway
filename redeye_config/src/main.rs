@@ -50,7 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     tracing::info!("Running database migrations…");
-    sqlx::migrate!("./migrations")
+    let mut migrator = sqlx::migrate!("./migrations");
+    migrator.set_ignore_missing(true);
+    migrator
         .run(&pool)
         .await
         .map_err(|e| {

@@ -31,6 +31,7 @@ echo Starting Supporting Services (Cache, Compliance, Tracer)...
 start "RedEye-Cache" cmd /c "cargo run -p redeye_cache"
 start "RedEye-Compliance" cmd /c "cargo run -p redeye_compliance"
 start "RedEye-Tracer" cmd /c "cargo run -p redeye_tracer"
+start "RedEye-Config" cmd /c "cargo run -p redeye_config"
 
 :: 3. Frontend Dashboard
 echo [3/3] Launching React Dashboard...
