@@ -21,7 +21,13 @@ impl SemanticSearchUseCase {
 
     #[instrument(skip(self, req))]
     pub async fn check_cache(&self, req: &CacheLookupRequest) -> Result<Option<CachedResponse>, String> {
-        let ast_hash = Self::compute_ast_hash(&req.prompt);
+        // Bug 8 Fix: `compute_ast_hash` performs O(N) synchronous character iteration.
+        // For a 100k-token payload this blocks the Tokio executor, causing API starvation.
+        // `spawn_blocking` offloads it to Tokio's dedicated blocking thread pool.
+        let prompt_clone = req.prompt.clone();
+        let ast_hash = tokio::task::spawn_blocking(move || Self::compute_ast_hash(&prompt_clone))
+            .await
+            .map_err(|e| format!("AST hash task join error: {}", e))?;
         info!(ast_hash, "Computed Structural AST Hash");
 
         info!("Generating embedding for incoming prompt");
@@ -41,7 +47,11 @@ impl SemanticSearchUseCase {
 
     #[instrument(skip(self, req))]
     pub async fn store_response(&self, req: &CacheStoreRequest) -> Result<(), String> {
-        let ast_hash = Self::compute_ast_hash(&req.prompt);
+        // Bug 8 Fix: Same spawn_blocking guard for the store path.
+        let prompt_clone = req.prompt.clone();
+        let ast_hash = tokio::task::spawn_blocking(move || Self::compute_ast_hash(&prompt_clone))
+            .await
+            .map_err(|e| format!("AST hash task join error: {}", e))?;
 
         info!("Generating embedding for new prompt to cache");
         let embedding = self.openai_client.get_embeddings(&req.prompt).await.map_err(|e| e.to_string())?;

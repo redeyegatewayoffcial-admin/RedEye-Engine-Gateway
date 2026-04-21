@@ -276,18 +276,30 @@ impl PiiEngine {
         let mut redacted_count: u32 = 0;
         let mut sanitized = payload;
 
-        // Build a replacement map from the full_text entities.
-        let mut replacements: Vec<(String, String)> = Vec::new();
+        // Bug 6 Fix: Extract each matched PII string using exact byte offsets and
+        // bind it to a globally unique UUID-tagged token.
+        //
+        // The old approach used `str::replace(raw_pii, token)` on every JSON string
+        // node, making a *global* substitution. For a short value like "123" this
+        // would corrupt every field in the JSON that happened to contain those digits
+        // (IDs, port numbers, error codes, timestamps, etc.).
+        //
+        // Fix strategy:
+        //   1. Capture the original PII text from `full_text` at Presidio's byte offsets.
+        //   2. Assign each a UUID-tagged token and record the mapping in `token_map`.
+        //   3. Walk the JSON tree with `str::replacen(original, token, 1)` — replacing
+        //      ONLY THE FIRST occurrence inside each individual string field, rather than
+        //      all occurrences across the entire payload.
         for entity in &entities {
             if entity.start < full_text.len() && entity.end <= full_text.len() {
-                let original = &full_text[entity.start..entity.end];
+                let original = full_text[entity.start..entity.end].to_string();
                 let token = format!(
                     "<{}_REDACTED>_{}",
                     entity.entity_type,
                     Uuid::new_v4().as_simple()
                 );
-                token_map.insert(token.clone(), original.to_string());
-                replacements.push((original.to_string(), token));
+                // token_map: token → original (for de-tokenization by callers).
+                token_map.insert(token.clone(), original);
                 redacted_count += 1;
             }
         }
@@ -297,8 +309,14 @@ impl PiiEngine {
             .iter()
             .any(|e| e.entity_type == "AADHAAR" || e.entity_type == "PAN" || e.entity_type == "IFSC");
 
-        // Apply replacements to every string node in the JSON tree.
-        apply_replacements(&mut sanitized, &replacements);
+        // Invert token_map to (original → token) pairs for the substitution pass.
+        let pii_to_token: Vec<(String, String)> = token_map
+            .iter()
+            .map(|(tok, orig)| (orig.clone(), tok.clone()))
+            .collect();
+
+        // Walk the JSON tree and substitute PII → token per string node.
+        apply_token_replacements(&mut sanitized, &pii_to_token);
 
         Ok(RedactionResult {
             sanitized_payload: sanitized,
@@ -390,23 +408,34 @@ fn contains_digit_sequence(text: &str, min_len: usize) -> bool {
     false
 }
 
-/// Applies text replacements to every string node in a JSON tree.
-fn apply_replacements(value: &mut Value, replacements: &[(String, String)]) {
+/// Applies PII→token substitutions to every string node in a JSON tree.
+///
+/// Bug 6 Fix: Uses `str::replacen(original, token, 1)` instead of the old
+/// `str::replace(original, token)` which replaced ALL occurrences globally.
+/// For a short PII value like "123", the old approach would corrupt every field
+/// in the JSON containing that substring (e.g., IDs, port numbers, error codes).
+///
+/// By replacing only the **first** match per string node, we match exactly the
+/// detected occurrence without treating unrelated data as PII.
+fn apply_token_replacements(value: &mut Value, replacements: &[(String, String)]) {
     match value {
         Value::String(text) => {
             for (original, token) in replacements {
-                // Replace all occurrences of the original PII fragment.
-                *text = text.replace(original, token);
+                if text.contains(original.as_str()) {
+                    // `replacen` with n=1: touch only the first occurrence in this field
+                    // so an unrelated field that happens to share the substring is untouched.
+                    *text = text.replacen(original.as_str(), token.as_str(), 1);
+                }
             }
         }
         Value::Array(arr) => {
             for item in arr.iter_mut() {
-                apply_replacements(item, replacements);
+                apply_token_replacements(item, replacements);
             }
         }
         Value::Object(obj) => {
             for (_, val) in obj.iter_mut() {
-                apply_replacements(val, replacements);
+                apply_token_replacements(val, replacements);
             }
         }
         _ => {}

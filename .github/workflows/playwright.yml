@@ -1,0 +1,44 @@
+name: Playwright E2E Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  e2e-tests:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    
+    # Sets the working directory for all 'run' steps to the frontend project folder
+    defaults:
+      run:
+        working-directory: ./redeye_dashboard
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*' # Automatically uses the latest LTS version
+
+      - name: Install npm dependencies cleanly
+        run: npm ci
+
+      - name: Install Playwright Browsers and OS dependencies
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright test suite
+        run: npx playwright test
+
+      - name: Upload Playwright report and traces on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          # Paths for actions are relative to the repository root
+          path: redeye_dashboard/playwright-report/
+          retention-days: 14

@@ -11,6 +11,8 @@ Cargo.lock.bak
 # ── Node.js / Frontend ────────────────────────────────────────────────────────
 **/node_modules/
 **/src-tauri/
+**/playwright-report/
+**/test-results/
 **/dist/
 **/build/
 .eslintcache

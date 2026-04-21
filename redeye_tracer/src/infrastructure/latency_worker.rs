@@ -135,23 +135,34 @@ impl LatencyWorker {
         Ok(())
     }
 
-    /// Queries ClickHouse for P95 latency per `executed_provider` over the last 5 minutes.
+    /// Queries ClickHouse for P95 latency per `executed_provider` over the last
+    /// `interval_secs` seconds — exactly matching the polling cadence so each tick
+    /// reads only *new* rows with zero overlap.
+    ///
+    /// Bug 7 Fix: The original query used a hardcoded `INTERVAL 5 MINUTE` window
+    /// against a 10-second polling loop. This caused 96% of the data to be queried
+    /// repeatedly on every tick, creating massive CPU spikes in ClickHouse under load.
+    /// By scoping the window to `interval_secs`, each tick is a non-overlapping slice.
     async fn query_p95_latencies(&self) -> Result<HashMap<String, f64>, String> {
-        let query = r#"
+        // Use the worker's own polling interval as the query window for zero-overlap reads.
+        let interval = self.interval_secs;
+        let query = format!(
+            r#"
             SELECT
                 executed_provider,
                 quantile(0.95)(latency_ms) AS p95
             FROM RedEye_telemetry.request_logs
-            WHERE created_at >= now() - INTERVAL 5 MINUTE
+            WHERE created_at >= now() - INTERVAL {interval} SECOND
               AND status = 200
               AND executed_provider != ''
             GROUP BY executed_provider
             FORMAT JSON
-        "#;
+            "#
+        );
 
         let resp = self
             .repo
-            .raw_query(query)
+            .raw_query(&query)
             .await?;
 
         let mut result = HashMap::new();
