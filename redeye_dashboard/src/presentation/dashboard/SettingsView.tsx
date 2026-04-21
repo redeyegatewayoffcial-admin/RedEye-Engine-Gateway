@@ -328,6 +328,19 @@ export function SettingsView() {
         headers: { Accept: 'application/json', 'x-csrf-token': '1' },
       });
       if (!res.ok) {
+        if (res.status === 404) {
+          setConfig({
+            tenant_id: tenantId,
+            pii_masking_enabled: false,
+            semantic_caching_enabled: false,
+            routing_fallback_enabled: false,
+            rate_limit_rpm: null,
+            preferred_model: null,
+            updated_at: new Date().toISOString(),
+          });
+          return;
+        }
+
         const body: unknown = await res.json().catch(() => ({}));
         const msg =
           body !== null &&

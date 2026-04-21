@@ -3,19 +3,19 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 
 use crate::domain::models::{CacheLookupRequest, CacheStoreRequest, CachedResponse};
-use crate::infrastructure::{openai_client::OpenAiClient, postgres_repo::PostgresRepo};
+use crate::infrastructure::{local_embedder::LocalEmbedder, postgres_repo::PostgresRepo};
 
 #[derive(Clone)]
 pub struct SemanticSearchUseCase {
     pg_repo: Arc<PostgresRepo>,
-    openai_client: Arc<OpenAiClient>,
+    embedder: Arc<LocalEmbedder>,
 }
 
 impl SemanticSearchUseCase {
-    pub fn new(pg_repo: Arc<PostgresRepo>, openai_client: Arc<OpenAiClient>) -> Self {
+    pub fn new(pg_repo: Arc<PostgresRepo>, embedder: Arc<LocalEmbedder>) -> Self {
         Self {
             pg_repo,
-            openai_client,
+            embedder,
         }
     }
 
@@ -30,8 +30,8 @@ impl SemanticSearchUseCase {
             .map_err(|e| format!("AST hash task join error: {}", e))?;
         info!(ast_hash, "Computed Structural AST Hash");
 
-        info!("Generating embedding for incoming prompt");
-        let embedding = self.openai_client.get_embeddings(&req.prompt).await.map_err(|e| e.to_string())?;
+        info!("Generating embedding for incoming prompt via local ONNX model");
+        let embedding = self.embedder.embed(&req.prompt).await.map_err(|e| e.to_string())?;
 
         info!("Querying Postgres pgvector for semantic similarity with HNSW");
         let result = self.pg_repo.find_similar(&req.tenant_id, ast_hash, &embedding, 0.95).await.map_err(|e| e.to_string())?;
@@ -53,8 +53,8 @@ impl SemanticSearchUseCase {
             .await
             .map_err(|e| format!("AST hash task join error: {}", e))?;
 
-        info!("Generating embedding for new prompt to cache");
-        let embedding = self.openai_client.get_embeddings(&req.prompt).await.map_err(|e| e.to_string())?;
+        info!("Generating embedding for new prompt to cache via local ONNX model");
+        let embedding = self.embedder.embed(&req.prompt).await.map_err(|e| e.to_string())?;
 
         info!("Storing payload in Postgres HNSW index");
         self.pg_repo.store(&req.tenant_id, ast_hash, &req.prompt, &req.response_content, &embedding).await.map_err(|e| e.to_string())?;

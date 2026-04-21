@@ -12,11 +12,11 @@ use crate::infrastructure::security::verify_jwt;
 enum TokenSource {
     /// Came from `Authorization: Bearer <token>` — CSRF not required.
     BearerHeader,
-    /// Came from the `auth_token` HttpOnly cookie — CSRF check required.
+    /// Came from the `re_token` HttpOnly cookie — CSRF check required.
     Cookie,
 }
 
-/// Extract JWT from the `Authorization` header or fallback to the `auth_token` cookie.
+/// Extract JWT from the `Authorization` header or fallback to the `re_token` cookie.
 ///
 /// Bug 9a Fix: the prefix check is now case-insensitive.
 /// RFC 7235 §2.1 specifies that the auth-scheme is case-insensitive, so
@@ -40,13 +40,13 @@ fn extract_token(headers: &HeaderMap) -> Option<(String, TokenSource)> {
         }
     }
 
-    // Fallback: HttpOnly auth_token cookie.
+    // Fallback: HttpOnly re_token cookie.
     if let Some(cookie_header) = headers.get(axum::http::header::COOKIE) {
         if let Ok(cookie_str) = cookie_header.to_str() {
             for cookie_pair in cookie_str.split(';') {
                 let pair = cookie_pair.trim();
                 if let Some((name, value)) = pair.split_once('=') {
-                    if name.trim() == "auth_token" {
+                    if name.trim() == "re_token" {
                         return Some((value.to_string(), TokenSource::Cookie));
                     }
                 }

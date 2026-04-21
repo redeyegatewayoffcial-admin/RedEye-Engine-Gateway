@@ -17,6 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Starting redeye_auth service on PORT 8084");
 
+    // Strict Bootstrapping check: Enforce JWT configuration exists before accepting traffic
+    std::env::var("JWT_SECRET").expect("CRITICAL BOOTSTRAP ERROR: JWT_SECRET environment variable must be set");
+
     // Setup SQLx DB Pool
     let pool = setup_db_pool().await?;
 

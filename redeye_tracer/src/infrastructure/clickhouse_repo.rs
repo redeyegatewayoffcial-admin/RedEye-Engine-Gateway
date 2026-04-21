@@ -12,8 +12,14 @@ pub struct ClickHouseRepo {
 
 impl ClickHouseRepo {
     pub fn new(url: String) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
         Self {
-            client: Client::new(),
+            client,
             url,
         }
     }

@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS semantic_cache (
     structural_hash   BIGINT NOT NULL,          -- Deterministic AST hash 
     original_prompt   TEXT NOT NULL,            
     content           TEXT NOT NULL,            -- LLM Response Text
-    embedding         vector(1536) NOT NULL,    -- text-embedding-ada-002 dimensions
+    embedding         vector(384) NOT NULL,      -- fastembed BGESmallENV15 (384-dim, matches L1)
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

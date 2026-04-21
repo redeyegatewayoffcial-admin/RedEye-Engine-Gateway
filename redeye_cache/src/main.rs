@@ -21,7 +21,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use crate::api::handlers::{lookup_handler, store_handler, ApiState};
 use crate::api::grpc_server::CacheServiceImpl;
 use crate::api::grpc_server::proto::cache_service_server::CacheServiceServer;
-use crate::infrastructure::{openai_client::OpenAiClient, postgres_repo::PostgresRepo};
+use crate::infrastructure::{local_embedder::LocalEmbedder, postgres_repo::PostgresRepo};
 use crate::usecases::semantic_search::SemanticSearchUseCase;
 
 #[tokio::main]
@@ -37,9 +37,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting RedEye Semantic Cache Microservice...");
 
     // ── Infrastructure ────────────────────────────────────────────────────────
-    let pg_repo        = Arc::new(PostgresRepo::new().await?);
-    let openai_client  = Arc::new(OpenAiClient::new()?);
-    let search_use_case = Arc::new(SemanticSearchUseCase::new(pg_repo, openai_client));
+    let pg_repo = Arc::new(PostgresRepo::new().await?);
+
+    // Fail-fast: if the ONNX model cannot be loaded, panic immediately.
+    // A cache microservice that cannot generate embeddings is non-functional;
+    // crashing at boot is safer than silent degradation at request time.
+    let embedder = Arc::new(
+        LocalEmbedder::new()
+            .expect("FATAL: Failed to initialize local ONNX embedder (BGESmallENV15). \
+                     Ensure fastembed can download/load model files and '.fastembed_cache/' is writable."),
+    );
+
+    let search_use_case = Arc::new(SemanticSearchUseCase::new(pg_repo, embedder));
 
     // ── REST server (port 8081) ───────────────────────────────────────────────
     let app_state = ApiState { search_use_case: search_use_case.clone() };

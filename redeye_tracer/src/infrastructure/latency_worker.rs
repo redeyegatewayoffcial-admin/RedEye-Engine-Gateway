@@ -64,15 +64,32 @@ impl LatencyWorker {
         let mut interval = tokio::time::interval(
             std::time::Duration::from_secs(self.interval_secs),
         );
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         // Skip the first immediate tick so we don't query before data accumulates.
         interval.tick().await;
+
+        let mut consecutive_failures = 0;
 
         loop {
             interval.tick().await;
 
             if let Err(e) = self.tick().await {
-                warn!(error = %e, "Latency worker tick failed (will retry next interval)");
+                consecutive_failures += 1;
+                
+                // Log on the 1st failure, and every ~60 seconds thereafter (if interval is 10s)
+                if consecutive_failures == 1 || consecutive_failures % 6 == 0 {
+                    warn!(
+                        error = %e,
+                        consecutive_failures,
+                        "Latency worker tick failed (will retry next interval, suppressing redundant logs)"
+                    );
+                }
+            } else {
+                if consecutive_failures > 0 {
+                    info!("Latency worker recovered after {} failures", consecutive_failures);
+                }
+                consecutive_failures = 0;
             }
         }
     }

@@ -11,6 +11,28 @@ use oauth2::{
 
 use reqwest::Client;
 
+/// Synchronizes cookie and JWT lifetimes (7 days)
+pub const JWT_MAX_AGE_SECS: usize = 604800;
+
+fn create_cookie_header(name: &str, value: &str, max_age_secs: usize, same_site: &str) -> String {
+    let mut cookie = format!("{}={}; HttpOnly; Path=/; Max-Age={}; SameSite={}", name, value, max_age_secs, same_site);
+
+    let is_prod = std::env::var("APP_ENV").unwrap_or_default().to_lowercase() == "production" || 
+                  std::env::var("NODE_ENV").unwrap_or_default().to_lowercase() == "production";
+    
+    if is_prod {
+        cookie.push_str("; Secure");
+    }
+
+    if let Ok(domain) = std::env::var("COOKIE_DOMAIN") {
+        if !domain.trim().is_empty() {
+            cookie.push_str(&format!("; Domain={}", domain.trim()));
+        }
+    }
+
+    cookie
+}
+
 async fn send_real_otp_email(to_email: &str, otp_code: &str) -> Result<(), AppError> {
     let api_key = std::env::var("RESEND_API_KEY").unwrap_or_default();
     let client = Client::new();
@@ -131,14 +153,8 @@ pub async fn signup(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
-        raw_refresh
-    );
-    let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
-        token
-    );
+    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let jwt_cookie = create_cookie_header("re_token", &token, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
@@ -201,14 +217,8 @@ pub async fn login(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
-        raw_refresh
-    );
-    let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
-        token
-    );
+    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let jwt_cookie = create_cookie_header("re_token", &token, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
@@ -296,14 +306,8 @@ pub async fn refresh(
     .await?;
 
     // Set new HttpOnly, Secure cookies with the new tokens
-    let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
-        jwt
-    );
-    let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
-        new_raw_refresh
-    );
+    let jwt_cookie = create_cookie_header("re_token", &jwt, JWT_MAX_AGE_SECS, "Lax");
+    let refresh_cookie = create_cookie_header("refresh_token", &new_raw_refresh, JWT_MAX_AGE_SECS, "Strict");
 
     let mut response_headers = HeaderMap::new();
     response_headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
@@ -704,14 +708,8 @@ pub async fn verify_otp(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
-        raw_refresh
-    );
-    let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
-        token
-    );
+    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let jwt_cookie = create_cookie_header("re_token", &token, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
@@ -746,10 +744,7 @@ pub async fn google_login() -> impl axum::response::IntoResponse {
         .add_scope(Scope::new("profile".to_string()))
         .url();
 
-    let cookie = format!(
-        "oauth_state={}; HttpOnly; Path=/; Max-Age=600; SameSite=Lax",
-        csrf_token.secret()
-    );
+    let cookie = create_cookie_header("oauth_state", csrf_token.secret(), 600, "Lax");
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&cookie).unwrap());
 
@@ -863,17 +858,11 @@ pub async fn google_callback(
     .execute(&state.db_pool)
     .await?;
 
-    // Clear oauth_state cookie, set refresh_token cookie with Secure flag
-    let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
-        raw_refresh
-    );
-    let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
+    // Clear oauth_state cookie, set refresh_token cookie with appropriate env flags
+    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let state_clear_cookie = create_cookie_header("oauth_state", "", 0, "Lax");
     // Set JWT as HttpOnly Secure cookie instead of URL parameter
-    let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
-        jwt
-    );
+    let jwt_cookie = create_cookie_header("re_token", &jwt, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.append(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
@@ -904,10 +893,7 @@ pub async fn github_login() -> impl axum::response::IntoResponse {
         .add_scope(Scope::new("user:email".to_string()))
         .url();
 
-    let cookie = format!(
-        "oauth_state={}; HttpOnly; Path=/; Max-Age=600; SameSite=Lax",
-        csrf_token.secret()
-    );
+    let cookie = create_cookie_header("oauth_state", csrf_token.secret(), 600, "Lax");
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&cookie).unwrap());
 
@@ -1041,16 +1027,10 @@ pub async fn github_callback(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = format!(
-        "refresh_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Strict",
-        raw_refresh
-    );
-    let state_clear_cookie = "oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax".to_string();
+    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let state_clear_cookie = create_cookie_header("oauth_state", "", 0, "Lax");
     // Set JWT as HttpOnly Secure cookie instead of URL fragment
-    let jwt_cookie = format!(
-        "auth_token={}; HttpOnly; Secure; Path=/; Max-Age=604800; SameSite=Lax",
-        jwt
-    );
+    let jwt_cookie = create_cookie_header("re_token", &jwt, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = axum::http::HeaderMap::new();
     headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&refresh_cookie).unwrap());

@@ -66,6 +66,7 @@ async fn main() {
 
     // ── Config ────────────────────────────────────────────────────────────────
     let port: u16              = parse_env("GATEWAY_PORT", DEFAULT_PORT);
+    let _jwt_secret            = require_env("JWT_SECRET"); // strictly enforces presence at boot
     let redis_url              = require_env("REDIS_URL");
     let clickhouse_url         = require_env("CLICKHOUSE_URL");
     let db_url                 = require_env("DATABASE_URL");
