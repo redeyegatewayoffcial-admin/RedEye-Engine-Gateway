@@ -77,16 +77,25 @@ pub async fn auth_middleware(
     // unaffected because a cross-origin attacker cannot read or set custom
     // request headers (blocked by the CORS preflight model).
     if source == TokenSource::Cookie {
-        let csrf_present = req
-            .headers()
-            .get("x-csrf-token")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false);
+        let method = req.method();
+        // Skip CSRF check for idempotent methods (GET, HEAD, OPTIONS)
+        // Standard practice: CSRF only targets state-changing operations.
+        if method != axum::http::Method::GET && method != axum::http::Method::HEAD && method != axum::http::Method::OPTIONS {
+            let csrf_present = req
+                .headers()
+                .get("x-csrf-token")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
 
-        if !csrf_present {
-            tracing::warn!("Cookie-authenticated request rejected: missing x-csrf-token header");
-            return Err(StatusCode::FORBIDDEN);
+            if !csrf_present {
+                tracing::warn!(
+                    method = %method,
+                    path = %req.uri().path(),
+                    "Cookie-authenticated request rejected: missing x-csrf-token header"
+                );
+                return Err(StatusCode::FORBIDDEN);
+            }
         }
     }
 

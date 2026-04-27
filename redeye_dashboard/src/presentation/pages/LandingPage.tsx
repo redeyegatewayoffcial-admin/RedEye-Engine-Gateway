@@ -1,11 +1,11 @@
 // Presentation Page — LandingPage
-// Theme: "Cool Revival" — Midnight Obsidian + Neon Cyan/Teal
+// Theme: "The Obsidian Command" — Liquid Glass, Dynamic Theme, 3D Neon Buttons.
 // Features: framer-motion gateway animation, bento-grid, FAQ accordion, footer.
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence, useMotionValue, useSpring } from 'framer-motion';
-import { ArrowRight, Shield, Zap, Globe, Plus, Lock, BarChart3 } from 'lucide-react';
+import { ArrowRight, Shield, Zap, Globe, Plus, Lock, BarChart3, Terminal, LifeBuoy } from 'lucide-react';
 
 // ── Data ────────────────────────────────────────────────────────────────────
 
@@ -72,6 +72,8 @@ const CLIENTS = [
   { name: 'Stark Industries', abbr: 'SI' },
 ];
 
+const BTN_3D = "inline-flex items-center gap-2 bg-gradient-to-b from-[var(--surface-bright)] to-[var(--surface-container)] text-[var(--on-surface)] font-geist font-medium border border-[rgba(255,255,255,0.1)] dark:border-[rgba(255,255,255,0.05)] shadow-[inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_0_20px_rgba(34,211,238,0.4)] hover:border-[var(--accent-cyan)] active:translate-y-[2px] active:shadow-none transition-all duration-200 rounded-lg px-6 py-3 cursor-pointer";
+
 // ── Animation Variants ───────────────────────────────────────────────────────
 
 const fadeUp = {
@@ -98,13 +100,13 @@ function GatewayDiagram() {
         transition={{ delay: 0.3, duration: 0.5 }}
         className="absolute left-0 top-1/2 -translate-y-1/2 flex flex-col items-center gap-2"
       >
-        <div className="w-16 h-16 rounded-2xl border border-slate-700 bg-slate-900/80 flex flex-col items-center justify-center shadow-lg">
-          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Client</div>
-          <div className="w-6 h-6 mt-1 rounded-full bg-slate-700 flex items-center justify-center">
-            <div className="w-2.5 h-2.5 rounded-full bg-slate-500" />
+        <div className="w-16 h-16 rounded-2xl border border-white/5 bg-[var(--surface-container)] flex flex-col items-center justify-center shadow-lg">
+          <div className="text-[9px] font-bold text-[var(--on-surface-muted)] uppercase tracking-widest">Client</div>
+          <div className="w-6 h-6 mt-1 rounded-full bg-[var(--surface-bright)] flex items-center justify-center">
+            <div className="w-2.5 h-2.5 rounded-full bg-[var(--on-surface-muted)]" />
           </div>
         </div>
-        <span className="text-[10px] text-slate-500">Your App</span>
+        <span className="text-[10px] text-[var(--on-surface-muted)]">Your App</span>
       </motion.div>
 
       {/* Animated Data Packets → Gateway */}
@@ -117,15 +119,15 @@ function GatewayDiagram() {
         transition={{ delay: 0.6, duration: 0.5, type: 'spring', stiffness: 200 }}
         className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-2 z-10"
       >
-        <div className="w-20 h-20 rounded-2xl border border-cyan-500/40 bg-slate-950 flex flex-col items-center justify-center shadow-[0_0_30px_rgba(34,211,238,0.25)] relative overflow-hidden">
+        <div className="w-20 h-20 rounded-2xl border border-[var(--accent-cyan)]/40 bg-[var(--bg-canvas)] flex flex-col items-center justify-center shadow-[0_0_30px_rgba(34,211,238,0.25)] relative overflow-hidden">
           {/* Ripple */}
           <motion.div
-            className="absolute inset-0 rounded-2xl border border-cyan-400/30"
+            className="absolute inset-0 rounded-2xl border border-[var(--accent-cyan)]/30"
             animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
             transition={{ duration: 2.5, repeat: Infinity }}
           />
-          <Shield className="w-7 h-7 text-cyan-400" />
-          <span className="text-[9px] font-bold text-cyan-400 uppercase tracking-widest mt-1">RedEye</span>
+          <Shield className="w-7 h-7 text-[var(--accent-cyan)]" />
+          <span className="text-[9px] font-bold text-[var(--accent-cyan)] uppercase tracking-widest mt-1">RedEye</span>
         </div>
         <span className="text-[10px] text-teal-400 font-medium">Gateway</span>
       </motion.div>
@@ -142,7 +144,7 @@ function GatewayDiagram() {
       >
         {PROVIDERS.map((p) => (
           <div key={p} className="flex flex-col items-center gap-0.5">
-            <div className="h-9 w-20 rounded-xl border border-slate-700 bg-slate-900/80 flex items-center justify-center text-[10px] font-semibold text-slate-300 shadow-sm">
+            <div className="h-9 w-20 rounded-xl border border-white/5 bg-[var(--surface-container)] flex items-center justify-center text-[10px] font-semibold text-[var(--on-surface)] shadow-sm">
               {p}
             </div>
           </div>
@@ -160,7 +162,7 @@ function PacketFlow({ fromLeft = false }: { fromLeft?: boolean }) {
       {packets.map((i) => (
         <motion.div
           key={i}
-          className={`absolute top-1/2 w-2 h-2 rounded-full ${fromLeft ? 'bg-cyan-400' : 'bg-teal-400'} shadow-[0_0_8px_rgba(34,211,238,0.9)]`}
+          className={`absolute top-1/2 w-2 h-2 rounded-full ${fromLeft ? 'bg-[var(--accent-cyan)]' : 'bg-teal-400'} shadow-[0_0_8px_rgba(34,211,238,0.9)]`}
           style={{ left: fromLeft ? '13%' : '55%' }}
           animate={{
             x: fromLeft ? ['0%', '230%'] : ['0%', '160%'],
@@ -187,7 +189,7 @@ function FeatureCard({ icon: Icon, title, desc, accent }: { icon: React.Componen
   const glowY = useSpring(my, { stiffness: 150, damping: 20 });
 
   const accentColor = accent === 'cyan' ? 'rgba(34,211,238,0.18)' : 'rgba(45,212,191,0.18)';
-  const iconBg = accent === 'cyan' ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400' : 'bg-teal-500/10 border-teal-500/20 text-teal-400';
+  const iconBg = accent === 'cyan' ? 'bg-cyan-500/10 border-cyan-500/20 text-[var(--accent-cyan)]' : 'bg-teal-500/10 border-teal-500/20 text-teal-400';
 
   return (
     <motion.div
@@ -197,7 +199,7 @@ function FeatureCard({ icon: Icon, title, desc, accent }: { icon: React.Componen
         mx.set(e.clientX - rect.left);
         my.set(e.clientY - rect.top);
       }}
-      className="glass-panel p-5 sm:p-6 text-left relative overflow-hidden cursor-default group h-full"
+      className="backdrop-blur-[24px] saturate-[200%] bg-[var(--surface-container)] border border-white/5 rounded-[1.5rem] p-5 sm:p-6 text-left relative overflow-hidden cursor-default group h-full shadow-lg"
     >
       {/* Radial mouse-follow glow */}
       <motion.div
@@ -209,8 +211,8 @@ function FeatureCard({ icon: Icon, title, desc, accent }: { icon: React.Componen
       <div className={`relative flex items-center justify-center w-10 h-10 rounded-xl border mb-4 ${iconBg}`}>
         <Icon className="w-5 h-5" />
       </div>
-      <p className="relative text-sm sm:text-base font-semibold text-slate-100 mb-2">{title}</p>
-      <p className="relative text-xs sm:text-sm text-slate-500 leading-relaxed">{desc}</p>
+      <p className="relative text-sm sm:text-base font-semibold text-[var(--on-surface)] mb-2 font-geist">{title}</p>
+      <p className="relative text-xs sm:text-sm text-[var(--on-surface-muted)] leading-relaxed font-geist">{desc}</p>
     </motion.div>
   );
 }
@@ -220,16 +222,16 @@ function FeatureCard({ icon: Icon, title, desc, accent }: { icon: React.Componen
 function FaqItem({ q, a }: { q: string; a: string }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="border-b border-slate-800/70 last:border-0">
+    <div className="border-b border-white/5 last:border-0">
       <button
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center justify-between py-4 text-left group"
       >
-        <span className="text-sm sm:text-base font-medium text-slate-200 group-hover:text-cyan-300 transition-colors duration-200 pr-4">
+        <span className="text-sm sm:text-base font-medium text-[var(--on-surface)] group-hover:text-[var(--accent-cyan)] transition-colors duration-200 pr-4 font-geist">
           {q}
         </span>
         <motion.div animate={{ rotate: open ? 45 : 0 }} transition={{ duration: 0.25 }} className="flex-shrink-0">
-          <Plus className={`w-4 h-4 transition-colors duration-200 ${open ? 'text-cyan-400' : 'text-slate-500'}`} />
+          <Plus className={`w-4 h-4 transition-colors duration-200 ${open ? 'text-[var(--accent-cyan)]' : 'text-[var(--on-surface-muted)]'}`} />
         </motion.div>
       </button>
       <AnimatePresence initial={false}>
@@ -242,7 +244,7 @@ function FaqItem({ q, a }: { q: string; a: string }) {
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="overflow-hidden"
           >
-            <p className="text-sm text-slate-400 leading-relaxed pb-5 pr-8">{a}</p>
+            <p className="text-sm text-[var(--on-surface-muted)] leading-relaxed pb-5 pr-8 font-geist">{a}</p>
           </motion.div>
         )}
       </AnimatePresence>
@@ -256,27 +258,30 @@ export function LandingPage() {
   const navigate = useNavigate();
 
   return (
-    <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col overflow-hidden">
+    <div className="relative min-h-screen bg-[var(--bg-canvas)] text-[var(--on-surface)] flex flex-col overflow-hidden font-geist">
 
-      {/* Ambient Blobs */}
-      <div className="absolute -top-40 -left-40 w-[500px] h-[500px] rounded-full bg-cyan-500/10 blur-[140px] pointer-events-none" />
-      <div className="absolute top-1/2 -right-40 w-[400px] h-[400px] rounded-full bg-teal-500/8 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-cyan-500/5 blur-[100px] pointer-events-none" />
+      {/* ── Ambient Mesh Background (Dark Mode Only) ──────────────── */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none z-0 hidden dark:block">
+        <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-amber-500/15 blur-[120px] rounded-full mix-blend-screen" />
+        <div className="absolute -top-[10%] -right-[10%] w-[35%] h-[40%] bg-rose-500/15 blur-[120px] rounded-full mix-blend-screen" />
+        <div className="absolute -bottom-[10%] -left-[10%] w-[40%] h-[40%] bg-cyan-500/15 blur-[120px] rounded-full mix-blend-screen" />
+        <div className="absolute -bottom-[10%] -right-[10%] w-[30%] h-[30%] bg-yellow-500/10 blur-[100px] rounded-full mix-blend-screen" />
+      </div>
 
       {/* ── Nav ──────────────────────────────────────────────────── */}
-      <nav className="relative z-10 border-b border-slate-800/60 px-6 sm:px-12 lg:px-20 h-16 flex items-center justify-between">
+      <nav className="relative z-10 border-b border-white/5 px-6 sm:px-12 lg:px-20 h-16 flex items-center justify-between backdrop-blur-xl bg-[var(--bg-canvas)]/40">
         <div className="flex items-center gap-2.5">
-          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-cyan-500 to-teal-500 flex items-center justify-center shadow-[0_0_16px_rgba(34,211,238,0.45)]">
-            <span className="text-[10px] font-bold tracking-tight text-slate-950">RE</span>
+          <div className="h-8 w-8 rounded-xl bg-cyan-500 flex items-center justify-center shadow-[0_0_20px_rgba(34,211,238,0.45)]">
+            <span className="text-[11px] font-black tracking-tight text-[#050505]">RE</span>
           </div>
-          <span className="text-sm font-semibold text-slate-100 tracking-wide">RedEye</span>
+          <span className="text-sm font-bold text-[var(--on-surface)] tracking-wide uppercase">RedEye Command</span>
         </div>
         <div className="flex items-center gap-6">
-          <button onClick={() => {}} className="text-sm text-slate-400 hover:text-slate-200 transition-colors hidden sm:block">Features</button>
-          <button onClick={() => {}} className="text-sm text-slate-400 hover:text-slate-200 transition-colors hidden sm:block">Docs</button>
+          <button onClick={() => {}} className="text-xs font-bold uppercase tracking-widest text-[var(--on-surface-muted)] hover:text-[var(--on-surface)] transition-colors hidden sm:block">Features</button>
+          <button onClick={() => {}} className="text-xs font-bold uppercase tracking-widest text-[var(--on-surface-muted)] hover:text-[var(--on-surface)] transition-colors hidden sm:block">Documentation</button>
           <button
             onClick={() => navigate('/login')}
-            className="text-sm font-medium text-slate-400 hover:text-cyan-300 transition-colors duration-200"
+            className="text-xs font-bold uppercase tracking-widest text-[var(--on-surface-muted)] hover:text-[var(--accent-cyan)] transition-colors duration-200"
           >
             Sign in →
           </button>
@@ -287,9 +292,9 @@ export function LandingPage() {
       <main className="relative z-10 flex-1 flex flex-col items-center px-6 text-center pt-20 sm:pt-28 pb-16">
 
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-cyan-500/25 bg-cyan-500/8 text-cyan-400 text-xs font-semibold mb-8 shadow-[0_0_16px_rgba(34,211,238,0.1)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 neon-dot inline-block" />
-            Enterprise AI Gateway — v2
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-[var(--accent-cyan)]/25 bg-[var(--accent-cyan)]/8 text-[var(--accent-cyan)] text-[10px] font-bold uppercase tracking-[0.2em] mb-8 shadow-[0_0_16px_rgba(34,211,238,0.1)]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-cyan)] neon-dot inline-block" />
+            Neural Protocol Access — v2.4.0
           </div>
         </motion.div>
 
@@ -297,14 +302,14 @@ export function LandingPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.55, delay: 0.1 }}
-          className="text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight leading-[1.08] max-w-4xl"
+          className="text-4xl sm:text-6xl lg:text-8xl font-black tracking-tight leading-[0.95] max-w-5xl"
         >
-          <span className="bg-gradient-to-br from-slate-50 via-slate-100 to-slate-300 bg-clip-text text-transparent">
-            Enterprise AI
+          <span className="bg-gradient-to-br from-[var(--on-surface)] to-[var(--on-surface-muted)] bg-clip-text text-transparent">
+            Strategic AI
           </span>
           <br />
-          <span className="bg-gradient-to-r from-cyan-400 to-teal-400 bg-clip-text text-transparent">
-            Gateway
+          <span className="bg-gradient-to-r from-[var(--accent-cyan)] to-teal-400 bg-clip-text text-transparent drop-shadow-[0_0_30px_rgba(34,211,238,0.3)]">
+            Command
           </span>
         </motion.h1>
 
@@ -312,29 +317,29 @@ export function LandingPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.55, delay: 0.2 }}
-          className="mt-6 text-lg sm:text-xl text-slate-400 max-w-2xl leading-relaxed"
+          className="mt-8 text-lg sm:text-xl text-[var(--on-surface-muted)] max-w-2xl leading-relaxed font-medium"
         >
-          Intelligent middleware that sits between your clients and AI providers — enforcing policy,
-          redacting PII, and optimizing cost at every request.
+          Intelligence middleware for the high-performance era. Enforce policy, 
+          redact telemetry, and optimize neural throughput at the edge.
         </motion.p>
 
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.55, delay: 0.3 }}
-          className="mt-10 flex flex-col sm:flex-row items-center gap-4 justify-center"
+          className="mt-12 flex flex-col sm:flex-row items-center gap-4 justify-center"
         >
           <button
             onClick={() => navigate('/login')}
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 active:scale-95 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_24px_rgba(34,211,238,0.35)] hover:shadow-[0_0_36px_rgba(34,211,238,0.55)] transition-all duration-200"
+            className={BTN_3D}
           >
-            Get started free <ArrowRight className="w-4 h-4" />
+            Initiate Deployment <ArrowRight className="w-4 h-4" />
           </button>
           <button
             onClick={() => navigate('/login')}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/50 hover:border-cyan-500/30 hover:text-cyan-300 active:scale-95 px-6 py-3 text-sm font-semibold text-slate-300 transition-all duration-200"
+            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface-bright)]/50 hover:border-[var(--accent-cyan)]/30 hover:text-[var(--accent-cyan)] active:translate-y-[1px] px-6 py-3 text-sm font-bold uppercase tracking-widest text-[var(--on-surface-muted)] transition-all duration-200"
           >
-            Sign in
+            Developer Protocol
           </button>
         </motion.div>
 
@@ -343,34 +348,34 @@ export function LandingPage() {
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.5 }}
-          className="mt-20 w-full max-w-3xl relative"
+          className="mt-24 w-full max-w-4xl relative"
         >
-          <div className="absolute inset-0 bg-slate-900/30 rounded-3xl border border-slate-800/60 blur-sm" />
-          <div className="relative glass-panel p-6 sm:p-10">
-            <p className="text-[10px] uppercase tracking-[0.25em] text-slate-600 mb-6 text-center">Live Gateway Flow</p>
+          <div className="absolute inset-0 bg-[var(--surface-container)]/30 rounded-[2rem] border border-white/5 blur-sm" />
+          <div className="relative backdrop-blur-[40px] saturate-[200%] bg-[var(--surface-container)]/60 border border-white/5 rounded-[2rem] p-6 sm:p-10 shadow-2xl">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-[var(--on-surface-muted)] mb-8 text-center font-bold">Real-time Transmission Logic</p>
             <GatewayDiagram />
           </div>
         </motion.div>
 
         {/* ── Bento Feature Grid ───────────────────────────────────── */}
-        <div className="mt-24 w-full max-w-4xl">
+        <div className="mt-32 w-full max-w-5xl">
           <motion.h2
             initial={{ opacity: 0, y: 16 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.5 }}
-            className="text-2xl sm:text-3xl font-bold text-slate-100 mb-2 text-center"
+            className="text-3xl sm:text-4xl font-black text-[var(--on-surface)] mb-2 text-center tracking-tight"
           >
-            Everything you need
+            Operational Mastery
           </motion.h2>
           <motion.p
             initial={{ opacity: 0 }}
             whileInView={{ opacity: 1 }}
             viewport={{ once: true }}
             transition={{ duration: 0.5, delay: 0.1 }}
-            className="text-slate-500 text-sm mb-10 text-center"
+            className="text-[var(--on-surface-muted)] text-sm mb-12 text-center font-medium uppercase tracking-widest"
           >
-            From security to observability — all in a single gateway.
+            Everything required for a unified command layer.
           </motion.p>
           <motion.div
             variants={stagger}
@@ -391,16 +396,16 @@ export function LandingPage() {
           whileInView={{ opacity: 1 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
-          className="mt-20"
+          className="mt-32"
         >
-          <p className="text-xs uppercase tracking-[0.2em] text-slate-600 mb-6">Trusted by teams at</p>
-          <div className="flex items-center justify-center gap-8 flex-wrap">
+          <p className="text-[10px] uppercase tracking-[0.3em] text-[var(--on-surface-muted)] font-bold mb-10">Validated by Command Centers at</p>
+          <div className="flex items-center justify-center gap-12 flex-wrap">
             {CLIENTS.map(({ name, abbr }) => (
-              <div key={name} className="flex items-center gap-2 opacity-40 hover:opacity-70 transition-opacity duration-200">
-                <div className="h-8 w-8 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-[11px] font-bold text-slate-300">
+              <div key={name} className="flex items-center gap-3 opacity-40 hover:opacity-100 transition-opacity duration-300 group cursor-default">
+                <div className="h-10 w-10 rounded-xl bg-[var(--surface-bright)] border border-white/5 flex items-center justify-center text-[11px] font-black text-[var(--on-surface)] group-hover:border-[var(--accent-cyan)]/50 transition-colors">
                   {abbr}
                 </div>
-                <span className="text-slate-400 text-sm font-medium">{name}</span>
+                <span className="text-[var(--on-surface-muted)] text-xs font-bold uppercase tracking-widest group-hover:text-[var(--on-surface)] transition-colors">{name}</span>
               </div>
             ))}
           </div>
@@ -412,11 +417,11 @@ export function LandingPage() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.55 }}
-          className="mt-24 w-full max-w-2xl text-left"
+          className="mt-32 w-full max-w-3xl text-left"
         >
-          <h2 className="text-2xl sm:text-3xl font-bold text-slate-100 mb-2 text-center">Frequently Asked</h2>
-          <p className="text-slate-500 text-sm mb-10 text-center">Answers to the most common questions.</p>
-          <div className="glass-panel px-6 py-2">
+          <h2 className="text-3xl sm:text-4xl font-black text-[var(--on-surface)] mb-2 text-center tracking-tight">Intelligence Briefing</h2>
+          <p className="text-[var(--on-surface-muted)] text-sm mb-12 text-center font-medium uppercase tracking-widest">Standardized Procedures & FAQ</p>
+          <div className="backdrop-blur-[24px] saturate-[200%] bg-[var(--surface-container)] border border-white/5 rounded-[2rem] px-8 py-4 shadow-xl">
             {FAQS.map((faq) => (
               <FaqItem key={faq.q} {...faq} />
             ))}
@@ -429,37 +434,40 @@ export function LandingPage() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.55 }}
-          className="mt-24 flex flex-col items-center gap-5 text-center"
+          className="mt-32 flex flex-col items-center gap-6 text-center"
         >
-          <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-50">Ready to ship smarter AI?</h2>
-          <p className="text-slate-400 max-w-md text-sm">Get up and running in under 5 minutes. No credit card required.</p>
+          <h2 className="text-4xl sm:text-5xl font-black text-[var(--on-surface)] tracking-tight">Ready for Deployment?</h2>
+          <p className="text-[var(--on-surface-muted)] max-w-md text-sm font-medium">Activate your gateway in under 300 seconds. Zero friction deployment.</p>
           <button
             onClick={() => navigate('/login')}
-            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 active:scale-95 px-8 py-3.5 text-sm font-semibold text-slate-950 shadow-[0_0_28px_rgba(34,211,238,0.4)] hover:shadow-[0_0_40px_rgba(34,211,238,0.6)] transition-all duration-200"
+            className={BTN_3D}
           >
-            Start for free <ArrowRight className="w-4 h-4" />
+            Establish Command <ArrowRight className="w-4 h-4" />
           </button>
         </motion.div>
       </main>
 
       {/* ── Footer ───────────────────────────────────────────────── */}
-      <footer className="relative z-10 border-t border-slate-800/60 px-6 sm:px-12 lg:px-20 py-8 mt-16">
-        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6">
+      <footer className="relative z-10 border-t border-white/5 px-6 sm:px-12 lg:px-20 py-12 mt-32 bg-[var(--surface-lowest)]/40 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row items-center justify-between gap-10">
           {/* Brand */}
-          <div className="flex items-center gap-2.5">
-            <div className="h-6 w-6 rounded-md bg-gradient-to-br from-cyan-500 to-teal-500 flex items-center justify-center">
-              <span className="text-[9px] font-bold text-slate-950">RE</span>
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded-xl bg-cyan-500 flex items-center justify-center shadow-[0_0_20px_rgba(34,211,238,0.4)]">
+              <span className="text-[11px] font-black text-[#050505]">RE</span>
             </div>
-            <span className="text-xs font-semibold text-slate-400">RedEye AI Engine</span>
+            <div>
+              <p className="text-[9px] uppercase tracking-[0.25em] font-black text-[var(--on-surface-muted)]">RedEye</p>
+              <p className="text-xs font-bold tracking-tight leading-none text-[var(--on-surface)]">Command Center</p>
+            </div>
           </div>
 
           {/* Links */}
-          <nav className="flex items-center gap-6 flex-wrap justify-center">
-            {['About Us', 'Features', 'Docs', 'Terms & Conditions', 'Privacy Policy'].map((link) => (
+          <nav className="flex items-center gap-8 flex-wrap justify-center">
+            {['Protocol Docs', 'Telemetry Hub', 'Security Policy', 'Operator Terms', 'Privacy Matrix'].map((link) => (
               <button
                 key={link}
                 onClick={() => {}}
-                className="text-xs text-slate-600 hover:text-slate-300 transition-colors duration-200"
+                className="text-[10px] font-bold uppercase tracking-widest text-[var(--on-surface-muted)] hover:text-[var(--accent-cyan)] transition-colors duration-200"
               >
                 {link}
               </button>
@@ -467,9 +475,14 @@ export function LandingPage() {
           </nav>
 
           {/* Copy */}
-          <p className="text-xs text-slate-700">
-            © {new Date().getFullYear()} RedEye. All rights reserved.
-          </p>
+          <div className="flex flex-col items-center lg:items-end gap-1">
+            <p className="text-[10px] font-bold text-[var(--on-surface-muted)] uppercase tracking-[0.1em]">
+              © {new Date().getFullYear()} RedEye Operational Intelligence
+            </p>
+            <p className="text-[9px] text-[var(--on-surface-muted)]/50 uppercase tracking-widest">
+              Strategic Asset Deployment v2.4.0
+            </p>
+          </div>
         </div>
       </footer>
     </div>

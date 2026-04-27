@@ -1,13 +1,11 @@
-// Dashboard View — SecurityView
-// Security Command Center: stat cards, blocked-threats chart, live threat feed.
-// Theme: slate-950/indigo-500.
-
-import { ShieldAlert, Flame, DollarSign, Loader2, AlertCircle } from 'lucide-react';
-import { StatCard } from '../components/ui/StatCard';
+import { ShieldAlert, Flame, DollarSign, Loader2, AlertTriangle, Shield, ArrowRight } from 'lucide-react';
 import useSWR from 'swr';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell
 } from 'recharts';
+import { BentoCard } from '../components/ui/BentoCard';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,7 +27,6 @@ interface SecurityData {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const fetcher = async (url: string) => {
-  // Authentication handled via HttpOnly cookies (credentials: 'include')
   const res = await fetch(url, { 
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' }
@@ -38,16 +35,28 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
-const SEVERITY_STYLES: Record<string, string> = {
-  Critical: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
-  High:     'bg-amber-500/15 text-amber-400 border-amber-500/30',
-  Medium:   'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
-};
+const LABEL_CLASS = 'font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-[10px] font-bold';
+const DATA_CLASS  = 'font-jetbrains text-[var(--on-surface)]';
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
+
+// ── Framer Motion Variants ──────────────────────────────────────────────────
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.1 }
+  }
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } }
+};
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -58,128 +67,167 @@ export function SecurityView() {
     {
       refreshInterval: 5000,
       errorRetryCount: 3,
-      onErrorRetry: (error, _key, _config, revalidate, { retryCount }) => {
-        const msg: string = error?.message ?? '';
-        if (msg.includes('401') || msg.includes('403')) return;
-        if (retryCount >= 3) return;
-        setTimeout(() => revalidate({ retryCount }), 5000);
-      },
     },
   );
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <motion.div
+      variants={containerVariants}
+      initial="hidden"
+      animate="show"
+      className="grid grid-cols-12 gap-6 p-6 auto-rows-max text-[var(--on-surface)]"
+    >
+      {/* Breadcrumb */}
+      <motion.div variants={itemVariants} className="col-span-12 flex items-center gap-3 text-sm font-mono text-[var(--text-muted)] mb-2">
+        <Link to="/dashboard" className="hover:text-[var(--on-surface)] transition-colors flex items-center gap-2 font-geist tracking-wide">
+          <Shield className="w-4 h-4" />
+          Dashboard
+        </Link>
+        <ArrowRight className="w-4 h-4" />
+        <span className="text-[var(--on-surface)] font-geist">Security</span>
+      </motion.div>
+
       {/* Header */}
-      <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <motion.header variants={itemVariants} className="col-span-12 flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
         <div>
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-rose-600 to-indigo-600 dark:from-rose-400 dark:via-amber-300 dark:to-indigo-400 bg-clip-text text-transparent pb-1">
-            Security Command Center
+          <p className={`${LABEL_CLASS} text-[var(--primary-rose)] mb-1`}>Threat Detection Center</p>
+          <h1 className="text-4xl font-extrabold tracking-tight text-[var(--on-surface)] mb-2 font-geist">
+            Security Intelligence
           </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-            AI Agent threat detection &amp; cost abuse prevention
+          <p className="text-sm text-[var(--text-muted)] max-w-2xl font-geist">
+            Real-time monitoring of AI agent loops, cost abuse, and runaway spend prevention.
           </p>
         </div>
-        <div className="flex items-center space-x-2 glass-panel bg-white/80 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-700/50 shadow-sm backdrop-blur-md dark:shadow-none px-3 py-1.5 sm:px-4 sm:py-2 rounded-full self-start sm:self-auto w-fit transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-          {isLoading && !data ? (
-            <Loader2 className="w-4 h-4 text-indigo-500 dark:text-indigo-400 animate-spin" />
-          ) : (
-            <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${error ? 'bg-rose-500' : 'bg-emerald-500 neon-dot'}`} />
-          )}
-          <span className="text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300">
-            {isLoading && !data ? 'Loading…' : error ? 'Offline' : 'Monitoring Active'}
-          </span>
+        
+        <div className="flex items-center gap-3 p-1 rounded-full bg-[rgba(255,255,255,0.02)]">
+          <div className="flex items-center gap-3 px-4 py-2 rounded-full bg-[var(--surface-bright)] shadow-md">
+            {isLoading && !data ? (
+              <Loader2 className="w-4 h-4 text-[var(--accent-cyan)] animate-spin" />
+            ) : (
+              <div className={`w-2 h-2 rounded-full ${error ? 'bg-[var(--primary-rose)]' : 'bg-[var(--accent-cyan)] shadow-[0_0_10px_var(--accent-cyan)]'} animate-pulse`} />
+            )}
+            <span className={`${LABEL_CLASS} normal-case tracking-normal`}>
+              {isLoading && !data ? 'Syncing...' : error ? 'Link Failure' : 'Active Sentinel'}
+            </span>
+          </div>
         </div>
-      </header>
+      </motion.header>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-        <StatCard
-          title="Agent Loops Blocked"
-          value={isLoading && !data ? '…' : data?.total_blocked_loops ?? 0}
-          icon={ShieldAlert}
-          accentClass="text-rose-400 ring-1 ring-rose-400/20"
-          subtitle="Recursive loop circuit-breaker"
-        />
-        <StatCard
-          title="Runaway Spenders Blocked"
-          value={isLoading && !data ? '…' : data?.total_burn_rate_blocks ?? 0}
-          icon={Flame}
-          accentClass="text-amber-400 ring-1 ring-amber-400/20"
-          subtitle="Burn rate velocity limiter"
-        />
-        <div className="sm:col-span-2 lg:col-span-1">
-          <StatCard
-            title="Estimated $ Saved"
-            value={isLoading && !data ? '…' : `$${(data?.estimated_savings_usd ?? 0).toFixed(2)}`}
-            icon={DollarSign}
-            accentClass="text-emerald-400 ring-1 ring-emerald-400/20"
-            subtitle="Cost abuse prevention"
-          />
-        </div>
-      </div>
+      <motion.div variants={itemVariants} className="col-span-12 sm:col-span-6 lg:col-span-4 h-[160px]">
+        <BentoCard glowColor="rose" className="h-full p-6 flex flex-col justify-between">
+          <div className="flex items-center gap-3 text-[var(--primary-rose)]">
+            <ShieldAlert className="w-5 h-5" />
+            <h3 className={LABEL_CLASS}>Agent Loops Blocked</h3>
+          </div>
+          <div>
+            <p className={`${DATA_CLASS} text-3xl font-bold tracking-tighter`}>
+              {isLoading && !data ? '—' : data?.total_blocked_loops ?? 0}
+            </p>
+            <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest font-bold mt-1">Circuit-breaker hits</p>
+          </div>
+        </BentoCard>
+      </motion.div>
+
+      <motion.div variants={itemVariants} className="col-span-12 sm:col-span-6 lg:col-span-4 h-[160px]">
+        <BentoCard glowColor="amber" className="h-full p-6 flex flex-col justify-between">
+          <div className="flex items-center gap-3 text-[var(--primary-amber)]">
+            <Flame className="w-5 h-5" />
+            <h3 className={LABEL_CLASS}>Runaway Spenders</h3>
+          </div>
+          <div>
+            <p className={`${DATA_CLASS} text-3xl font-bold tracking-tighter`}>
+              {isLoading && !data ? '—' : data?.total_burn_rate_blocks ?? 0}
+            </p>
+            <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest font-bold mt-1">Velocity limit triggers</p>
+          </div>
+        </BentoCard>
+      </motion.div>
+
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-4 h-[160px]">
+        <BentoCard glowColor="cyan" className="h-full p-6 flex flex-col justify-between">
+          <div className="flex items-center gap-3 text-[var(--accent-cyan)]">
+            <DollarSign className="w-5 h-5" />
+            <h3 className={LABEL_CLASS}>Estimated Savings</h3>
+          </div>
+          <div>
+            <p className={`${DATA_CLASS} text-3xl font-bold tracking-tighter`}>
+              <span className="text-[var(--text-muted)] font-normal mr-1">$</span>
+              {isLoading && !data ? '—' : (data?.estimated_savings_usd ?? 0).toFixed(2)}
+            </p>
+            <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest font-bold mt-1">Abuse prevention yield</p>
+          </div>
+        </BentoCard>
+      </motion.div>
 
       {/* Error banner */}
       {error && !data && (
-        <div className="glass-panel bg-rose-50 dark:bg-rose-500/5 border border-rose-200 dark:border-rose-500/20 p-4 flex items-center gap-3 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-          <AlertCircle className="w-5 h-5 text-rose-500 flex-shrink-0" />
-          <p className="text-sm text-rose-700 dark:text-slate-300">Failed to connect to security endpoint. Showing stale or zeroed data.</p>
-        </div>
+        <motion.div variants={itemVariants} className="col-span-12 p-4 rounded-2xl bg-[rgba(244,63,94,0.1)] flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-[var(--primary-rose)] flex-shrink-0" />
+          <p className="text-sm text-[var(--on-surface)] font-geist">Connection to security endpoint failed. Showing cached data.</p>
+        </motion.div>
       )}
 
-      {/* Chart + Table */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 sm:gap-6">
-        {/* Bar Chart — 2/5 width */}
-        <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-700/50 p-4 sm:p-6 lg:col-span-2 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-          <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6 flex items-center gap-2">
-            Blocked Threats / Day
-            <span className="text-[10px] text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-tighter">7-day</span>
-          </h2>
-          <div className="h-[280px] w-full min-h-[280px]">
+      {/* Bar Chart — Blocked Threats */}
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-5 h-[400px]">
+        <BentoCard glowColor="rose" className="h-full p-6 flex flex-col">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className={LABEL_CLASS}>Blocked Threats / Day</h3>
+            <span className="text-[10px] font-jetbrains text-[var(--primary-amber)] bg-[rgba(251,191,36,0.1)] px-2 py-1 rounded uppercase tracking-tighter">7-day window</span>
+          </div>
+          <div className="flex-1 w-full min-h-0">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={data?.daily_blocks ?? []} barGap={4}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-bright)" strokeOpacity={0.1} vertical={false} />
+                <XAxis dataKey="date" stroke="var(--on-surface-muted)" fontSize={10} tickLine={false} axisLine={false} />
+                <YAxis stroke="var(--on-surface-muted)" fontSize={10} tickLine={false} axisLine={false} />
                 <Tooltip
-                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', fontSize: '12px' }}
+                  cursor={{ fill: 'var(--surface-bright)', opacity: 0.1 }}
+                  contentStyle={{ backgroundColor: 'var(--surface-container-low)', borderColor: 'transparent', borderRadius: '12px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', color: 'var(--on-surface)', fontSize: '12px' }}
                 />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '12px' }} />
-                <Bar dataKey="loops" name="Loop Blocks" fill="#e11d48" radius={[4, 4, 0, 0]} animationDuration={1200} />
-                <Bar dataKey="burn_rate" name="Burn Rate Blocks" fill="#d97706" radius={[4, 4, 0, 0]} animationDuration={1200} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '12px', fontFamily: 'Geist' }} />
+                <Bar dataKey="loops" name="Loop Blocks" fill="var(--primary-rose)" radius={[4, 4, 0, 0]} animationDuration={1500} />
+                <Bar dataKey="burn_rate" name="Burn Rate Blocks" fill="var(--primary-amber)" radius={[4, 4, 0, 0]} animationDuration={1500} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </BentoCard>
+      </motion.div>
 
-        {/* Live Threat Feed — 3/5 width */}
-        <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-700/50 p-4 sm:p-6 lg:col-span-3 flex flex-col overflow-hidden shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-          <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center justify-between">
-            Live Threat Feed
-            <span className="text-[10px] text-rose-600 dark:text-rose-400 bg-rose-100 dark:bg-rose-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-widest animate-pulse">Live</span>
-          </h2>
-          <div className="overflow-x-auto w-full flex-1 custom-scrollbar">
-            <table className="w-full text-sm text-left">
+      {/* Live Threat Feed */}
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-7 h-[400px]">
+        <BentoCard glowColor="rose" className="h-full overflow-hidden flex flex-col">
+          <div className="p-6 bg-[rgba(255,255,255,0.02)] flex items-center justify-between">
+            <h3 className={LABEL_CLASS}>Live Threat Feed</h3>
+            <span className="text-[9px] text-[var(--primary-rose)] font-bold tracking-[0.2em] uppercase animate-pulse">Live Intercept</span>
+          </div>
+          <div className="flex-1 overflow-x-auto overflow-y-auto custom-scrollbar p-2">
+            <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800/60 text-xs text-slate-500 uppercase tracking-wider">
-                  <th className="py-2.5 px-3 font-medium">Time</th>
-                  <th className="py-2.5 px-3 font-medium">Session</th>
-                  <th className="py-2.5 px-3 font-medium">Threat</th>
-                  <th className="py-2.5 px-3 font-medium">Severity</th>
+                <tr className="sticky top-0 bg-[var(--surface-lowest)] z-10">
+                  <th className={`${LABEL_CLASS} py-3 px-4`}>Time</th>
+                  <th className={`${LABEL_CLASS} py-3 px-4`}>Session</th>
+                  <th className={`${LABEL_CLASS} py-3 px-4`}>Threat Reason</th>
+                  <th className={`${LABEL_CLASS} py-3 px-4`}>Severity</th>
                 </tr>
               </thead>
               <tbody>
                 {(data?.recent_alerts ?? []).map((alert, i) => (
                   <tr
                     key={`${alert.session_id}-${i}`}
-                    className="border-b border-slate-100 dark:border-slate-800/30 hover:bg-slate-50 dark:hover:bg-slate-800/20 transition-colors"
+                    className={`group transition-colors ${i % 2 === 0 ? 'bg-[var(--surface-container-low)]' : 'bg-[var(--surface-container-lowest)]'} hover:bg-[var(--surface-bright)]`}
                   >
-                    <td className="py-2.5 px-3 font-mono text-xs text-slate-500 dark:text-slate-400">{formatTime(alert.timestamp)}</td>
-                    <td className="py-2.5 px-3 font-mono text-xs text-indigo-600 dark:text-indigo-300">{alert.session_id}</td>
-                    <td className="py-2.5 px-3 text-slate-700 dark:text-slate-200">{alert.reason}</td>
-                    <td className="py-2.5 px-3">
+                    <td className="py-3 px-4 text-[0.75rem] font-jetbrains tabular-nums text-[var(--text-muted)]">{formatTime(alert.timestamp)}</td>
+                    <td className="py-3 px-4 text-[0.75rem] font-jetbrains text-[var(--accent-cyan)] truncate max-w-[120px]" title={alert.session_id}>
+                      {alert.session_id.split('-')[0]}
+                    </td>
+                    <td className="py-3 px-4 text-xs font-geist text-[var(--on-surface)]">{alert.reason}</td>
+                    <td className="py-3 px-4">
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide border ${
-                          SEVERITY_STYLES[alert.severity] ?? SEVERITY_STYLES.Medium
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-widest ${
+                          alert.severity === 'Critical' ? 'bg-[rgba(244,63,94,0.1)] text-[var(--primary-rose)]' :
+                          alert.severity === 'High' ? 'bg-[rgba(251,191,36,0.1)] text-[var(--primary-amber)]' :
+                          'bg-[rgba(34,211,238,0.1)] text-[var(--accent-cyan)]'
                         }`}
                       >
                         {alert.severity}
@@ -189,16 +237,19 @@ export function SecurityView() {
                 ))}
                 {(!data || data.recent_alerts.length === 0) && (
                   <tr>
-                    <td colSpan={4} className="py-8 text-center text-slate-500 text-sm">
-                      No recent alerts
+                    <td colSpan={4} className="py-24 text-center">
+                      <div className="flex flex-col items-center justify-center opacity-40">
+                         <Shield className="w-8 h-8 mb-4 text-[var(--text-muted)]" />
+                         <span className={`${LABEL_CLASS}`}>No active threats detected</span>
+                      </div>
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
-        </div>
-      </div>
-    </div>
+        </BentoCard>
+      </motion.div>
+    </motion.div>
   );
 }

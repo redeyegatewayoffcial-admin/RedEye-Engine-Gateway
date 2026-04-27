@@ -17,7 +17,7 @@ interface AuthContextValue {
   requestMagicLink(email: string): Promise<void>;
   verifyMagicLink(email: string, otp: string): Promise<User>;
   ssoRedirect(provider: string): Promise<void>;
-  syncOAuthState(token: string): Promise<void>;
+  syncOAuthState(): Promise<void>;
   completeOnboarding(workspaceName: string, provider: string, apiKey: string, accountType?: 'individual' | 'team'): Promise<User>;
   logout(): void;
 }

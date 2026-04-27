@@ -1,14 +1,3 @@
-// Dashboard View — SettingsView
-// Fetches per-tenant feature-flag config from redeye_config (port 8085),
-// renders toggles for PII Masking, Semantic Cache, and Routing Fallback,
-// and persists changes via PUT with per-toggle optimistic UX feedback.
-//
-// Engineering constraints observed:
-//  • Zero `any` types — every API shape has an explicit interface.
-//  • All fetch states (isLoading, isError, isSaving per toggle) are explicit.
-//  • Toggle is disabled + shows an inline spinner while its own PUT is in-flight.
-//  • Toast notification confirms success or surfaces the error after each save.
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Shield,
@@ -21,18 +10,25 @@ import {
   Loader2,
   RefreshCw,
   Sliders,
+  ArrowRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast, type Toast, type ToastVariant } from '../hooks/useToast';
+import { BentoCard } from '../components/ui/BentoCard';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const CONFIG_BASE = 'http://localhost:8085/v1/config';
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const LABEL_CLASS = 'font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-[10px] font-bold';
+const DATA_CLASS  = 'font-jetbrains text-[var(--on-surface)]';
+
 // ── Domain types ──────────────────────────────────────────────────────────────
 
-/** Exact mirror of the Rust `ClientConfig` struct returned by redeye_config. */
 interface ClientConfig {
   tenant_id: string;
   pii_masking_enabled: boolean;
@@ -43,25 +39,21 @@ interface ClientConfig {
   updated_at: string;
 }
 
-/** Keys of ClientConfig that map to boolean toggles in this view. */
 type ToggleKey =
   | 'pii_masking_enabled'
   | 'semantic_caching_enabled'
   | 'routing_fallback_enabled';
 
-/** Partial update payload sent to PUT /v1/config/:tenant_id */
 type UpdateConfigPayload = Partial<
   Omit<ClientConfig, 'tenant_id' | 'updated_at'>
 >;
-
-// ── Toggle metadata ───────────────────────────────────────────────────────────
 
 interface ToggleMeta {
   key: ToggleKey;
   label: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
-  accentClass: string;
+  accentColor: string;
   enabledLabel: string;
   disabledLabel: string;
 }
@@ -71,9 +63,9 @@ const TOGGLES: ToggleMeta[] = [
     key: 'pii_masking_enabled',
     label: 'PII Masking',
     description:
-      'Automatically redacts Personally Identifiable Information (Aadhaar, PAN, SSN, credit cards) before forwarding prompts to upstream LLMs.',
+      'Automatically redacts Personally Identifiable Information (Aadhaar, PAN, SSN, credit cards) before forwarding prompts to LLMs.',
     icon: Shield,
-    accentClass: 'from-cyan-500 to-teal-500',
+    accentColor: 'var(--accent-cyan)',
     enabledLabel: 'Active',
     disabledLabel: 'Disabled',
   },
@@ -81,9 +73,9 @@ const TOGGLES: ToggleMeta[] = [
     key: 'semantic_caching_enabled',
     label: 'Semantic Cache',
     description:
-      'Enables the L2 vector-similarity cache. Semantically equivalent queries hit the cache instead of the upstream LLM, reducing cost and latency.',
+      'Enables the L2 vector-similarity cache. Semantically equivalent queries hit the cache instead of the model, reducing cost and latency.',
     icon: Database,
-    accentClass: 'from-violet-500 to-purple-500',
+    accentColor: 'var(--primary-amber)',
     enabledLabel: 'Active',
     disabledLabel: 'Disabled',
   },
@@ -93,7 +85,7 @@ const TOGGLES: ToggleMeta[] = [
     description:
       'Automatically hot-swaps to a secondary LLM provider when the primary returns 5xx errors, ensuring uninterrupted service.',
     icon: GitFork,
-    accentClass: 'from-amber-500 to-orange-500',
+    accentColor: 'var(--primary-rose)',
     enabledLabel: 'Active',
     disabledLabel: 'Disabled',
   },
@@ -102,21 +94,17 @@ const TOGGLES: ToggleMeta[] = [
 // ── Framer Motion variants ────────────────────────────────────────────────────
 
 const containerVariants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.07 } },
-} as const;
-
-const fadeUpVariant = {
-  hidden: { opacity: 0, y: 18 },
+  hidden: { opacity: 0 },
   show: {
     opacity: 1,
-    y: 0,
-    transition: {
-      duration: 0.42,
-      ease: [0.25, 0.1, 0.25, 1] as [number, number, number, number],
-    },
-  },
-} as const;
+    transition: { staggerChildren: 0.1 }
+  }
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } }
+};
 
 const toastVariant = {
   hidden: { opacity: 0, y: 24, scale: 0.94 },
@@ -124,28 +112,11 @@ const toastVariant = {
   exit: { opacity: 0, y: 12, scale: 0.96, transition: { duration: 0.2 } },
 } as const;
 
-// ── Toast renderer ────────────────────────────────────────────────────────────
-
-function toastIcon(variant: ToastVariant) {
-  if (variant === 'success') return <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />;
-  if (variant === 'error')   return <XCircle      className="w-4 h-4 text-rose-400 shrink-0" />;
-  return                            <Shield       className="w-4 h-4 text-cyan-400 shrink-0" />;
-}
-
-function toastBg(variant: ToastVariant) {
-  if (variant === 'success') return 'border-emerald-500/30 bg-emerald-500/10';
-  if (variant === 'error')   return 'border-rose-500/30 bg-rose-500/10';
-  return                            'border-cyan-500/30 bg-cyan-500/10';
-}
+// ── Components ────────────────────────────────────────────────────────────────
 
 function ToastList({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
   return (
-    <div
-      role="region"
-      aria-live="polite"
-      aria-label="Notifications"
-      className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 w-80"
-    >
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 w-80">
       <AnimatePresence mode="popLayout">
         {toasts.map((t) => (
           <motion.div
@@ -155,15 +126,21 @@ function ToastList({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
             initial="hidden"
             animate="show"
             exit="exit"
-            role="alert"
-            className={`flex items-start gap-3 px-4 py-3 rounded-xl border backdrop-blur-xl shadow-xl ${toastBg(t.variant)}`}
+            className={`flex items-start gap-4 px-5 py-4 rounded-2xl border-none backdrop-blur-xl shadow-2xl ${
+              t.variant === 'success' ? 'bg-[rgba(16,185,129,0.1)]' : 
+              t.variant === 'error' ? 'bg-[rgba(244,63,94,0.1)]' : 
+              'bg-[var(--surface-container-low)]'
+            }`}
           >
-            {toastIcon(t.variant)}
-            <p className="text-sm text-slate-200 flex-1 leading-snug">{t.message}</p>
+            <div className="mt-0.5">
+              {t.variant === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : 
+               t.variant === 'error' ? <XCircle className="w-4 h-4 text-rose-400" /> : 
+               <Shield className="w-4 h-4 text-[var(--accent-cyan)]" />}
+            </div>
+            <p className="text-xs font-geist text-[var(--on-surface)] flex-1 leading-snug">{t.message}</p>
             <button
               onClick={() => dismiss(t.id)}
-              aria-label="Dismiss notification"
-              className="text-slate-500 hover:text-slate-300 transition-colors ml-1 mt-0.5"
+              className="text-[var(--text-muted)] hover:text-[var(--on-surface)] transition-colors ml-1"
             >
               ×
             </button>
@@ -174,8 +151,6 @@ function ToastList({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
   );
 }
 
-// ── Toggle Card ───────────────────────────────────────────────────────────────
-
 interface ToggleCardProps {
   meta: ToggleMeta;
   enabled: boolean;
@@ -184,52 +159,39 @@ interface ToggleCardProps {
 }
 
 function ToggleCard({ meta, enabled, isSaving, onToggle }: ToggleCardProps) {
-  const { icon: Icon, label, description, accentClass, enabledLabel, disabledLabel } = meta;
+  const { icon: Icon, label, description, accentColor, enabledLabel, disabledLabel } = meta;
 
   return (
-    <motion.div
-      variants={fadeUpVariant}
-      className="glass-panel p-5 sm:p-6 flex flex-col gap-4"
-    >
-      {/* Header row */}
+    <BentoCard glowColor={meta.key === 'pii_masking_enabled' ? 'cyan' : meta.key === 'semantic_caching_enabled' ? 'amber' : 'rose'} className="p-8 h-full flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          {/* Icon badge */}
-          <div
-            className={`p-2.5 rounded-xl bg-gradient-to-br ${accentClass} shadow-lg shrink-0`}
-          >
-            <Icon className="w-4 h-4 text-white" />
+        <div className="flex items-center gap-4">
+          <div className="p-3 rounded-2xl bg-[var(--surface-bright)] shadow-md">
+            <Icon className="w-5 h-5" style={{ color: accentColor }} />
           </div>
-          <div className="min-w-0">
-            <p className="text-sm font-bold text-slate-100 leading-tight">{label}</p>
-            <p
-              className={`text-[11px] font-semibold mt-0.5 ${
-                enabled ? 'text-emerald-400' : 'text-slate-500'
-              }`}
-            >
+          <div>
+            <p className="text-sm font-bold text-[var(--on-surface)] font-geist uppercase tracking-tight">{label}</p>
+            <p className={`text-[10px] font-bold uppercase tracking-widest mt-1 font-geist ${enabled ? 'text-[var(--accent-cyan)]' : 'text-[var(--text-muted)]'}`}>
               {enabled ? enabledLabel : disabledLabel}
             </p>
           </div>
         </div>
 
-        {/* Toggle switch */}
         <button
           id={`toggle-${meta.key}`}
           role="switch"
           aria-checked={enabled}
-          aria-label={`${label} — ${enabled ? 'disable' : 'enable'}`}
           disabled={isSaving}
           onClick={onToggle}
-          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 disabled:cursor-not-allowed disabled:opacity-60 ${
-            enabled ? 'bg-gradient-to-r ' + accentClass : 'bg-slate-700'
+          className={`relative inline-flex h-6 w-12 shrink-0 items-center rounded-full transition-all duration-300 ${
+            enabled ? 'bg-[var(--surface-bright)]' : 'bg-[var(--surface-container)]'
           }`}
+          style={{ boxShadow: enabled ? `inset 0 0 10px ${accentColor}20` : 'none' }}
         >
-          <span
-            className={`inline-block h-4.5 w-4.5 transform rounded-full bg-white shadow-md transition-transform duration-300 ${
-              enabled ? 'translate-x-5' : 'translate-x-1'
-            }`}
+          <motion.span
+            animate={{ x: enabled ? 26 : 4 }}
+            className={`inline-block h-5 w-5 rounded-full shadow-lg`}
+            style={{ backgroundColor: enabled ? accentColor : 'var(--on-surface-muted)' }}
           />
-          {/* Per-toggle saving spinner overlaid on the thumb */}
           {isSaving && (
             <span className="absolute inset-0 flex items-center justify-center">
               <Loader2 className="w-3 h-3 text-white animate-spin" />
@@ -238,62 +200,15 @@ function ToggleCard({ meta, enabled, isSaving, onToggle }: ToggleCardProps) {
         </button>
       </div>
 
-      {/* Description */}
-      <p className="text-xs text-slate-400 leading-relaxed">{description}</p>
+      <p className="text-sm text-[var(--text-muted)] font-geist leading-relaxed">{description}</p>
 
-      {/* Status pill */}
-      <div className="flex items-center gap-2">
-        <div
-          className={`w-1.5 h-1.5 rounded-full ${
-            enabled ? 'bg-emerald-500 neon-dot' : 'bg-slate-600'
-          }`}
-        />
-        <span className="text-[11px] uppercase tracking-widest font-medium text-slate-500">
-          {enabled ? 'Enforced gateway-wide' : 'Not enforced'}
+      <div className="flex items-center gap-2 mt-auto">
+        <div className={`w-1.5 h-1.5 rounded-full ${enabled ? 'animate-pulse' : 'opacity-40'}`} style={{ backgroundColor: enabled ? accentColor : 'var(--text-muted)', boxShadow: enabled ? `0 0 10px ${accentColor}` : 'none' }} />
+        <span className={`${LABEL_CLASS} tracking-widest`}>
+          {enabled ? 'Enforced gateway-wide' : 'Policy idle'}
         </span>
       </div>
-    </motion.div>
-  );
-}
-
-// ── Loading skeleton ──────────────────────────────────────────────────────────
-
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-6 animate-pulse">
-      <header>
-        <div className="w-24 h-2.5 bg-slate-800/70 rounded mb-3" />
-        <div className="w-64 h-8 bg-slate-800/70 rounded mb-2" />
-        <div className="w-80 h-3.5 bg-slate-800/50 rounded" />
-      </header>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="h-36 glass-panel bg-slate-900/40" />
-        ))}
-      </div>
-      <div className="h-28 glass-panel bg-slate-900/40" />
-    </div>
-  );
-}
-
-// ── Error banner ──────────────────────────────────────────────────────────────
-
-function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="glass-panel p-5 border-rose-500/30 bg-rose-500/5 flex items-start gap-3">
-      <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-      <div className="flex-1">
-        <p className="text-sm font-semibold text-rose-300">Failed to load configuration</p>
-        <p className="text-xs text-slate-400 mt-1">{message}</p>
-      </div>
-      <button
-        onClick={onRetry}
-        className="flex items-center gap-1.5 text-xs font-semibold text-rose-400 hover:text-rose-200 transition-colors px-3 py-1.5 rounded-lg border border-rose-500/30 hover:bg-rose-500/10"
-      >
-        <RefreshCw className="w-3 h-3" />
-        Retry
-      </button>
-    </div>
+    </BentoCard>
   );
 }
 
@@ -301,24 +216,15 @@ function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => voi
 
 export function SettingsView() {
   const { user } = useAuth();
-  // Use tenant_id from the authenticated user; fall back to "default_tenant"
-  // for local development where auth may be bypassed.
   const tenantId = user?.tenantId ?? 'default_tenant';
 
-  // ── Data state ─────────────────────────────────────────────────────────────
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
-
-  // Tracks which toggle key is currently mid-PUT.
   const [savingKey, setSavingKey] = useState<ToggleKey | null>(null);
-
-  // Stable fetch reference so the retry button doesn't need extra plumbing.
-  const fetchRef = useRef<() => Promise<void>>();
 
   const { toasts, push, dismiss } = useToast();
 
-  // ── Fetch config on mount (and on retry) ───────────────────────────────────
   const fetchConfig = useCallback(async () => {
     setIsLoading(true);
     setFetchError(null);
@@ -340,19 +246,7 @@ export function SettingsView() {
           });
           return;
         }
-
-        const body: unknown = await res.json().catch(() => ({}));
-        const msg =
-          body !== null &&
-          typeof body === 'object' &&
-          'error' in body &&
-          body.error !== null &&
-          typeof body.error === 'object' &&
-          'message' in body.error &&
-          typeof body.error.message === 'string'
-            ? body.error.message
-            : `HTTP ${res.status}`;
-        throw new Error(msg);
+        throw new Error(`HTTP ${res.status}`);
       }
       const data: ClientConfig = await res.json();
       setConfig(data);
@@ -363,67 +257,34 @@ export function SettingsView() {
     }
   }, [tenantId]);
 
-  // Store the latest ref so retry can call it without stale closure.
-  fetchRef.current = fetchConfig;
-
   useEffect(() => {
-    void fetchRef.current?.();
+    void fetchConfig();
   }, [fetchConfig]);
 
-  // ── Toggle handler — per-key optimistic save ───────────────────────────────
   const handleToggle = useCallback(
     async (key: ToggleKey) => {
       if (!config || savingKey !== null) return;
-
       const nextValue = !config[key];
-
-      // Optimistic update for instant visual feedback.
       setConfig((prev) => (prev ? { ...prev, [key]: nextValue } : prev));
       setSavingKey(key);
-
       const payload: UpdateConfigPayload = { [key]: nextValue };
 
       try {
         const res = await fetch(`${CONFIG_BASE}/${tenantId}`, {
           method: 'PUT',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'x-csrf-token': '1',
-          },
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'x-csrf-token': '1' },
           body: JSON.stringify(payload),
         });
 
-        if (!res.ok) {
-          const body: unknown = await res.json().catch(() => ({}));
-          const msg =
-            body !== null &&
-            typeof body === 'object' &&
-            'error' in body &&
-            body.error !== null &&
-            typeof body.error === 'object' &&
-            'message' in body.error &&
-            typeof body.error.message === 'string'
-              ? body.error.message
-              : `HTTP ${res.status}`;
-          throw new Error(msg);
-        }
-
-        // Sync with server's authoritative response (RETURNING * from Postgres).
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const saved: ClientConfig = await res.json();
         setConfig(saved);
-
         const meta = TOGGLES.find((t) => t.key === key);
-        const label = meta?.label ?? key;
-        push(`${label} ${nextValue ? 'enabled' : 'disabled'} successfully.`, 'success');
+        push(`${meta?.label ?? key} ${nextValue ? 'enabled' : 'disabled'} successfully.`, 'success');
       } catch (err) {
-        // Roll back the optimistic change on failure.
-        setConfig((prev) =>
-          prev ? { ...prev, [key]: !nextValue } : prev,
-        );
-        const msg = err instanceof Error ? err.message : 'Save failed';
-        push(`Failed to update setting: ${msg}`, 'error');
+        setConfig((prev) => prev ? { ...prev, [key]: !nextValue } : prev);
+        push(`Failed to update setting: ${err instanceof Error ? err.message : 'Save failed'}`, 'error');
       } finally {
         setSavingKey(null);
       }
@@ -431,9 +292,16 @@ export function SettingsView() {
     [config, savingKey, tenantId, push],
   );
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
-  if (isLoading) return <LoadingSkeleton />;
+  if (isLoading && !config) {
+    return (
+      <div className="grid grid-cols-12 gap-6 p-6 animate-pulse">
+        <div className="col-span-12 h-24 bg-[var(--surface-container)] rounded-2xl" />
+        <div className="col-span-4 h-48 bg-[var(--surface-container)] rounded-2xl" />
+        <div className="col-span-4 h-48 bg-[var(--surface-container)] rounded-2xl" />
+        <div className="col-span-4 h-48 bg-[var(--surface-container)] rounded-2xl" />
+      </div>
+    );
+  }
 
   return (
     <>
@@ -441,125 +309,120 @@ export function SettingsView() {
         variants={containerVariants}
         initial="hidden"
         animate="show"
-        className="space-y-6"
+        className="grid grid-cols-12 gap-6 p-6 auto-rows-max text-[var(--on-surface)]"
       >
-        {/* ── Page Header ─────────────────────────────────────────────── */}
-        <motion.header variants={fadeUpVariant} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        {/* Breadcrumb */}
+        <motion.div variants={itemVariants} className="col-span-12 flex items-center gap-3 text-sm font-mono text-[var(--text-muted)] mb-2">
+          <Link to="/dashboard" className="hover:text-[var(--on-surface)] transition-colors flex items-center gap-2 font-geist tracking-wide">
+            <Shield className="w-4 h-4" />
+            Dashboard
+          </Link>
+          <ArrowRight className="w-4 h-4" />
+          <span className="text-[var(--on-surface)] font-geist">Settings</span>
+        </motion.div>
+
+        {/* Header */}
+        <motion.header variants={itemVariants} className="col-span-12 flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
           <div>
-            <p className="text-xs uppercase tracking-[0.25em] text-slate-500 mb-1 font-medium">
-              Control Plane
-            </p>
-            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 to-teal-400 bg-clip-text text-transparent pb-1">
+            <p className={`${LABEL_CLASS} text-[var(--accent-cyan)] mb-1`}>Control Plane</p>
+            <h1 className="text-4xl font-extrabold tracking-tight text-[var(--on-surface)] mb-2 font-geist">
               Gateway Settings
             </h1>
-            <p className="text-xs sm:text-sm text-slate-400 mt-1">
-              Real-time feature flags synced to the gateway via Redis.
-              Changes propagate in under 1&nbsp;ms.
+            <p className="text-sm text-[var(--text-muted)] max-w-2xl font-geist">
+              Real-time feature flags synced to the gateway via Redis. Changes propagate in under 1ms.
             </p>
           </div>
-
-          <div className="flex items-center gap-2 glass-panel px-3 py-1.5 rounded-full w-fit">
-            <div className={`w-2 h-2 rounded-full ${config ? 'bg-emerald-500 neon-dot' : 'bg-slate-600'}`} />
-            <span className="text-xs font-medium text-slate-300">
-              {config ? 'Config loaded' : 'No config'}
-            </span>
+          
+          <div className="flex items-center gap-3 p-4 rounded-2xl bg-[var(--surface-bright)] shadow-md">
+            <div className={`w-2 h-2 rounded-full ${config ? 'bg-[var(--accent-cyan)] shadow-[0_0_10px_var(--accent-cyan)]' : 'bg-[var(--text-muted)]'} animate-pulse`} />
+            <span className={LABEL_CLASS}>{config ? 'Config Loaded' : 'No Sync'}</span>
           </div>
         </motion.header>
 
-        {/* ── Error banner ─────────────────────────────────────────────── */}
         {fetchError && (
-          <motion.div variants={fadeUpVariant}>
-            <ErrorBanner
-              message={fetchError}
-              onRetry={() => void fetchConfig()}
-            />
+          <motion.div variants={itemVariants} className="col-span-12 p-6 rounded-2xl bg-[rgba(244,63,94,0.1)] flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <AlertTriangle className="w-6 h-6 text-rose-400" />
+              <div>
+                <p className="text-sm font-bold text-rose-400 font-geist uppercase tracking-tight">Sync Failure</p>
+                <p className="text-xs text-[var(--text-muted)] mt-1 font-geist">{fetchError}</p>
+              </div>
+            </div>
+            <button onClick={() => void fetchConfig()} className="px-4 py-2 rounded-xl bg-[var(--surface-bright)] text-xs font-bold font-geist uppercase tracking-widest hover:bg-white/10 transition-all flex items-center gap-2">
+              <RefreshCw className="w-3 h-3" /> Retry
+            </button>
           </motion.div>
         )}
 
-        {/* ── Feature Toggle Cards ─────────────────────────────────────── */}
-        {config && (
-          <>
-            <motion.div
-              variants={fadeUpVariant}
-              className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5"
-            >
-              {TOGGLES.map((meta) => (
-                <ToggleCard
-                  key={meta.key}
-                  meta={meta}
-                  enabled={config[meta.key]}
-                  isSaving={savingKey === meta.key}
-                  onToggle={() => void handleToggle(meta.key)}
-                />
-              ))}
-            </motion.div>
+        {/* Feature Toggles */}
+        {config && TOGGLES.map((meta) => (
+          <motion.div key={meta.key} variants={itemVariants} className="col-span-12 lg:col-span-4 h-[240px]">
+            <ToggleCard
+              meta={meta}
+              enabled={config[meta.key]}
+              isSaving={savingKey === meta.key}
+              onToggle={() => void handleToggle(meta.key)}
+            />
+          </motion.div>
+        ))}
 
-            {/* ── Advanced Settings Panel ──────────────────────────────── */}
-            <motion.div variants={fadeUpVariant} className="glass-panel p-5 sm:p-6">
-              <div className="flex items-center gap-2 mb-5">
-                <Sliders className="w-4 h-4 text-cyan-400" />
-                <h2 className="text-sm font-bold text-slate-100">Advanced Configuration</h2>
+        {/* Advanced Config */}
+        {config && (
+          <motion.div variants={itemVariants} className="col-span-12">
+            <BentoCard glowColor="none" className="p-8">
+              <div className="flex items-center gap-3 mb-8">
+                <div className="p-3 rounded-2xl bg-[var(--surface-bright)] shadow-md">
+                  <Sliders className="w-5 h-5 text-[var(--accent-cyan)]" />
+                </div>
+                <h2 className="text-xl font-bold font-geist">Advanced Configuration</h2>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Rate limit RPM */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div>
-                  <label
-                    htmlFor="rate-limit-rpm"
-                    className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider"
-                  >
-                    Rate Limit (req / min)
-                  </label>
-                  <div className="flex items-center gap-2">
+                  <label className={`${LABEL_CLASS} block mb-3`}>Rate Limit (req/min)</label>
+                  <div className="relative">
                     <input
-                      id="rate-limit-rpm"
-                      type="number"
-                      min={1}
-                      placeholder="Gateway default"
-                      value={config.rate_limit_rpm ?? ''}
+                      type="text"
                       readOnly
-                      className="premium-input flex-1 cursor-not-allowed opacity-60"
-                      title="Edit via API — PUT /v1/config/:tenant_id { rate_limit_rpm }"
+                      value={config.rate_limit_rpm ?? 'Gateway Default'}
+                      className="w-full h-14 px-6 rounded-2xl bg-[var(--surface-container)] text-[var(--on-surface)] font-jetbrains text-sm font-bold border-none focus:ring-0 cursor-not-allowed opacity-60"
                     />
-                    <span className="text-xs text-slate-500 whitespace-nowrap">
-                      {config.rate_limit_rpm ? `${config.rate_limit_rpm} rpm` : 'default'}
-                    </span>
+                    <div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                       <span className="text-[10px] uppercase font-bold text-[var(--text-muted)] font-geist">Read Only</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Preferred model */}
                 <div>
-                  <label
-                    htmlFor="preferred-model"
-                    className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider"
-                  >
-                    Preferred Model
-                  </label>
-                  <input
-                    id="preferred-model"
-                    type="text"
-                    placeholder="Provider default"
-                    value={config.preferred_model ?? ''}
-                    readOnly
-                    className="premium-input w-full cursor-not-allowed opacity-60"
-                    title="Edit via API — PUT /v1/config/:tenant_id { preferred_model }"
-                  />
+                  <label className={`${LABEL_CLASS} block mb-3`}>Preferred Model</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      readOnly
+                      value={config.preferred_model ?? 'Auto-negotiate'}
+                      className="w-full h-14 px-6 rounded-2xl bg-[var(--surface-container)] text-[var(--on-surface)] font-jetbrains text-sm font-bold border-none focus:ring-0 cursor-not-allowed opacity-60"
+                    />
+                    <div className="absolute right-6 top-1/2 -translate-y-1/2">
+                       <span className="text-[10px] uppercase font-bold text-[var(--text-muted)] font-geist tracking-widest">Locked</span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <p className="text-[11px] text-slate-600 mt-4 flex items-center gap-1.5">
-                <SettingsIcon className="w-3 h-3" />
-                Advanced fields are managed via the{' '}
-                <code className="text-cyan-400 font-mono">redeye_config</code> API.
-                Last updated:{' '}
-                {new Date(config.updated_at).toLocaleString()}
-              </p>
-            </motion.div>
-          </>
+              <div className="mt-8 pt-8 border-t border-[var(--surface-bright)] flex items-center justify-between">
+                <p className="text-[10px] text-[var(--text-muted)] font-geist flex items-center gap-2 uppercase tracking-[0.2em] font-bold">
+                  <SettingsIcon className="w-3 h-3" />
+                  Controlled via redeye_config API
+                </p>
+                <p className={`${DATA_CLASS} text-[10px] opacity-60`}>
+                  Last Synced: {new Date(config.updated_at).toLocaleTimeString()}
+                </p>
+              </div>
+            </BentoCard>
+          </motion.div>
         )}
       </motion.div>
 
-      {/* ── Toast notifications ──────────────────────────────────────────── */}
       <ToastList toasts={toasts} dismiss={dismiss} />
     </>
   );

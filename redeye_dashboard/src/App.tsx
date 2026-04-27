@@ -4,6 +4,7 @@
 
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './presentation/context/AuthContext';
+import { IncidentProvider } from './presentation/context/IncidentContext';
 import { authService } from './data/services/authService';
 
 // Pages
@@ -24,6 +25,8 @@ import { SecurityView }     from './presentation/dashboard/SecurityView';
 import { TracesView }       from './presentation/dashboard/TracesView';
 import { CacheView }        from './presentation/dashboard/CacheView';
 import { SettingsView }     from './presentation/dashboard/SettingsView';
+import { ProfileView }      from './presentation/dashboard/ProfileView';
+
 
 // -----------------------------------------------------------------------
 // Metric types & live-fetch logic (formerly in App.tsx monolith)
@@ -58,7 +61,8 @@ function RedirectIfAuth({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <AuthProvider authUseCase={authService}>
-      <BrowserRouter>
+      <IncidentProvider>
+        <BrowserRouter>
         <Routes>
           {/* Public */}
           <Route path="/" element={<LandingPage />} />
@@ -100,12 +104,15 @@ export default function App() {
             <Route path="traces"     element={<TracesView />} />
             <Route path="cache"      element={<CacheView />} />
             <Route path="settings"   element={<SettingsView />} />
+            <Route path="profile"    element={<ProfileView />} />
           </Route>
+
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
+      </IncidentProvider>
     </AuthProvider>
   );
 }

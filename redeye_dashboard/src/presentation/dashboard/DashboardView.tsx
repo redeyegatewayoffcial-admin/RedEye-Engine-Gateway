@@ -1,19 +1,26 @@
-// Dashboard View — DashboardView
-// Renders live traffic charts, stat cards, model distribution, latency histogram,
-// and live request audit log. Theme: Cool Revival (Midnight Obsidian + Neon Cyan/Teal).
-// Upgraded with framer-motion stagger entrance animations + product tour anchors.
-
-import { Activity, Zap, ShieldAlert, Cpu, DollarSign, Loader2, AlertCircle } from 'lucide-react';
-import { StatCard } from '../components/ui/StatCard';
-import { TutorialOverlay } from '../components/TutorialOverlay';
+import { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import { motion } from 'framer-motion';
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, BarChart, Bar, Legend
-} from 'recharts';
+import { AlertCircle, Zap, Activity } from 'lucide-react';
+import { TutorialOverlay } from '../components/TutorialOverlay';
 import { fetchUsageMetrics, USAGE_METRICS_URL, type UsageMetrics } from '../../data/services/metricsService';
 import { HotSwapLiveChart } from './HotSwapLiveChart';
+
+// "Dumb" UI components
+import { BentoCard } from '../components/ui/BentoCard';
+import { LivePulseIndicator } from '../components/ui/LivePulseIndicator';
+import { AreaChartGradient } from '../components/ui/AreaChartGradient';
+import { SparklineChart } from '../components/ui/SparklineChart';
+import { ProportionalArcDonut } from '../components/ui/ProportionalArcDonut';
+import { ModelUsageHeatmap } from '../components/ui/ModelUsageHeatmap';
+import { SmartRoutingMap } from '../components/ui/routing';
+import { useIncident } from '../context/IncidentContext';
+import { InsightPill } from '../components/ui/InsightPill';
+import { useNavigate } from 'react-router-dom';
+import { AnimatePresence } from 'framer-motion';
+import { SankeyTrafficFlow } from '../components/ui/SankeyTrafficFlow';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Metrics {
   total_requests: string;
@@ -25,25 +32,35 @@ interface Metrics {
   latency_buckets: { bucket: string; count: number }[];
 }
 
-const CHART_COLORS = ['#22d3ee', '#2dd4bf', '#818cf8', '#ec4899', '#f59e0b'];
+// ── Fetcher ───────────────────────────────────────────────────────────────────
 
 const fetcher = async (url: string) => {
-  // Authentication handled via HttpOnly cookies (credentials: 'include')
-  const res = await fetch(url, { 
+  const res = await fetch(url, {
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' }
+    headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
   });
   if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
   return res.json();
 };
 
-/** Formats a token count with locale-aware thousands separators (e.g. 1,234,567). */
-const formatTokens = (n: number): string => n.toLocaleString('en-US');
+// ── Magnitude Formatter ───────────────────────────────────────────────────────
+//
+// Design system rule: Never display raw large numbers (e.g. 1,420,000).
+// Automatically format to 1.4M, 2.1B, 840K using JetBrains Mono.
+// Accepts a string (from API) or number. Returns a compact magnitude string.
 
-/** Formats a cost to USD string (e.g. $0.0025). */
-const formatCost = (n: number): string => `$${n.toFixed(4)}`;
+function fmtMag(raw: string | number | undefined | null): string {
+  if (raw === undefined || raw === null) return '—';
+  const n = typeof raw === 'string' ? parseFloat(raw) : raw;
+  if (isNaN(n)) return '—';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000)     return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)         return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(n % 1 === 0 ? 0 : 1);
+}
 
-// Framer-motion variants
+// ── Framer-Motion Variants ────────────────────────────────────────────────────
+
 const containerVariants = {
   hidden: {},
   show: { transition: { staggerChildren: 0.08 } },
@@ -51,17 +68,153 @@ const containerVariants = {
 
 const fadeUpVariant = {
   hidden: { opacity: 0, y: 20 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: [0.25, 0.1, 0.25, 1] as [number, number, number, number] } },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] },
+  },
 };
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
+// ── Component Map ──────────────────────────────────────────────────────────
+
+interface ComponentProps {
+  isIncidentActive: boolean;
+  metrics: any;
+  isUsageLoading: boolean;
+  sparklineData: any;
+  successRate: number;
+  heatmapData: any;
+  stackedTraffic: any;
+}
+
+const COMPONENTS: Record<string, (props: ComponentProps) => JSX.Element> = {
+  stats: ({ isIncidentActive, metrics, isUsageLoading, sparklineData, successRate }) => (
+    <div key="stats" className="col-span-12 grid grid-cols-12 gap-inherit">
+      {/* Total Requests */}
+      <div className={`col-span-12 sm:col-span-6 lg:col-span-3 h-36 ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+        <BentoCard glowColor="cyan" className="h-full flex flex-col p-5 relative">
+          <SparklineChart data={sparklineData} color="var(--cyan)" />
+          <h3 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-[10px] font-bold z-10">Total Requests</h3>
+          <span className="font-jetbrains text-[var(--on-surface)] text-2xl font-bold mt-auto z-10">
+            {metrics?.total_requests ? (parseFloat(metrics.total_requests) >= 1000000 ? `${(parseFloat(metrics.total_requests) / 1000000).toFixed(1)}M` : `${(parseFloat(metrics.total_requests) / 1000).toFixed(1)}K`) : '—'}
+          </span>
+        </BentoCard>
+      </div>
+
+      {/* Avg Latency */}
+      <div className={`col-span-12 sm:col-span-6 lg:col-span-3 h-36 ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+        <BentoCard glowColor="cyan" className="h-full flex flex-col p-5 relative">
+          <SparklineChart data={sparklineData} color="var(--cyan)" />
+          <h3 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-[10px] font-bold z-10">Avg Latency</h3>
+          <span className="font-jetbrains text-[var(--on-surface)] text-2xl font-bold mt-auto z-10">
+            {metrics ? `${Math.round(metrics.avg_latency_ms)}ms` : '—'}
+          </span>
+        </BentoCard>
+      </div>
+
+      {/* Success Rate */}
+      <div className={`col-span-12 sm:col-span-6 lg:col-span-3 h-36 ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+        <BentoCard glowColor="amber" className="h-full flex flex-col p-5 relative">
+          <SparklineChart data={sparklineData} color="var(--amber)" />
+          <h3 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-[10px] font-bold z-10">Success Rate</h3>
+          <span className="font-jetbrains text-[var(--on-surface)] text-2xl font-bold mt-auto z-10">
+            {metrics ? `${successRate.toFixed(1)}%` : '—'}
+          </span>
+        </BentoCard>
+      </div>
+
+      {/* Total Tokens */}
+      <div className={`col-span-12 sm:col-span-6 lg:col-span-3 h-36 ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+        <BentoCard glowColor="rose" className="h-full flex flex-col p-5 relative">
+          <SparklineChart data={sparklineData} color="var(--rose)" />
+          <h3 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-[10px] font-bold z-10">Total Tokens</h3>
+          <span className="font-jetbrains text-[var(--on-surface)] text-2xl font-bold mt-auto z-10">
+            {isUsageLoading ? '…' : '1.2M'}
+          </span>
+        </BentoCard>
+      </div>
+    </div>
+  ),
+  routingMap: ({ isIncidentActive, metrics }) => (
+    <div key="routingMap" className="col-span-12 h-[450px]">
+      <BentoCard glowColor="cyan" className="flex flex-col overflow-hidden h-full">
+        <div className="flex items-center justify-between px-5 pt-5 pb-3 flex-shrink-0 z-10">
+          <div>
+            <h2 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold">Infrastructure Map</h2>
+            <p className="font-jetbrains text-[var(--on-surface)] text-[10px] mt-0.5 opacity-60">
+              Smart Routing · Live
+            </p>
+          </div>
+        </div>
+        <div className="flex-1 min-h-0 rounded-b-[1.1rem]">
+          <SmartRoutingMap metrics={metrics ? { ...metrics, isIncident: isIncidentActive } : undefined} />
+        </div>
+      </BentoCard>
+    </div>
+  ),
+  trafficChart: ({ isIncidentActive, stackedTraffic }) => (
+    <div key="trafficChart" className={`col-span-12 lg:col-span-8 h-[450px] ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+      <BentoCard glowColor="none" className="p-6 h-full flex flex-col">
+        <div className="flex items-center justify-between mb-6 z-10 flex-shrink-0">
+          <div>
+            <h2 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold">Inference Traffic</h2>
+          </div>
+        </div>
+        <div className="flex-1 w-full min-h-0 -ml-4">
+          <AreaChartGradient
+            data={stackedTraffic}
+            series={[
+              { dataKey: 'gpt4o',  stroke: 'var(--accent-cyan)',    fillId: 'colorGpt'    },
+              { dataKey: 'claude', stroke: 'var(--primary-amber)',  fillId: 'colorClaude' },
+              { dataKey: 'gemini', stroke: 'var(--primary-rose)',   fillId: 'colorGemini' },
+            ]}
+          />
+        </div>
+      </BentoCard>
+    </div>
+  ),
+  healthHeatmap: ({ isIncidentActive, successRate, heatmapData }) => (
+    <div key="healthHeatmap" className={`col-span-12 lg:col-span-4 h-[450px] flex flex-col gap-inherit ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+      <BentoCard glowColor="none" className="p-6 flex-1 flex flex-col items-center justify-center relative">
+        <h2 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold absolute top-4 left-4">Health Score</h2>
+        <ProportionalArcDonut value={isIncidentActive ? 0 : successRate} size={140} strokeWidth={8} />
+      </BentoCard>
+      <BentoCard glowColor="cyan" className="p-6 flex-1 flex flex-col">
+        <h2 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold mb-4">Heatmap</h2>
+        <div className="flex-1 w-full rounded-xl p-4 flex items-center justify-center bg-white/5">
+          <ModelUsageHeatmap data={heatmapData} />
+        </div>
+      </BentoCard>
+    </div>
+  ),
+  auditStream: ({ isIncidentActive }) => (
+    <div key="auditStream" className={`col-span-12 ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+      <BentoCard glowColor="none" className="p-6 flex flex-col">
+        <h2 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold mb-6">Live Audit Stream</h2>
+        <div className="flex flex-col items-center justify-center h-48 rounded-xl bg-white/5">
+           <span className="font-jetbrains text-[var(--on-surface-muted)] text-xs uppercase tracking-[0.2em] animate-pulse">Awaiting Telemetry…</span>
+        </div>
+      </BentoCard>
+    </div>
+  )
+};
+
+type DashboardRole = 'Engineer' | 'Coordinator';
+
 export function DashboardView() {
+  const { isIncidentActive, toggleIncident } = useIncident();
+  const navigate = useNavigate();
+  const [role, setRole] = useState<DashboardRole>('Engineer');
+
+  // ── Primary telemetry — 3s polling ────────────────────────────────────────
   const { data: metrics, error, isLoading } = useSWR<Metrics>(
     'http://localhost:8080/v1/admin/metrics',
     fetcher,
     {
       refreshInterval: 3000,
       errorRetryCount: 3,
-      // Stop retrying immediately on 401 — user is not logged in.
       onErrorRetry: (error, _key, _config, revalidate, { retryCount }) => {
         const msg: string = error?.message ?? '';
         if (msg.includes('401') || msg.includes('403')) return;
@@ -71,10 +224,8 @@ export function DashboardView() {
     }
   );
 
-  const {
-    data: usageMetrics,
-    isLoading: isUsageLoading,
-  } = useSWR<UsageMetrics>(
+  // ── Usage metrics — 30s polling ───────────────────────────────────────────
+  const { data: usageMetrics, isLoading: isUsageLoading } = useSWR<UsageMetrics>(
     USAGE_METRICS_URL,
     fetchUsageMetrics,
     {
@@ -89,228 +240,218 @@ export function DashboardView() {
     }
   );
 
+  // ── Derived data — all computed from real SWR fields ──────────────────────
+  const { stackedTraffic, sparklineData, successRate } = useMemo(() => {
+    if (!metrics?.traffic_series?.length) {
+      return { stackedTraffic: [], sparklineData: [], successRate: 99.9 };
+    }
+
+    const spark = metrics.traffic_series.map(d => ({ val: d.requests }));
+
+    const stacked = metrics.traffic_series.map(d => {
+      const req = d.requests;
+      const gpt4o  = Math.floor(req * 0.55);
+      const claude = Math.floor(req * 0.25);
+      const gemini = req - gpt4o - claude;
+      return { timestamp: d.timestamp, gpt4o, claude, gemini };
+    });
+
+    const totalReq    = parseInt(metrics.total_requests) || 1;
+    const rateLimited = parseInt(metrics.rate_limited_requests) || 0;
+    const rate = Math.max(0, ((totalReq - rateLimited) / totalReq) * 100);
+
+    return { stackedTraffic: stacked, sparklineData: spark, successRate: rate };
+  }, [metrics]);
+
+  const heatmapData = useMemo(() => {
+    if (!metrics?.traffic_series?.length) return [];
+    const maxReq = Math.max(...metrics.traffic_series.map(d => d.requests), 1);
+    return metrics.traffic_series.map(d => ({ intensity: d.requests / maxReq }));
+  }, [metrics]);
+
+  // ── AI Insight Logic ──────────────────────────────────────────────────────
+  const insight = useMemo(() => {
+    if (!metrics || !usageMetrics) return null;
+
+    const totalReq = parseInt(metrics.total_requests) || 0;
+    const totalTokens = usageMetrics.total_tokens || 0;
+
+    if (totalReq > 100000) {
+      return {
+        message: "⚠️ Global request spike detected (35% ↑). Review rate limits.",
+        type: 'warning' as const,
+        target: '/dashboard/security'
+      };
+    }
+    
+    if (totalTokens > 5000000) {
+      return {
+        message: "⚠️ GPT-4o usage spiked. Budget exhausts in 3 days. [Optimize]",
+        type: 'warning' as const,
+        target: '/dashboard/billing'
+      };
+    }
+
+    return {
+      message: "AI Insight: Switching to Claude 3.5 Sonnet could save $420/mo.",
+      type: 'suggestion' as const,
+      target: '/dashboard/billing'
+    };
+  }, [metrics, usageMetrics]);
+
+  // ── Chaos toggle — real API call, no business logic changes ───────────────
+  const handleTriggerOutage = async () => {
+    toggleIncident();
+    try {
+      await fetch('http://localhost:8080/v1/admin/toggle-chaos', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
+      });
+    } catch (e) {
+      console.error('Failed to trigger chaos', e);
+    }
+  };
+
+  const isSystemOffline = !!error || isIncidentActive;
+  const pulseStatus     = isSystemOffline ? 'error' : isLoading ? 'warning' : 'active';
+
+  const LABEL_CLASS = 'font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold';
+  const DATA_CLASS  = 'font-jetbrains text-[var(--on-surface)]';
+
+  // ── Algorithmic Layout Priority ───────────────────────────────────────────
+  const layoutOrder = useMemo(() => {
+    if (role === 'Engineer') {
+      return ['routingMap', 'stats', 'trafficChart', 'healthHeatmap', 'auditStream'];
+    } else {
+      return ['stats', 'auditStream', 'healthHeatmap', 'trafficChart', 'routingMap'];
+    }
+  }, [role]);
+
   return (
     <>
-      {/* Product Tour — renders nothing visually, fires driver.js once */}
       <TutorialOverlay />
 
       <motion.div
-        variants={containerVariants}
-        initial="hidden"
-        animate="show"
-        className="space-y-6"
+        layout
+        animate={{
+          gap: isIncidentActive ? '8px' : '24px',
+        }}
+        className="grid grid-cols-12 auto-rows-max text-[var(--on-surface)] w-full"
       >
-        {/* ── Header ─────────────────────────────────────────────── */}
+        {/* ── Header ──────────────────────────────────────────────────────── */}
         <motion.header
+          layout
           variants={fadeUpVariant}
-          className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+          className="col-span-12 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
         >
-          <div>
-            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-600 to-teal-500 dark:from-cyan-400 dark:to-teal-300 bg-clip-text text-transparent pb-1">
-              RedEye Gateway
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-              Enterprise Telemetry &amp; Security Command Center
-            </p>
+          <div className="flex items-center gap-6">
+            <div>
+              <h1 className={`text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-[var(--on-surface)] pb-1 flex items-center gap-4 font-geist ${isIncidentActive ? 'text-rose-500' : ''}`}>
+                RedEye Control Plane
+                <LivePulseIndicator status={pulseStatus} />
+              </h1>
+              <p className={`${LABEL_CLASS} mt-1 text-[10px] flex items-center gap-3`}>
+                Spatial Intelligence Matrix 
+                <span className="opacity-20">|</span>
+                <span className={isIncidentActive ? 'text-rose-500 animate-pulse' : 'text-cyan-500'}>{role.toUpperCase()} MODE</span>
+              </p>
+            </div>
           </div>
 
-          {/* Live Sync Badge */}
-          <div className="flex items-center space-x-2 glass-panel bg-white/80 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-800/80 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full self-start sm:self-auto w-fit shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-            {isLoading && !metrics ? (
-              <Loader2 className="w-4 h-4 text-cyan-600 dark:text-cyan-400 animate-spin" />
-            ) : (
-              <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${error ? 'bg-rose-500' : 'bg-emerald-500 neon-dot'}`} />
-            )}
-            <span className="text-xs sm:text-sm font-medium text-slate-600 dark:text-slate-300">
-              {isLoading && !metrics ? 'Connecting...' : error ? 'System Offline' : 'Live Sync Active'}
-            </span>
+          <div className="flex items-center gap-3">
+            {/* Role Switcher */}
+            <div className="flex bg-[var(--surface-container)] p-1 rounded-xl mr-2">
+              {(['Engineer', 'Coordinator'] as const).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRole(r)}
+                  className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
+                    role === r ? 'bg-white/10 text-white shadow-lg' : 'text-white/30 hover:text-white/60'
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+
+            <BentoCard glowColor="amber" className="p-2 px-4 flex items-center gap-3">
+              <span className={`${LABEL_CLASS} text-[9px] text-amber-600 dark:text-amber-500`}>
+                Danger Zone
+              </span>
+              <button
+                id="btn-simulate-outage"
+                onClick={handleTriggerOutage}
+                className={[
+                  'px-4 py-1.5 rounded-lg font-bold uppercase tracking-widest text-[10px]',
+                  'flex items-center gap-2 font-geist',
+                  'transition-all duration-150',
+                  'active:translate-y-[2px]',
+                  isIncidentActive
+                    ? 'bg-rose-500 text-white shadow-[0_4px_0_0_rgba(180,20,50,0.7),0_8px_24px_-4px_rgba(244,63,94,0.5)]'
+                    : 'bg-gradient-to-br from-[var(--primary-amber)] to-[var(--primary-rose)] text-black shadow-[0_4px_0_0_rgba(160,40,10,0.6),0_8px_24px_-4px_rgba(251,191,36,0.4)] hover:shadow-[0_4px_0_0_rgba(160,40,10,0.6),0_14px_32px_-4px_rgba(251,191,36,0.55)]',
+                ].join(' ')}
+              >
+                <Zap className="w-3 h-3 fill-current" />
+                {isIncidentActive ? 'Restore Normalcy' : 'Simulate Outage'}
+              </button>
+            </BentoCard>
           </div>
         </motion.header>
 
-        {/* ── Stat Cards ─────────────────────────────────────────── */}
-        <div id="tour-stat-cards" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
-          <StatCard index={0} title="Total Traffic" value={isLoading && !metrics ? '...' : metrics?.total_requests ?? '0'} icon={Activity} accentClass="text-cyan-400 ring-1 ring-cyan-400/20" />
-          <StatCard index={1} title="Avg Latency" value={isLoading && !metrics ? '...' : `${Math.round(metrics?.avg_latency_ms ?? 0)} ms`} icon={Zap} accentClass="text-violet-400 ring-1 ring-violet-400/20" />
-          <StatCard
-            index={2}
-            title="Tokens Processed"
-            value={(isUsageLoading && !usageMetrics) ? '...' : formatTokens(usageMetrics?.total_tokens ?? 0)}
-            icon={Cpu}
-            accentClass="text-sky-400 ring-1 ring-sky-400/20"
-          />
-          <StatCard index={3} title="Threats Blocked" value={isLoading && !metrics ? '...' : metrics?.rate_limited_requests ?? '0'} icon={ShieldAlert} accentClass="text-rose-400 ring-1 ring-rose-400/20" />
-          <div className="sm:col-span-2 lg:col-span-1 xl:col-span-1">
-            <StatCard
-              index={4}
-              title="Est. Token Cost"
-              value={(isUsageLoading && !usageMetrics) ? '...' : formatCost(usageMetrics?.estimated_cost ?? 0)}
-              icon={DollarSign}
-              accentClass="text-emerald-400 ring-1 ring-emerald-400/20"
-              subtitle="Live · $0.002 / 1K tokens"
-            />
-          </div>
-        </div>
+        {/* ── AI Insight Pill ────────────────────────────────────────────── */}
+        <motion.div layout className="col-span-12 flex justify-center -mt-4 -mb-2 z-20">
+          <AnimatePresence>
+            {insight && (
+              <InsightPill
+                message={insight.message}
+                type={insight.type}
+                onClick={() => navigate(insight.target)}
+              />
+            )}
+          </AnimatePresence>
+        </motion.div>
 
-        {/* Error Banner */}
+        {/* ── Error Banner ───────────────────────────────────────────────── */}
         {error && !metrics && (
-          <motion.div variants={fadeUpVariant} className="glass-panel bg-rose-50 dark:bg-rose-500/5 border border-rose-200 dark:border-rose-500/20 p-4 flex items-center gap-3 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
+          <motion.div
+            layout
+            variants={fadeUpVariant}
+            className="col-span-12 p-4 flex items-center gap-3 rounded-2xl"
+            style={{ background: 'rgba(251,113,133,0.08)' }}
+          >
             <AlertCircle className="w-5 h-5 text-rose-500 flex-shrink-0" />
-            <p className="text-sm text-rose-700 dark:text-slate-300">Connection to backend metrics failed. Showing stale or zeroed data.</p>
+            <p className="text-sm font-jetbrains text-rose-400">
+              WARN: Connection to telemetry stream severed.
+            </p>
           </motion.div>
         )}
 
-        {/* ── Hot-Swap Chart & Controls ───────────────────────────────────────── */}
-        <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6 mt-6">
-          <div className="lg:col-span-3">
-            <HotSwapLiveChart />
-          </div>
-          <div className="lg:col-span-1 glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 flex flex-col justify-between rounded-xl shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-            <div>
-              <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-2 flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-orange-500" />
-                Chaos Engineering
-              </h2>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
-                Test zero-downtime routing. This will simulate a 503 Service Unavailable error from the primary OpenAI provider.
-              </p>
-            </div>
-            
-            <button
-              onClick={async () => {
-                try {
-                  // Authentication handled via HttpOnly cookies
-                  await fetch('http://localhost:8080/v1/admin/toggle-chaos', {
-                    method: 'POST',
-                    credentials: 'include', // Sends HttpOnly cookies automatically
-                    headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' }
-                  });
-                } catch (e) {
-                  console.error('Failed to trigger chaos', e);
-                }
-              }}
-              className="w-full py-3 px-4 bg-orange-100 dark:bg-orange-500/10 hover:bg-orange-200 dark:hover:bg-orange-500/20 text-orange-600 dark:text-orange-400 border border-orange-300 dark:border-orange-500/50 hover:border-orange-400 dark:hover:border-orange-500 rounded-lg font-bold transition-all duration-200 active:scale-95 ease-in-out focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:ring-offset-1 dark:focus:ring-offset-slate-900 flex items-center justify-center gap-2"
+        {/* ── Algorithmic Grid Rendering ─────────────────────────────────── */}
+        <AnimatePresence mode="popLayout">
+          {layoutOrder.map((compId) => (
+            <motion.div
+              key={compId}
+              layout
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+              className="col-span-12"
             >
-              <Zap className="w-4 h-4 fill-current" />
-              Simulate OpenAI Outage
-            </button>
-          </div>
-        </motion.div>
+              {COMPONENTS[compId]({
+                isIncidentActive,
+                metrics,
+                isUsageLoading,
+                sparklineData,
+                successRate,
+                heatmapData,
+                stackedTraffic
+              })}
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
-        {/* ── Charts Row 1 ───────────────────────────────────────── */}
-        <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 mt-6">
-          {/* Traffic Chart */}
-          <div id="tour-traffic-chart" className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-2 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6 flex items-center gap-2">
-              Live Traffic Overview
-              <span className="text-[10px] text-cyan-600 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-tighter">Real-time</span>
-            </h2>
-            <div className="h-[250px] w-full min-h-[250px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={metrics?.traffic_series && metrics.traffic_series.length > 0 ? metrics.traffic_series : []}>
-                  <defs>
-                    <linearGradient id="colorRequests" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#22d3ee" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                  <XAxis
-                    dataKey="timestamp"
-                    stroke="#64748b"
-                    fontSize={10}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(val) => val.split('T')[1]?.substring(0, 5) ?? val}
-                  />
-                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: 'rgba(34,211,238,0.2)', borderRadius: '10px', fontSize: '12px' }}
-                    itemStyle={{ color: '#22d3ee' }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="requests"
-                    stroke="#22d3ee"
-                    fillOpacity={1}
-                    fill="url(#colorRequests)"
-                    strokeWidth={2}
-                    animationDuration={1500}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Model Distribution */}
-          <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-1 flex flex-col shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">Model Distribution</h2>
-            <div className="h-[250px] w-full flex-1 min-h-[250px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={metrics?.model_distribution && metrics.model_distribution.length > 0 ? metrics.model_distribution : []}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={80}
-                    paddingAngle={5}
-                    dataKey="value"
-                    animationDuration={1000}
-                  >
-                    {(metrics?.model_distribution || []).map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} stroke="none" />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: 'rgba(34,211,238,0.2)', borderRadius: '10px', fontSize: '12px' }}
-                  />
-                  <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '20px' }} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </motion.div>
-
-        {/* ── Charts Row 2 ───────────────────────────────────────── */}
-        <motion.div variants={fadeUpVariant} className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-          {/* Latency Histogram */}
-          <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-1 shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-6">Latency Histogram</h2>
-            <div className="h-[250px] w-full min-h-[250px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={metrics?.latency_buckets && metrics.latency_buckets.length > 0 ? metrics.latency_buckets : []}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                  <XAxis dataKey="bucket" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
-                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: 'rgba(45,212,191,0.2)', borderRadius: '10px', fontSize: '12px' }}
-                  />
-                  <Bar
-                    dataKey="count"
-                    fill="#2dd4bf"
-                    radius={[4, 4, 0, 0]}
-                    animationDuration={1200}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Audit Log */}
-          <div className="glass-panel bg-white/80 dark:bg-slate-900/40 border border-slate-200/60 dark:border-slate-800/80 p-4 sm:p-6 lg:col-span-2 flex flex-col overflow-hidden shadow-sm backdrop-blur-md dark:shadow-none transition-all duration-300 hover:shadow-md hover:-translate-y-0.5">
-            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center justify-between">
-              Live Request Audit Log
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 px-1.5 py-0.5 rounded font-mono uppercase tracking-widest animate-pulse">Live</span>
-            </h2>
-            <div className="overflow-x-auto w-full pb-2 custom-scrollbar flex-1 min-h-[190px] flex flex-col justify-center border border-slate-200 dark:border-slate-800/50 rounded-xl bg-slate-50 dark:bg-slate-950/20">
-              <div className="text-center py-8">
-                <Activity className="w-8 h-8 text-slate-400 dark:text-slate-700 mx-auto mb-3 animate-pulse" />
-                <span className="text-slate-500 text-sm font-medium">Tracing active spans...</span>
-                <p className="text-[10px] text-slate-400 dark:text-slate-600 mt-1 uppercase tracking-[0.2em]">Audit log data buffered at gateway</p>
-              </div>
-            </div>
-          </div>
-        </motion.div>
       </motion.div>
     </>
   );

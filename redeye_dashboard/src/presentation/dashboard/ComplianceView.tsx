@@ -1,361 +1,313 @@
-// Dashboard View — ComplianceView
-// DPDP Compliance Command Center: Real-time PII redaction telemetry,
-// geo-block enforcement stats, and regional detection heatmap.
-// Theme: "Cool Revival" (Midnight Obsidian + Neon Cyan/Teal/Amber)
-
-import { ShieldCheck, Fingerprint, MapPin, Eye, Globe, AlertTriangle, TrendingUp } from 'lucide-react';
+import React from 'react';
 import useSWR from 'swr';
 import { motion } from 'framer-motion';
-import { StatCard } from '../components/ui/StatCard';
+import { Treemap, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts';
+import { Eye, AlertTriangle, TrendingUp, Shield, ArrowRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { BentoCard } from '../components/ui/BentoCard';
+import { AreaChartGradient } from '../components/ui/AreaChartGradient';
+import { ProportionalArcDonut } from '../components/ui/ProportionalArcDonut';
 import { Badge } from '../components/ui/Badge';
-import {
-  COMPLIANCE_METRICS_URL,
-  fetchComplianceMetrics,
-  type ComplianceMetrics,
-} from '../../data/services/metricsService';
+import { fetchComplianceMetrics, COMPLIANCE_METRICS_URL, type ComplianceMetrics } from '../../data/services/metricsService';
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const LABEL_CLASS = 'font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-[10px] font-bold';
+const DATA_CLASS  = 'font-jetbrains text-[var(--on-surface)]';
 
 // ── Framer Motion Variants ──────────────────────────────────────────────────
-
 const containerVariants = {
-  hidden: {},
-  show: { transition: { staggerChildren: 0.08 } },
-} as const;
-
-const fadeUpVariant = {
-  hidden: { opacity: 0, y: 20 },
+  hidden: { opacity: 0 },
   show: {
     opacity: 1,
-    y: 0,
-    transition: { duration: 0.45, ease: [0.25, 0.1, 0.25, 1] as [number, number, number, number] },
+    transition: {
+      staggerChildren: 0.1,
+    },
   },
 };
 
-// ── Region flag emojis ──────────────────────────────────────────────────────
-
-const REGION_FLAGS: Record<string, string> = {
-  IN: '🇮🇳',
-  US: '🇺🇸',
-  EU: '🇪🇺',
-  GLOBAL: '🌐',
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  show: { 
+    opacity: 1, 
+    y: 0, 
+    transition: { duration: 0.5, ease: [0.16, 1, 0.3, 1] } 
+  },
 };
 
-const REGION_LABELS: Record<string, string> = {
-  IN: 'India (DPDP)',
-  US: 'United States',
-  EU: 'European Union',
-  GLOBAL: 'Global',
+// ── Custom Treemap Content ──────────────────────────────────────────────────
+const CustomizedContent = (props: any) => {
+  const { x, y, width, height, name, fill } = props;
+  return (
+    <g>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        style={{
+          fill: fill,
+          stroke: 'var(--bg-canvas)',
+          strokeWidth: 2,
+        }}
+      />
+      {width > 40 && height > 30 && (
+        <text
+          x={x + width / 2}
+          y={y + height / 2}
+          textAnchor="middle"
+          fill="#ffffff"
+          fontSize={10}
+          fontFamily="monospace"
+          className="font-bold drop-shadow-md uppercase tracking-wider"
+        >
+          {name}
+        </text>
+      )}
+    </g>
+  );
 };
-
-// ── Helper ──────────────────────────────────────────────────────────────────
-
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString();
-}
-
-function getPercentage(value: number, total: number): number {
-  if (total === 0) return 0;
-  return Math.round((value / total) * 100);
-}
 
 // ── Component ───────────────────────────────────────────────────────────────
-
 export function ComplianceView() {
-  const { data: metrics, error, isLoading } = useSWR<ComplianceMetrics>(
+  const { data: metrics, isLoading } = useSWR<ComplianceMetrics>(
     COMPLIANCE_METRICS_URL,
     fetchComplianceMetrics,
-    { refreshInterval: 10_000, errorRetryCount: 3 }
+    { refreshInterval: 5000 }
   );
 
-  // ── Loading Skeleton ────────────────────────────────────────────────────
+  const redactionCoverage = metrics && metrics.total_scanned > 0 
+    ? ((metrics.pii_redactions / metrics.total_scanned) * 100) 
+    : 100;
+  
+  // Map real region breakdown to treemap
+  const treemapData = metrics?.region_breakdown.map((r) => {
+    let fill = 'var(--accent-cyan)'; // Info
+    if (r.count > 5000) fill = 'var(--primary-rose)'; // Critical
+    else if (r.count > 1000) fill = 'var(--primary-amber)'; // Warn
+    
+    return { name: r.region, size: r.count, fill };
+  }) || [];
 
-  if (isLoading && !metrics) {
-    return (
-      <div className="space-y-6 animate-pulse">
-        <header>
-          <div className="w-32 h-3 bg-slate-800/60 rounded mb-3" />
-          <div className="w-72 h-8 bg-slate-800/60 rounded mb-2" />
-          <div className="w-96 h-4 bg-slate-800/40 rounded" />
-        </header>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-28 glass-panel bg-slate-900/40" />
-          ))}
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="h-64 glass-panel bg-slate-900/40 lg:col-span-2" />
-          <div className="h-64 glass-panel bg-slate-900/40" />
-        </div>
-      </div>
-    );
-  }
-
-  const totalScanned = metrics?.total_scanned ?? 0;
-  const dpdpBlocks = metrics?.dpdp_blocks ?? 0;
-  const piiRedactions = metrics?.pii_redactions ?? 0;
-  const regionBreakdown = metrics?.region_breakdown ?? [];
-
-  // Compute the protection rate (scanned - blocks - redactions ≈ clean pass-throughs)
-  const cleanThrough = Math.max(0, totalScanned - dpdpBlocks - piiRedactions);
-  const protectionRate = totalScanned > 0 ? ((cleanThrough / totalScanned) * 100).toFixed(1) : '100.0';
-
-  // Max count for the region bar widths
-  const maxRegionCount = Math.max(1, ...regionBreakdown.map((r) => r.count));
+  const violations: any[] = []; // Empty for real endpoints
+  const piiTimeline: any[] = [];
 
   return (
     <motion.div
       variants={containerVariants}
       initial="hidden"
       animate="show"
-      className="space-y-6"
+      className="grid grid-cols-12 gap-6 p-6 auto-rows-max text-[var(--on-surface)]"
     >
-      {/* ── Header ────────────────────────────────────────────────────── */}
-      <motion.header
-        variants={fadeUpVariant}
-        className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
-      >
-        <div>
-          <p className="text-xs uppercase tracking-[0.25em] text-slate-500 mb-1 font-medium">
-            Compliance Engine
-          </p>
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-amber-500 to-orange-500 dark:from-amber-400 dark:to-orange-400 bg-clip-text text-transparent pb-1">
-            DPDP Security Center
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Real-time PII protection, geo-routing enforcement, and data residency compliance.
-          </p>
-        </div>
-
-        {/* Live Badge */}
-        <div className="flex items-center gap-3">
-          {error && (
-            <div className="flex items-center gap-1.5 text-amber-400 text-xs font-medium bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              <span>Mock Data</span>
-            </div>
-          )}
-          <div className="flex items-center space-x-2 glass-panel px-3 py-1.5 sm:px-4 sm:py-2 rounded-full w-fit">
-            <div className={`w-2 h-2 sm:w-3 sm:h-3 rounded-full ${error ? 'bg-amber-500' : 'bg-emerald-500 neon-dot'}`} />
-            <span className="text-xs sm:text-sm font-medium text-slate-300">
-              {error ? 'Offline — Fallback Active' : 'DPDP Shield Active'}
-            </span>
-          </div>
-        </div>
-      </motion.header>
-
-      {/* ── Stat Cards ────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-        <StatCard
-          index={0}
-          title="Total Prompts Inspected"
-          value={formatNumber(totalScanned)}
-          icon={Eye}
-          accentClass="text-cyan-400 ring-1 ring-cyan-400/20"
-          subtitle={`${protectionRate}% clean pass-through`}
-        />
-        <StatCard
-          index={1}
-          title="DPDP Geo-Blocks (India)"
-          value={formatNumber(dpdpBlocks)}
-          icon={MapPin}
-          accentClass="text-rose-400 ring-1 ring-rose-400/20"
-          subtitle={`${getPercentage(dpdpBlocks, totalScanned)}% of total traffic`}
-        />
-        <StatCard
-          index={2}
-          title="Aadhaar / PAN Redactions"
-          value={formatNumber(piiRedactions)}
-          icon={Fingerprint}
-          accentClass="text-amber-400 ring-1 ring-amber-400/20"
-          subtitle={`${getPercentage(piiRedactions, totalScanned)}% detection rate`}
-        />
-      </div>
-
-      {/* ── Main Content ──────────────────────────────────────────────── */}
-      <motion.div
-        variants={fadeUpVariant}
-        className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6"
-      >
-        {/* Region Breakdown — Bar Chart */}
-        <div className="glass-panel p-5 sm:p-6 lg:col-span-2">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h2 className="text-lg sm:text-xl font-bold text-slate-100 flex items-center gap-2">
-                <Globe className="w-5 h-5 text-cyan-400" />
-                Regional Detection Heatmap
-              </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Distribution of compliance events by detected region.
-              </p>
-            </div>
-            <Badge variant="success">Live</Badge>
-          </div>
-
-          <div className="space-y-4">
-            {regionBreakdown.length === 0 ? (
-              <div className="text-center py-10">
-                <Globe className="w-8 h-8 text-slate-700 mx-auto mb-3" />
-                <p className="text-sm text-slate-500">No regional data yet</p>
-              </div>
-            ) : (
-              regionBreakdown.map((region, idx) => {
-                const pct = getPercentage(region.count, totalScanned);
-                const barWidth = Math.max(4, (region.count / maxRegionCount) * 100);
-                const isIndia = region.region === 'IN';
-
-                return (
-                  <motion.div
-                    key={region.region}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.1, duration: 0.35 }}
-                    className={`group relative rounded-xl p-4 border transition-all duration-300 hover:-translate-y-0.5 ${
-                      isIndia
-                        ? 'bg-amber-500/5 border-amber-500/20 hover:border-amber-500/40 hover:shadow-[0_0_20px_rgba(245,158,11,0.08)]'
-                        : 'bg-slate-900/30 border-slate-800/60 hover:border-cyan-500/25 hover:shadow-[0_0_20px_rgba(34,211,238,0.06)]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xl">{REGION_FLAGS[region.region] ?? '🌐'}</span>
-                        <div>
-                          <p className="text-sm font-semibold text-slate-200">
-                            {REGION_LABELS[region.region] ?? region.region}
-                          </p>
-                          <p className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">
-                            {region.region}
-                            {isIndia && (
-                              <span className="ml-2 text-amber-400">● DPDP ENFORCED</span>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-slate-100 tabular-nums">
-                          {region.count.toLocaleString()}
-                        </p>
-                        <p className="text-[10px] text-slate-500">{pct}% of total</p>
-                      </div>
-                    </div>
-                    {/* Progress bar */}
-                    <div className="h-1.5 bg-slate-800/60 rounded-full overflow-hidden">
-                      <motion.div
-                        initial={{ width: 0 }}
-                        animate={{ width: `${barWidth}%` }}
-                        transition={{ delay: 0.3 + idx * 0.1, duration: 0.6, ease: 'easeOut' }}
-                        className={`h-full rounded-full ${
-                          isIndia
-                            ? 'bg-gradient-to-r from-amber-500 to-orange-500'
-                            : 'bg-gradient-to-r from-cyan-500 to-teal-500'
-                        }`}
-                      />
-                    </div>
-                  </motion.div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Right Column — DPDP Policy Status + Protection Summary */}
-        <div className="space-y-4 sm:space-y-6">
-          {/* DPDP Policy Card */}
-          <motion.div variants={fadeUpVariant} className="glass-panel p-5">
-            <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2 mb-4">
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              DPDP Policy Status
-            </h2>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">Framework</span>
-                <Badge variant="success">DPDP 2023</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">Region Lock</span>
-                <Badge variant="success">IN Enforced</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">Fail Mode</span>
-                <Badge variant="danger">Fail-Closed</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">PII Engine</span>
-                <Badge variant="success">Two-Tier Active</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-400">US-Only Block</span>
-                <Badge variant="success">o1-preview, o1-mini</Badge>
-              </div>
-            </div>
-          </motion.div>
-
-          {/* Detection Summary */}
-          <motion.div variants={fadeUpVariant} className="glass-panel p-5">
-            <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2 mb-4">
-              <TrendingUp className="w-4 h-4 text-cyan-400" />
-              Protection Summary
-            </h2>
-            <div className="space-y-3">
-              {[
-                { label: 'Aadhaar Numbers', color: 'text-amber-400 bg-amber-500/10' },
-                { label: 'PAN Cards', color: 'text-amber-400 bg-amber-500/10' },
-                { label: 'SSN (US)', color: 'text-sky-400 bg-sky-500/10' },
-                { label: 'Credit Cards', color: 'text-rose-400 bg-rose-500/10' },
-                { label: 'Email Addresses', color: 'text-violet-400 bg-violet-500/10' },
-              ].map((entity) => (
-                <div key={entity.label} className="flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full ${entity.color.split(' ')[0]}`} />
-                  <span className="text-xs text-slate-400 flex-1">{entity.label}</span>
-                  <span
-                    className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${entity.color}`}
-                  >
-                    Protected
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {/* Protection rate indicator */}
-            <div className="mt-5 pt-4 border-t border-slate-800/60">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-slate-500">Overall Protection Rate</span>
-                <span className="text-sm font-bold text-emerald-400">{protectionRate}%</span>
-              </div>
-              <div className="h-2 bg-slate-800/60 rounded-full overflow-hidden">
-                <motion.div
-                  initial={{ width: 0 }}
-                  animate={{ width: `${protectionRate}%` }}
-                  transition={{ delay: 0.5, duration: 0.8, ease: 'easeOut' }}
-                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full"
-                />
-              </div>
-            </div>
-          </motion.div>
-        </div>
+      {/* ── BREADCRUMB ────────────────────────────────────────────────── */}
+      <motion.div variants={itemVariants} className="col-span-12 flex items-center gap-3 text-sm font-mono text-[var(--text-muted)] mb-2">
+        <Link to="/dashboard" className="hover:text-[var(--on-surface)] transition-colors flex items-center gap-2 font-geist tracking-wide">
+          <Shield className="w-4 h-4" />
+          Dashboard
+        </Link>
+        <ArrowRight className="w-4 h-4" />
+        <span className="text-[var(--on-surface)] font-geist">Compliance</span>
       </motion.div>
 
-      {/* ── Active Protections Strip ──────────────────────────────────── */}
-      <motion.div
-        variants={fadeUpVariant}
-        className="glass-panel p-4 sm:p-5"
-      >
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider mr-2">
-            Active Shields:
-          </span>
-          {[
-            { label: 'Aho-Corasick PII Scan', variant: 'success' as const },
-            { label: 'Presidio Deep Analysis', variant: 'success' as const },
-            { label: 'DPDP Region Lock', variant: 'success' as const },
-            { label: 'US-Only Model Block', variant: 'danger' as const },
-            { label: 'Fail-Closed Enforcement', variant: 'danger' as const },
-          ].map((shield) => (
-            <Badge key={shield.label} variant={shield.variant}>
-              {shield.label}
+      {/* ── HEADER ────────────────────────────────────────────────────── */}
+      <motion.header variants={itemVariants} className="col-span-12 mb-8">
+        <p className={`${LABEL_CLASS} text-[var(--accent-cyan)] mb-1`}>
+          PrivacyOps Command Center
+        </p>
+        <h1 className="text-4xl font-extrabold tracking-tight text-[var(--on-surface)] mb-2 font-geist">
+          DPDP Compliance
+        </h1>
+        <p className="text-sm text-[var(--text-muted)] font-geist max-w-2xl">
+          Real-time enforcement of data residency, PII redaction, and global privacy policies.
+        </p>
+      </motion.header>
+
+      {/* ── TOP ROW ──────────────────────────────────────────────── */}
+      
+      {/* Redaction Coverage — col-span-4 */}
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-4">
+        <BentoCard glowColor="cyan" className="h-full p-6 flex flex-col items-center justify-center">
+          <h3 className={`${LABEL_CLASS} mb-6`}>
+            Redaction Success
+          </h3>
+          <ProportionalArcDonut value={redactionCoverage} size={160} strokeWidth={10} />
+        </BentoCard>
+      </motion.div>
+
+      {/* Data Residency Status — col-span-4 */}
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-4">
+        <BentoCard glowColor="cyan" className="h-full p-6 flex flex-col justify-center">
+          <h3 className={`${LABEL_CLASS} mb-4 flex items-center gap-2`}>
+            Data Residency Status
+          </h3>
+          <div className="flex items-center gap-4">
+            <div className={`${DATA_CLASS} text-6xl font-bold tracking-tighter tabular-nums`}>
+              {metrics?.dpdp_blocks || 0}<span className="text-3xl text-[var(--text-muted)] pl-2 font-normal font-geist">Blocks</span>
+            </div>
+            <div className="w-3 h-3 rounded-full bg-[var(--accent-cyan)] shadow-[0_0_15px_rgba(34,211,238,0.8)] animate-pulse" />
+          </div>
+          <p className="text-[10px] text-[var(--text-muted)] mt-4 font-geist leading-relaxed uppercase tracking-widest font-bold">
+            Geo-routing enforcement active
+          </p>
+        </BentoCard>
+      </motion.div>
+
+      {/* Active Policies — col-span-4 */}
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-4">
+        <BentoCard glowColor="none" className="h-full p-6">
+          <h3 className={`${LABEL_CLASS} mb-4`}>
+            Active Policies
+          </h3>
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--surface-container-low)]">
+              <span className="font-geist text-xs font-bold text-[var(--on-surface)]">Global DPDP Shield</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-[var(--accent-cyan)] font-geist tracking-widest uppercase font-bold">Active</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-cyan)] shadow-[0_0_10px_rgba(34,211,238,0.6)]" />
+              </div>
+            </div>
+            <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--surface-container-low)]">
+              <span className="font-geist text-xs font-bold text-[var(--on-surface)]">Real-time PII Redaction</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-[var(--accent-cyan)] font-geist tracking-widest uppercase font-bold">Active</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-cyan)] shadow-[0_0_10px_rgba(34,211,238,0.6)]" />
+              </div>
+            </div>
+          </div>
+        </BentoCard>
+      </motion.div>
+
+      {/* ── MIDDLE ROW ─────────────────────────────────────────────── */}
+      
+      {/* PII Detection Timeline — col-span-8 */}
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-8">
+        <BentoCard glowColor="cyan" className="h-80 p-6 flex flex-col">
+          <h3 className={`${LABEL_CLASS} mb-4 flex items-center gap-2`}>
+            <TrendingUp className="w-4 h-4 text-[var(--accent-cyan)]" />
+            PII Detection Timeline
+          </h3>
+          <div className="flex-1 min-h-0 w-full relative flex items-center justify-center">
+            {piiTimeline.length > 0 ? (
+              <AreaChartGradient
+                data={piiTimeline}
+                series={[]}
+                xAxisKey="timestamp"
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center">
+                <div className="relative flex items-center justify-center mb-6">
+                  <div className="absolute w-12 h-12 rounded-full border border-[var(--accent-cyan)]/20 animate-[ping_2s_cubic-bezier(0,0,0.2,1)_infinite]" />
+                  <div className="absolute w-8 h-8 rounded-full border border-[var(--accent-cyan)]/40 animate-[ping_2s_cubic-bezier(0,0,0.2,1)_infinite]" style={{ animationDelay: '0.5s' }} />
+                  <div className="w-3 h-3 rounded-full bg-[var(--accent-cyan)] shadow-[0_0_15px_var(--accent-cyan)]" />
+                </div>
+                <span className="font-jetbrains text-[0.75rem] text-[var(--accent-cyan)] uppercase tracking-[0.2em] animate-pulse">
+                  Awaiting Telemetry...
+                </span>
+              </div>
+            )}
+          </div>
+        </BentoCard>
+      </motion.div>
+
+      {/* Severity Treemap — col-span-4 */}
+      <motion.div variants={itemVariants} className="col-span-12 lg:col-span-4">
+        <BentoCard glowColor="rose" className="h-80 p-6 flex flex-col">
+          <h3 className={`${LABEL_CLASS} mb-4 flex items-center gap-2`}>
+            <AlertTriangle className="w-4 h-4 text-[var(--primary-rose)]" />
+            Severity Treemap
+          </h3>
+          <div className="flex-1 min-h-0 relative">
+            <ResponsiveContainer width="100%" height="100%">
+              <Treemap
+                data={treemapData}
+                dataKey="size"
+                aspectRatio={4 / 3}
+                stroke="var(--bg-canvas)"
+                fill="var(--accent-cyan)"
+                content={<CustomizedContent />}
+              >
+                <RechartsTooltip 
+                  cursor={false}
+                  contentStyle={{ backgroundColor: 'var(--surface-container-low)', borderColor: 'transparent', borderRadius: '12px', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', backdropFilter: 'blur(12px)' }}
+                  itemStyle={{ fontFamily: 'monospace', color: 'var(--on-surface)', fontSize: '10px' }}
+                />
+              </Treemap>
+            </ResponsiveContainer>
+          </div>
+        </BentoCard>
+      </motion.div>
+
+      {/* ── BOTTOM ROW ──────────────────────────────────────────────── */}
+      
+      {/* Live Violation Feed — col-span-12 */}
+      <motion.div variants={itemVariants} className="col-span-12">
+        <BentoCard glowColor="rose" className="overflow-hidden flex flex-col">
+          <div className="p-6 bg-[rgba(255,255,255,0.02)] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <h3 className={`${LABEL_CLASS} flex items-center gap-2`}>
+              <Eye className="w-4 h-4 text-[var(--accent-cyan)]" />
+              Live Violation Feed
+            </h3>
+            <Badge variant="danger" className="animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.4)] border-none">
+              Live Intercept
             </Badge>
-          ))}
-        </div>
+          </div>
+          
+          <div className="overflow-x-auto max-h-[400px] overflow-y-auto custom-scrollbar p-2">
+            <div className="flex flex-col gap-2 min-w-[800px]">
+              <div className="flex items-center px-6 py-4 sticky top-0 bg-[var(--surface-lowest)] z-10">
+                 <div className={`${LABEL_CLASS} w-48`}>Timestamp</div>
+                 <div className={`${LABEL_CLASS} w-32`}>Severity</div>
+                 <div className={`${LABEL_CLASS} w-48`}>Policy Executed</div>
+                 <div className={`${LABEL_CLASS} flex-1`}>Intercepted Payload (Redacted)</div>
+              </div>
+              
+              {violations.length > 0 ? (
+                violations.map((log, index) => (
+                  <div key={log.id} className={`flex items-center px-6 py-4 rounded-xl transition-colors group ${index % 2 === 0 ? 'bg-[var(--surface-container-low)]' : 'bg-[var(--surface-container-lowest)]'}`}>
+                    <div className="w-48 text-[0.75rem] font-jetbrains tabular-nums text-[var(--text-muted)]">
+                      {log.time}
+                    </div>
+                    <div className="w-32">
+                      <span className={`px-2.5 py-1 text-[9px] uppercase font-bold tracking-widest rounded-full ${
+                        log.severity === 'CRITICAL' ? 'bg-[rgba(244,63,94,0.1)] text-[var(--primary-rose)]' :
+                        log.severity === 'WARN' ? 'bg-[rgba(245,158,11,0.1)] text-[var(--primary-amber)]' :
+                        'bg-[rgba(34,211,238,0.1)] text-[var(--accent-cyan)]'
+                      }`}>
+                        {log.severity}
+                      </span>
+                    </div>
+                    <div className="w-48 text-xs font-bold font-geist text-[var(--on-surface)]">
+                      {log.policy}
+                    </div>
+                    <div className="flex-1 text-[0.75rem] font-jetbrains text-[var(--text-muted)] break-all leading-relaxed">
+                      {log.payload.split(/(\[.*?\])/g).map((part: string, i: number) => {
+                        if (part.startsWith('[') && part.endsWith(']')) {
+                          return (
+                            <span key={i} className="text-[var(--primary-rose)] bg-[var(--surface-bright)] px-1.5 py-0.5 rounded font-bold inline-block mx-0.5 shadow-sm">
+                              {part}
+                            </span>
+                          );
+                        }
+                        return <span key={i}>{part}</span>;
+                      })}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="flex flex-col items-center justify-center py-24">
+                  <div className="relative flex items-center justify-center mb-6">
+                    <div className="absolute w-12 h-12 rounded-full border border-[var(--accent-cyan)]/20 animate-[ping_2s_cubic-bezier(0,0,0.2,1)_infinite]" />
+                    <div className="absolute w-8 h-8 rounded-full border border-[var(--accent-cyan)]/40 animate-[ping_2s_cubic-bezier(0,0,0.2,1)_infinite]" style={{ animationDelay: '0.5s' }} />
+                    <div className="w-3 h-3 rounded-full bg-[var(--accent-cyan)] shadow-[0_0_15px_var(--accent-cyan)]" />
+                  </div>
+                  <span className="font-jetbrains text-[0.75rem] text-[var(--accent-cyan)] uppercase tracking-[0.2em] animate-pulse">
+                    Awaiting Telemetry...
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </BentoCard>
       </motion.div>
     </motion.div>
   );

@@ -1,16 +1,3 @@
-// Dashboard View — ApiKeysView
-// 2026 UX Design Principles: Card-based layout, fluid motion, progressive disclosure
-// Split view: LLM Provider Vault (always visible) + Virtual API Keys (team only)
-// Theme: "Cool Revival / Neon Crimson" — Dark Red/Glass aesthetic
-//
-// Engineering constraints observed:
-//  • Zero `any` types — every API shape has an explicit interface.
-//  • Virtual key revocation goes through a confirmation modal before DELETE.
-//  • DELETE hits the redeye_config endpoint (port 8085); the existing auth
-//    endpoint (port 8084) is kept for provider-key management.
-//  • `isRevoking` tracks which key_id is mid-delete so its row shows a spinner.
-//  • Toast notifications confirm success or surface errors after each action.
-
 import { useState, useCallback } from 'react';
 import {
   Key,
@@ -39,24 +26,27 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { SUPPORTED_PROVIDERS } from '../../data/constants/providers';
 import { useToast, type Toast, type ToastVariant } from '../hooks/useToast';
+import { BentoCard } from '../components/ui/BentoCard';
+import { InlineSparkline } from '../components/ui/InlineSparkline';
+import { QuotaRadialBar } from '../components/ui/QuotaRadialBar';
+import { KeyUsageHeatmap } from '../components/ui/KeyUsageHeatmap';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const AUTH_BASE   = 'http://localhost:8084/v1/auth';
+const AUTH_BASE = 'http://localhost:8084/v1/auth';
 const CONFIG_BASE = 'http://localhost:8085/v1/config';
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
-/**
- * Virtual API key as returned by GET /v1/config/:tenant_id/api-keys.
- * Note: `key_hash` is intentionally omitted by the backend DTO.
- */
 export interface ApiKey {
   id: string;
   name: string;
   created_at: string;
   expires_at: string | null;
   is_active: boolean;
+  daily_requests?: number[];
+  usage_trend_24h?: number[];
+  quota_used?: number;
 }
 
 interface ProviderKey {
@@ -76,43 +66,99 @@ const fetcher = async (url: string): Promise<unknown> => {
   return res.json();
 };
 
+// ── Formatter & Styles ────────────────────────────────────────────────────────
+
+const LABEL_CLASS = 'font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold';
+const DATA_CLASS = 'font-jetbrains text-[var(--on-surface)]';
+
+// ── Skeuomorphism 2.0 Tokens ──────────────────────────────────────────────────
+
+const TACTILE_CARD = `
+  relative overflow-hidden
+  bg-gradient-to-br from-[var(--surface-container)] to-[var(--bg-canvas)]
+  border-t border-l border-[rgba(255,255,255,0.12)]
+  border-b-2 border-r-2 border-[rgba(0,0,0,0.45)]
+  shadow-[0_12px_32px_-8px_rgba(0,0,0,0.5),inset_0_1px_1px_rgba(255,255,255,0.05)]
+`;
+
+const MECHANICAL_BTN = `
+  relative inline-flex items-center justify-center
+  bg-[var(--surface-bright)] text-[var(--on-surface)]
+  border-t border-l border-[rgba(255,255,255,0.1)]
+  border-b-[3px] border-r-[1px] border-[rgba(0,0,0,0.4)]
+  shadow-[0_4px_12px_-2px_rgba(0,0,0,0.3)]
+  active:translate-y-[3px] active:border-b-[1px] active:shadow-[inset_0_2px_4px_rgba(0,0,0,0.4)]
+  transition-all duration-75 select-none
+`;
+
+const ENGRAVED_TEXT = `
+  [text-shadow:0px_1px_1px_rgba(255,255,255,0.12)]
+  color-[var(--on-surface-muted)]
+`;
+
+const INDUSTRIAL_SLOT = `
+  border-2 border-dashed border-[var(--surface-bright)]
+  bg-[rgba(0,0,0,0.15)]
+  shadow-[inset_0_6px_16px_rgba(0,0,0,0.4)]
+  rounded-3xl flex flex-col items-center justify-center
+`;
+
+function fmtMag(raw: string | number | undefined | null): string {
+  if (raw === undefined || raw === null) return '—';
+  const n = typeof raw === 'string' ? parseFloat(raw) : raw;
+  if (isNaN(n)) return '—';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(n % 1 === 0 ? 0 : 1);
+}
+
 // ── Framer Motion variants ────────────────────────────────────────────────────
 
 const cardVariants = {
-  hidden:  { opacity: 0, y: 20, scale: 0.95 },
-  visible: { opacity: 1, y: 0,  scale: 1, transition: { duration: 0.4, ease: [0.25, 0.1, 0.25, 1] as const } },
-  hover:   { scale: 1.02, transition: { duration: 0.2 } },
+  hidden: { opacity: 0, y: 20, scale: 0.95 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.4, ease: [0.25, 0.1, 0.25, 1] as const } },
+  hover: { scale: 1.02, transition: { duration: 0.2 } },
 };
 
 const containerVariants = {
-  hidden:  { opacity: 0 },
+  hidden: { opacity: 0 },
   visible: { opacity: 1, transition: { staggerChildren: 0.1, delayChildren: 0.1 } },
 };
 
 const modalVariants = {
-  hidden:  { opacity: 0, scale: 0.9 },
+  hidden: { opacity: 0, scale: 0.9 },
   visible: { opacity: 1, scale: 1, transition: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] as const } },
-  exit:    { opacity: 0, scale: 0.9, transition: { duration: 0.2 } },
+  exit: { opacity: 0, scale: 0.9, transition: { duration: 0.2 } },
 };
 
 const toastItemVariant = {
   hidden: { opacity: 0, y: 24, scale: 0.94 },
-  show:   { opacity: 1, y: 0,  scale: 1, transition: { duration: 0.28 } },
-  exit:   { opacity: 0, y: 12, scale: 0.96, transition: { duration: 0.2 } },
+  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.28 } },
+  exit: { opacity: 0, y: 12, scale: 0.96, transition: { duration: 0.2 } },
 } as const;
+
+// ── Components ──────────────────────────────────────────────────────────────
+
+function StatusIndicator({ isActive, quotaUsed }: { isActive: boolean; quotaUsed: number }) {
+  if (!isActive) return <div className="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.8)]" title="Revoked" />;
+  if (quotaUsed > 80) return <div className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.8)]" title="Approaching Limit" />;
+  return <div className="w-2.5 h-2.5 rounded-full bg-[var(--accent-cyan)] shadow-[0_0_10px_rgba(34,211,238,0.8)] animate-pulse" title="Active" />;
+}
 
 // ── Toast renderer ────────────────────────────────────────────────────────────
 
 function toastIcon(variant: ToastVariant) {
   if (variant === 'success') return <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />;
-  if (variant === 'error')   return <XCircle      className="w-4 h-4 text-rose-400 shrink-0" />;
-  return                            <Shield       className="w-4 h-4 text-cyan-400 shrink-0" />;
+  if (variant === 'error') return <XCircle className="w-4 h-4 text-rose-400 shrink-0" />;
+  return <Shield className="w-4 h-4 text-cyan-400 shrink-0" />;
 }
 
 function toastBg(variant: ToastVariant) {
-  if (variant === 'success') return 'border-emerald-500/30 bg-emerald-500/10';
-  if (variant === 'error')   return 'border-rose-500/30 bg-rose-500/10';
-  return                            'border-cyan-500/30 bg-cyan-500/10';
+  // No-line rule: replace borders with tonal shifts
+  if (variant === 'success') return 'bg-[rgba(16,185,129,0.1)]';
+  if (variant === 'error') return 'bg-[rgba(244,63,94,0.1)]';
+  return 'bg-[rgba(34,211,238,0.1)]';
 }
 
 function ToastList({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number) => void }) {
@@ -133,16 +179,16 @@ function ToastList({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
             animate="show"
             exit="exit"
             role="alert"
-            className={`flex items-start gap-3 px-4 py-3 rounded-xl border backdrop-blur-xl shadow-xl ${toastBg(t.variant)}`}
+            className={`flex items-start gap-3 px-4 py-3 rounded-xl backdrop-blur-xl shadow-xl ${toastBg(t.variant)}`}
           >
             {toastIcon(t.variant)}
-            <p className="text-sm text-slate-200 flex-1 leading-snug">{t.message}</p>
+            <p className="text-sm text-[var(--on-surface)] flex-1 leading-snug">{t.message}</p>
             <button
               onClick={() => dismiss(t.id)}
               aria-label="Dismiss notification"
-              className="text-slate-500 hover:text-slate-300 transition-colors ml-1 mt-0.5"
+              className="text-[var(--text-muted)] hover:text-[var(--on-surface)] transition-colors ml-1 mt-0.5"
             >
-              ×
+              <X className="w-4 h-4" />
             </button>
           </motion.div>
         ))}
@@ -167,89 +213,70 @@ function RevokeConfirmModal({ keyToRevoke, isRevoking, onConfirm, onCancel }: Re
       initial="hidden"
       animate="visible"
       exit="exit"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--bg-canvas)]/80 backdrop-blur-md"
       role="dialog"
       aria-modal="true"
       aria-labelledby="revoke-modal-title"
     >
       <motion.div
         variants={modalVariants}
-        className="bg-slate-900/95 border border-rose-500/30 shadow-2xl shadow-rose-500/10 rounded-2xl w-full max-w-md overflow-hidden"
+        className="bg-[var(--surface-container)] shadow-2xl shadow-[var(--primary-rose)]/20 rounded-3xl w-full max-w-md overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Modal header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-rose-800/40 bg-rose-950/20">
+        <div className="flex items-center justify-between px-6 py-5 bg-[rgba(244,63,94,0.1)]">
           <h3
             id="revoke-modal-title"
-            className="text-lg font-bold text-slate-50 flex items-center gap-2"
+            className="text-lg font-bold text-[var(--on-surface)] flex items-center gap-2 font-geist"
           >
-            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <AlertTriangle className="w-5 h-5 text-[var(--primary-rose)]" />
             Revoke API Key
           </h3>
           <button
             onClick={onCancel}
             disabled={isRevoking}
-            aria-label="Cancel"
-            className="text-slate-400 hover:text-slate-200 transition-colors p-1 disabled:opacity-50"
+            className="text-[var(--text-muted)] hover:text-[var(--on-surface)] transition-colors p-1 disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Modal body */}
-        <div className="p-6 space-y-4">
-          {/* Destructive-action callout */}
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20">
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <p className="text-sm text-rose-300">
+        <div className="p-6 space-y-5">
+          <div className="flex items-start gap-3 p-4 rounded-2xl bg-[rgba(244,63,94,0.1)]">
+            <AlertTriangle className="w-4 h-4 text-[var(--primary-rose)] shrink-0 mt-0.5" />
+            <p className="text-sm text-[var(--on-surface)]">
               This action is <strong>permanent and irreversible</strong>. Any
               service or integration using this key will immediately lose access.
             </p>
           </div>
 
-          {/* Key being revoked */}
-          <div className="rounded-xl border border-slate-700/60 bg-slate-800/40 p-4">
-            <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">
+          <div className="rounded-2xl bg-[rgba(255,255,255,0.02)] p-4">
+            <p className={`${LABEL_CLASS} mb-2`}>
               Key to revoke
             </p>
-            <div className="flex items-center gap-2">
-              <Key className="w-4 h-4 text-rose-400 shrink-0" />
-              <span className="text-sm font-semibold text-slate-100">{keyToRevoke.name}</span>
+            <div className="flex items-center gap-3">
+              <Key className="w-5 h-5 text-[var(--primary-rose)] shrink-0" />
+              <span className={`text-base font-bold ${DATA_CLASS}`}>{keyToRevoke.name}</span>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              Created {new Date(keyToRevoke.created_at).toLocaleDateString('en-IN', {
-                year: 'numeric', month: 'short', day: 'numeric',
-              })}
+            <p className={`${DATA_CLASS} text-[10px] text-[var(--text-muted)] mt-2`}>
+              Created {new Date(keyToRevoke.created_at).toLocaleDateString()}
             </p>
           </div>
-
-          {/* Confirmation instruction */}
-          <p className="text-sm text-slate-400">
-            The key will be hard-deleted from the database and immediately
-            invalidated in the Redis cache. There is no recovery path.
-          </p>
         </div>
 
-        {/* Modal footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-800/60">
-          <motion.button
+        <div className="flex items-center justify-end gap-3 px-6 py-5">
+          <button
             type="button"
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
             onClick={onCancel}
             disabled={isRevoking}
-            className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-300 hover:bg-slate-800 transition-colors disabled:opacity-50"
+            className="rounded-xl px-5 py-2.5 text-sm font-semibold text-[var(--text-muted)] hover:text-[var(--on-surface)] hover:bg-[rgba(255,255,255,0.05)] transition-colors disabled:opacity-50 font-geist"
           >
             Cancel
-          </motion.button>
-          <motion.button
+          </button>
+          <button
             type="button"
-            id="confirm-revoke-btn"
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
             onClick={onConfirm}
             disabled={isRevoking}
-            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 shadow-lg shadow-rose-500/20 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200"
+            className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold text-[var(--on-surface)] font-geist uppercase tracking-widest bg-gradient-to-br from-[var(--primary-amber)] to-[var(--primary-rose)] text-black shadow-[0_4px_0_0_rgba(160,40,10,0.6),0_8px_24px_-4px_rgba(251,191,36,0.4)] hover:shadow-[0_4px_0_0_rgba(160,40,10,0.6),0_14px_32px_-4px_rgba(251,191,36,0.55)] active:translate-y-[2px] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {isRevoking ? (
               <>
@@ -262,7 +289,7 @@ function RevokeConfirmModal({ keyToRevoke, isRevoking, onConfirm, onCancel }: Re
                 Yes, Revoke Key
               </>
             )}
-          </motion.button>
+          </button>
         </div>
       </motion.div>
     </motion.div>
@@ -279,9 +306,6 @@ export function ApiKeysView() {
 
   const { toasts, push, dismiss } = useToast();
 
-  // ── SWR data fetching ───────────────────────────────────────────────────────
-
-  // Virtual API Keys — fetched from redeye_config (team only).
   const {
     data: keys,
     error: keysError,
@@ -292,7 +316,6 @@ export function ApiKeysView() {
     fetcher as (url: string) => Promise<ApiKey[]>,
   );
 
-  // Provider Keys — fetched from redeye_auth.
   const {
     data: providerKeys,
     error: providerError,
@@ -303,25 +326,18 @@ export function ApiKeysView() {
     fetcher as (url: string) => Promise<ProviderKey[]>,
   );
 
-  // ── Local UI state ──────────────────────────────────────────────────────────
-
   const [isProviderModalOpen, setIsProviderModalOpen] = useState(false);
-  const [isKeyModalOpen, setIsKeyModalOpen]           = useState(false);
-  const [newProviderName, setNewProviderName]         = useState('openai');
-  const [newProviderKey, setNewProviderKey]           = useState('');
-  const [newKeyName, setNewKeyName]                   = useState('');
-  const [copiedGateway, setCopiedGateway]             = useState(false);
-  const [copiedKey, setCopiedKey]                     = useState<string | null>(null);
-  const [submitting, setSubmitting]                   = useState(false);
-
-  /** The key awaiting revocation confirmation (null = modal closed). */
+  const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
+  const [newProviderName, setNewProviderName] = useState('openai');
+  const [newProviderKey, setNewProviderKey] = useState('');
+  const [newKeyName, setNewKeyName] = useState('');
+  const [copiedGateway, setCopiedGateway] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [pendingRevoke, setPendingRevoke] = useState<ApiKey | null>(null);
-  /** ID of the key actively being deleted (to show per-row spinner). */
-  const [revokingId, setRevokingId]       = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   const gatewayUrl = 'http://localhost:8080/v1';
-
-  // ── Clipboard helper ────────────────────────────────────────────────────────
 
   const handleCopy = useCallback((text: string, type: 'gateway' | string) => {
     void navigator.clipboard.writeText(text);
@@ -334,14 +350,10 @@ export function ApiKeysView() {
     }
   }, []);
 
-  // ── Revoke flow ─────────────────────────────────────────────────────────────
-
-  /** Step 1 — user clicks "Revoke": open the confirmation modal. */
   const handleRevokeClick = useCallback((key: ApiKey) => {
     setPendingRevoke(key);
   }, []);
 
-  /** Step 2 — user confirms in the modal: fire the DELETE. */
   const handleRevokeConfirm = useCallback(async () => {
     if (!pendingRevoke) return;
 
@@ -355,27 +367,24 @@ export function ApiKeysView() {
           method: 'DELETE',
           credentials: 'include',
           headers: { Accept: 'application/json', 'x-csrf-token': '1' },
-        },
+        }
       );
 
       if (res.status !== 204 && !res.ok) {
-        // Attempt to parse an error body; fall back gracefully.
         const body: unknown = await res.json().catch(() => ({}));
         const msg =
           body !== null &&
-          typeof body === 'object' &&
-          'error' in body &&
-          body.error !== null &&
-          typeof body.error === 'object' &&
-          'message' in body.error &&
-          typeof body.error.message === 'string'
+            typeof body === 'object' &&
+            'error' in body &&
+            body.error !== null &&
+            typeof body.error === 'object' &&
+            'message' in body.error &&
+            typeof body.error.message === 'string'
             ? body.error.message
             : `HTTP ${res.status}`;
         throw new Error(msg);
       }
 
-      // Success — optimistically remove the key from the SWR cache
-      // so the UI updates instantly without waiting for a revalidation.
       await mutateKeys(
         (prev) => prev?.filter((k) => k.id !== id) ?? [],
         { revalidate: false },
@@ -391,8 +400,6 @@ export function ApiKeysView() {
     }
   }, [pendingRevoke, tenantId, mutateKeys, push]);
 
-  // ── Add provider key ────────────────────────────────────────────────────────
-
   const handleAddProvider = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProviderKey.trim()) return;
@@ -403,7 +410,7 @@ export function ApiKeysView() {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
         body: JSON.stringify({
-          provider_name:    newProviderName,
+          provider_name: newProviderName,
           provider_api_key: newProviderKey,
         }),
       });
@@ -419,8 +426,6 @@ export function ApiKeysView() {
     }
   }, [newProviderName, newProviderKey, mutateProviders, push]);
 
-  // ── Generate virtual key (stub — endpoint TBD) ──────────────────────────────
-
   const handleGenerate = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     if (!newKeyName.trim()) return;
@@ -429,577 +434,522 @@ export function ApiKeysView() {
     setNewKeyName('');
   }, [newKeyName, push]);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
   return (
     <>
       <motion.div
         variants={containerVariants}
         initial="hidden"
         animate="visible"
-        className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 p-6"
+        className="grid grid-cols-12 gap-6 p-6 auto-rows-max text-[var(--on-surface)]"
       >
-        {/* Breadcrumb */}
-        <motion.div variants={cardVariants} className="mb-8 flex items-center gap-3 text-sm">
-          <Link
-            to="/dashboard"
-            className="text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors flex items-center gap-2"
-          >
+        {/* Breadcrumb (col-span-12) */}
+        <motion.div variants={cardVariants} className="col-span-12 flex items-center gap-3 text-sm font-mono text-[var(--text-muted)] mb-2">
+          <Link to="/dashboard" className="hover:text-[var(--on-surface)] transition-colors flex items-center gap-2 font-geist tracking-wide">
             <Shield className="w-4 h-4" />
             Dashboard
           </Link>
-          <ArrowRight className="w-4 h-4 text-slate-400" />
-          <span className="text-slate-900 dark:text-slate-100 font-medium">API Keys</span>
+          <ArrowRight className="w-4 h-4" />
+          <span className="text-[var(--on-surface)] font-geist">API Keys</span>
         </motion.div>
 
-        {/* Page header */}
-        <motion.div variants={cardVariants} className="text-center mb-12">
-          <h1 className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-cyan-600 via-teal-500 to-emerald-400 dark:from-cyan-400 dark:via-teal-300 dark:to-emerald-200 bg-clip-text text-transparent mb-4">
-            API Keys &amp; Providers
-          </h1>
-          <p className="text-lg text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-            Manage your LLM provider vault and virtual API keys with enterprise-grade security
-          </p>
-          <div className="flex items-center justify-center gap-2 mt-4">
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-cyan-500/10 to-teal-500/10 dark:from-cyan-500/20 dark:to-teal-500/20 border border-cyan-200 dark:border-cyan-800">
-              <Sparkles className="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
-              <span className="text-sm font-medium text-cyan-700 dark:text-cyan-300">
-                {isTeam ? 'Team Account' : 'Individual Account'}
-              </span>
-            </div>
+        {/* Page header (col-span-12) */}
+        <motion.div variants={cardVariants} className="col-span-12 flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+          <div>
+            <h1 className="text-5xl font-extrabold tracking-tight mb-4 text-[var(--on-surface)] font-geist">
+              Identity Vault
+            </h1>
+            <p className="text-sm text-[var(--text-muted)] max-w-2xl font-geist">
+              Manage your LLM provider keys and issue virtual API access via a unified spatial interface.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 p-1 rounded-full bg-[rgba(255,255,255,0.02)]">
+            <button
+              onClick={() => push('Switch to Individual Vault to view personal keys.', 'info')}
+              className={`relative px-6 py-2.5 rounded-full font-geist text-[10px] font-bold uppercase tracking-widest transition-all duration-300 ${!isTeam
+                ? 'text-[var(--on-surface)] bg-[var(--surface-bright)] shadow-md'
+                : 'text-[var(--text-muted)] hover:text-[var(--on-surface)]'
+                }`}
+            >
+              {!isTeam && (
+                <motion.div
+                  layoutId="active-tab"
+                  className="absolute inset-0 rounded-full"
+                  initial={false}
+                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                  style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)' }}
+                />
+              )}
+              Individual
+            </button>
+            <button
+              onClick={() => push('Switch to Team Vault to manage team keys.', 'info')}
+              className={`relative px-6 py-2.5 rounded-full font-geist text-[10px] font-bold uppercase tracking-widest transition-all duration-300 ${isTeam
+                ? 'text-[var(--on-surface)] bg-[var(--surface-bright)] shadow-md'
+                : 'text-[var(--text-muted)] hover:text-[var(--on-surface)]'
+                }`}
+            >
+              {isTeam && (
+                <motion.div
+                  layoutId="active-tab"
+                  className="absolute inset-0 rounded-full"
+                  initial={false}
+                  transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                  style={{ boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)' }}
+                />
+              )}
+              Team
+            </button>
           </div>
         </motion.div>
 
         {/* ── LLM Provider Vault ──────────────────────────────────────────── */}
-        <motion.div variants={cardVariants} whileHover="hover" className="mb-8">
-          <div className="bg-white/90 dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/50 dark:border-slate-700/50 rounded-2xl shadow-xl dark:shadow-2xl shadow-cyan-500/10 dark:shadow-cyan-500/5 overflow-hidden">
-            {/* Card Header */}
-            <div className="bg-gradient-to-r from-cyan-500/5 to-teal-500/5 dark:from-cyan-500/10 dark:to-teal-500/10 px-6 py-4 border-b border-slate-200/50 dark:border-slate-700/50">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-xl bg-gradient-to-br from-cyan-500 to-teal-500 shadow-lg">
-                    <Server className="w-5 h-5 text-white" />
+        <motion.div variants={cardVariants} className="col-span-12 mb-8">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-2xl bg-[rgba(34,211,238,0.1)]">
+                <Server className="w-6 h-6 text-[var(--accent-cyan)]" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-[var(--on-surface)] tracking-tight font-geist">Provider Vault</h2>
+                <p className={`${DATA_CLASS} text-[10px] mt-1`} style={{ color: 'var(--on-surface-muted)' }}>Securely store upstream LLM API keys.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsProviderModalOpen(true)}
+              className={`${MECHANICAL_BTN} px-4 py-2 rounded-xl text-[10px] gap-2`}
+            >
+              <Plus className="w-4 h-4" />
+              Forge New Key
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {providerLoading ? (
+              <div className="col-span-full flex items-center justify-center py-12 bg-[var(--surface-container-low)] rounded-2xl">
+                <Loader2 className="w-6 h-6 animate-spin text-[var(--accent-cyan)] mr-3" />
+                <span className={`${DATA_CLASS} text-[var(--text-muted)] text-[10px] uppercase tracking-widest`}>Loading vault...</span>
+              </div>
+            ) : providerError ? (
+              <div className="col-span-full flex items-center gap-3 p-6 rounded-2xl bg-[rgba(244,63,94,0.1)]">
+                <AlertTriangle className="w-5 h-5 text-[var(--primary-rose)]" />
+                <p className="text-[var(--primary-rose)] font-geist text-sm">Failed to fetch provider keys from vault.</p>
+              </div>
+            ) : !providerKeys || providerKeys.length === 0 ? (
+              <div className={`col-span-full py-16 ${INDUSTRIAL_SLOT}`}>
+                <div className="text-5xl mb-6 opacity-30 grayscale">🔐</div>
+                <h3 className={`text-xl font-bold mb-2 font-geist ${ENGRAVED_TEXT}`}>Vault is Empty</h3>
+                <p className="text-[var(--text-muted)] mb-8 font-geist text-sm">Forge your first LLM provider key to start routing traffic.</p>
+                <button
+                  onClick={() => setIsProviderModalOpen(true)}
+                  className={`${MECHANICAL_BTN} px-6 py-3 rounded-xl text-xs gap-3 font-black tracking-widest bg-[var(--accent-cyan)] !text-black`}
+                >
+                  <Plus className="w-5 h-5" />
+                  INITIALIZE FORGE
+                </button>
+              </div>
+            ) : (
+              providerKeys.map((pk) => (
+                <div key={pk.id} className={`${TACTILE_CARD} flex flex-col justify-between h-44 p-6 rounded-3xl`}>
+                  <div className="flex items-start justify-between">
+                    <span className={`text-lg font-bold capitalize tracking-tight font-geist ${ENGRAVED_TEXT}`}>
+                      {pk.provider_name}
+                    </span>
+                    <StatusIndicator isActive={true} quotaUsed={0} />
                   </div>
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">LLM Provider Vault</h2>
-                    <p className="text-sm text-slate-600 dark:text-slate-400">Secure encrypted key storage</p>
+                  <div className="mt-4 p-3 rounded-xl bg-black/20 shadow-[inset_0_2px_4px_rgba(0,0,0,0.3)] border border-white/5">
+                    <p className={`${LABEL_CLASS} text-[9px] mb-1 opacity-60`}>Authenticated</p>
+                    <p className={`${DATA_CLASS} text-xs font-bold`}>{new Date(pk.created_at).toLocaleDateString()}</p>
                   </div>
                 </div>
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setIsProviderModalOpen(true)}
-                  className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-white font-semibold rounded-xl shadow-lg flex items-center gap-2 transition-all duration-200"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add Provider
-                </motion.button>
-              </div>
-            </div>
-
-            {/* Card Content */}
-            <div className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {providerLoading ? (
-                  <div className="col-span-full flex items-center justify-center py-12">
-                    <Loader2 className="w-6 h-6 animate-spin text-cyan-500 mr-3" />
-                    <span className="text-slate-600 dark:text-slate-400">Loading provider keys…</span>
-                  </div>
-                ) : providerError ? (
-                  <div className="col-span-full text-center py-12">
-                    <div className="text-rose-500 mb-2">⚠️</div>
-                    <p className="text-rose-600 dark:text-rose-400">Failed to fetch provider keys</p>
-                  </div>
-                ) : !providerKeys || providerKeys.length === 0 ? (
-                  <motion.div
-                    variants={cardVariants}
-                    className="col-span-full text-center py-12 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl"
-                  >
-                    <div className="text-4xl mb-4">🔐</div>
-                    <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-2">No Provider Keys</h3>
-                    <p className="text-slate-600 dark:text-slate-400 mb-4">Add your first LLM provider key to get started</p>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => setIsProviderModalOpen(true)}
-                      className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-teal-500 text-white font-semibold rounded-xl shadow-lg inline-flex items-center gap-2"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add Your First Provider
-                    </motion.button>
-                  </motion.div>
-                ) : (
-                  providerKeys.map((pk, index) => (
-                    <motion.div
-                      key={pk.id}
-                      variants={cardVariants}
-                      custom={index}
-                      whileHover="hover"
-                      className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-4 hover:shadow-lg transition-all duration-300"
-                    >
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 capitalize">
-                          {pk.provider_name}
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                          <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">Active</span>
-                        </div>
-                      </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400">
-                        Added {new Date(pk.created_at).toLocaleDateString()}
-                      </div>
-                    </motion.div>
-                  ))
-                )}
-              </div>
-            </div>
+              ))
+            )}
           </div>
         </motion.div>
 
         {/* ── Virtual API Keys — Team Only ────────────────────────────────── */}
         {isTeam && (
-          <motion.div variants={cardVariants} whileHover="hover" className="mb-8">
-            <div className="bg-white/90 dark:bg-rose-950/20 backdrop-blur-xl border border-rose-200/50 dark:border-rose-800/50 rounded-2xl shadow-xl dark:shadow-2xl shadow-rose-500/10 dark:shadow-rose-500/5 overflow-hidden">
-              {/* Card Header */}
-              <div className="bg-gradient-to-r from-rose-500/5 to-pink-500/5 dark:from-rose-500/10 dark:to-pink-500/10 px-6 py-4 border-b border-rose-200/50 dark:border-rose-800/50">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl bg-gradient-to-br from-rose-500 to-pink-500 shadow-lg">
-                      <Key className="w-5 h-5 text-white" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Virtual API Keys</h2>
-                      <p className="text-sm text-slate-600 dark:text-slate-400">Team key management</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="px-3 py-1.5 rounded-full bg-gradient-to-r from-rose-500/10 to-pink-500/10 border border-rose-200 dark:border-rose-800">
-                      <span className="text-xs font-semibold text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
-                        <Users className="w-3 h-3" />
-                        Team Plan
-                      </span>
-                    </div>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => setIsKeyModalOpen(true)}
-                      className="px-4 py-2 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-400 hover:to-pink-400 text-white font-semibold rounded-xl shadow-lg flex items-center gap-2 transition-all duration-200"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Generate Key
-                    </motion.button>
-                  </div>
+          <motion.div variants={cardVariants} className="col-span-12">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-4">
+                <div className="p-3 rounded-2xl bg-[rgba(34,211,238,0.1)]">
+                  <Key className="w-6 h-6 text-[var(--accent-cyan)]" />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-[var(--on-surface)] tracking-tight font-geist">Virtual API Keys</h2>
+                  <p className={`${DATA_CLASS} text-[10px] mt-1`} style={{ color: 'var(--on-surface-muted)' }}>Manage access tokens for your applications and team.</p>
                 </div>
               </div>
+              <button
+                onClick={() => setIsKeyModalOpen(true)}
+                className={`${MECHANICAL_BTN} px-5 py-2 rounded-xl text-[10px] gap-2 bg-gradient-to-br from-[var(--primary-amber)] to-[var(--primary-rose)] !text-black !border-b-[4px]`}
+              >
+                <Plus className="w-4 h-4" />
+                MINT VIRTUAL KEY
+              </button>
+            </div>
 
-              {/* Card Content */}
-              <div className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {keysLoading ? (
-                    <div className="col-span-full flex items-center justify-center py-12">
-                      <Loader2 className="w-6 h-6 animate-spin text-rose-500 mr-3" />
-                      <span className="text-slate-600 dark:text-slate-400">Loading API keys…</span>
-                    </div>
-                  ) : keysError ? (
-                    <div className="col-span-full text-center py-12">
-                      <div className="text-rose-500 mb-2">⚠️</div>
-                      <p className="text-rose-600 dark:text-rose-400">Failed to fetch API keys</p>
-                    </div>
-                  ) : !keys || keys.length === 0 ? (
-                    <motion.div
-                      variants={cardVariants}
-                      className="col-span-full text-center py-12 border-2 border-dashed border-rose-300 dark:border-rose-600 rounded-xl"
+            <div className="flex flex-col gap-4 mb-8">
+              {keysLoading ? (
+                <div className="flex items-center justify-center py-12 bg-[var(--surface-container-low)] rounded-2xl">
+                  <Loader2 className="w-6 h-6 animate-spin text-[var(--accent-cyan)] mr-3" />
+                  <span className={`${DATA_CLASS} text-[var(--text-muted)] text-[10px] uppercase tracking-widest`}>Loading virtual keys...</span>
+                </div>
+              ) : keysError ? (
+                <div className="flex items-center gap-3 p-6 rounded-2xl bg-[rgba(244,63,94,0.1)]">
+                  <AlertTriangle className="w-5 h-5 text-[var(--primary-rose)]" />
+                  <p className="text-[var(--primary-rose)] font-geist text-sm">Failed to fetch virtual API keys.</p>
+                </div>
+              ) : !keys || keys.length === 0 ? (
+                <div className={`py-20 ${INDUSTRIAL_SLOT}`}>
+                  <div className="text-5xl mb-6 opacity-30 grayscale">🔑</div>
+                  <h3 className={`text-xl font-bold mb-2 font-geist ${ENGRAVED_TEXT}`}>No Virtual Tokens</h3>
+                  <p className="text-[var(--text-muted)] mb-8 font-geist text-sm">Forge a virtual key to authenticate your distributed applications.</p>
+                  <button
+                    onClick={() => setIsKeyModalOpen(true)}
+                    className={`${MECHANICAL_BTN} px-6 py-3 rounded-xl text-xs gap-3 font-black tracking-widest bg-[var(--accent-cyan)] !text-black`}
+                  >
+                    <Plus className="w-5 h-5" />
+                    GENERATE FIRST TOKEN
+                  </button>
+                </div>
+              ) : (
+                keys.map((keyItem, index) => {
+                  const isRevokingThis = revokingId === keyItem.id;
+                  const keyString = `sk_live_${keyItem.id.replace(/-/g, '')}`;
+                  return (
+                    <div
+                      key={keyItem.id}
+                      className={`${TACTILE_CARD} flex flex-col xl:flex-row xl:items-center justify-between p-7 rounded-3xl mb-4`}
                     >
-                      <div className="text-4xl mb-4">🔑</div>
-                      <h3 className="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-2">No Virtual Keys</h3>
-                      <p className="text-slate-600 dark:text-slate-400 mb-4">Generate your first virtual API key for your team</p>
-                      <motion.button
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        onClick={() => setIsKeyModalOpen(true)}
-                        className="px-6 py-3 bg-gradient-to-r from-rose-500 to-pink-500 text-white font-semibold rounded-xl shadow-lg inline-flex items-center gap-2"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Generate First Key
-                      </motion.button>
-                    </motion.div>
-                  ) : (
-                    keys.map((keyItem, index) => {
-                      const isRevokingThis = revokingId === keyItem.id;
-                      return (
-                        <motion.div
-                          key={keyItem.id}
-                          variants={cardVariants}
-                          custom={index}
-                          whileHover="hover"
-                          className="bg-slate-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 rounded-xl p-4 hover:shadow-lg transition-all duration-300"
-                        >
-                          <div className="flex items-center justify-between mb-3">
-                            <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate mr-2">
-                              {keyItem.name}
+                      <div className="flex items-center gap-6 mb-6 xl:mb-0">
+                        <StatusIndicator isActive={keyItem.is_active} quotaUsed={keyItem.quota_used ?? 0} />
+                        <div>
+                          <h3 className={`text-xl font-bold tracking-tight mb-1 font-geist ${ENGRAVED_TEXT}`}>{keyItem.name}</h3>
+                          {/* Frosted Reveal Security */}
+                          <div
+                            className="group relative cursor-pointer inline-block overflow-hidden rounded-lg"
+                            onClick={() => handleCopy(keyString, 'key')}
+                            title="Click to copy"
+                          >
+                            <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity z-10" />
+                            <span className={`${DATA_CLASS} text-[0.8rem] transition-all duration-500 block px-2 py-1 bg-black/20 rounded font-bold tracking-tighter ${copiedKey === 'key' ? 'text-emerald-400' : 'text-[var(--text-muted)]'}`}>
+                              <span className="blur-md group-hover:blur-none transition-all duration-300">
+                                {keyString}
+                              </span>
                             </span>
-                            {/* Revoke button — opens confirmation modal */}
-                            {keyItem.is_active && (
-                              <motion.button
-                                whileHover={{ scale: 1.05 }}
-                                whileTap={{ scale: 0.95 }}
-                                disabled={isRevokingThis}
-                                onClick={() => handleRevokeClick(keyItem)}
-                                aria-label={`Revoke ${keyItem.name}`}
-                                className="flex-shrink-0 px-3 py-1.5 bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-lg text-xs font-medium hover:bg-rose-200 dark:hover:bg-rose-500/30 transition-all duration-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
-                              >
-                                {isRevokingThis ? (
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                ) : (
-                                  <Trash2 className="w-3 h-3" />
-                                )}
-                                Revoke
-                              </motion.button>
-                            )}
                           </div>
+                        </div>
+                      </div>
 
-                          {/* Created / expiry dates */}
-                          <div className="text-xs text-slate-500 dark:text-slate-400 mb-2 space-y-0.5">
-                            <p>Created {new Date(keyItem.created_at).toLocaleDateString()}</p>
-                            {keyItem.expires_at && (
-                              <p className="text-amber-500">
-                                Expires {new Date(keyItem.expires_at).toLocaleDateString()}
-                              </p>
-                            )}
-                          </div>
-
-                          {/* Active / inactive status pill */}
-                          <div className="flex items-center gap-1.5">
-                            <div
-                              className={`w-2 h-2 rounded-full ${
-                                keyItem.is_active ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'
-                              }`}
-                            />
-                            <span
-                              className={`text-xs font-medium ${
-                                keyItem.is_active
-                                  ? 'text-emerald-600 dark:text-emerald-400'
-                                  : 'text-rose-600 dark:text-rose-400'
-                              }`}
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-8">
+                        <div className="flex flex-col items-center">
+                          <p className={`${LABEL_CLASS} mb-2`}>24H Trend</p>
+                          <InlineSparkline data={keyItem.usage_trend_24h ?? []} />
+                        </div>
+                        <div className="flex flex-col items-center">
+                          <p className={`${LABEL_CLASS} mb-2`}>Usage Heatmap</p>
+                          <KeyUsageHeatmap dailyRequests={keyItem.daily_requests ?? []} />
+                        </div>
+                        <div className="flex flex-col items-start sm:items-end min-w-[100px]">
+                          <p className={`${LABEL_CLASS} mb-1`}>Created</p>
+                          <span className={`${DATA_CLASS} text-[0.75rem] text-[var(--text-muted)]`}>{new Date(keyItem.created_at).toLocaleDateString()}</span>
+                          {keyItem.expires_at && (
+                            <>
+                              <p className={`${LABEL_CLASS} mt-2 mb-1`}>Expires</p>
+                              <span className={`${DATA_CLASS} text-[0.75rem] text-[var(--primary-amber)]`}>{new Date(keyItem.expires_at).toLocaleDateString()}</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-4 sm:pl-4">
+                          <QuotaRadialBar quotaUsed={keyItem.quota_used ?? 0} />
+                          {keyItem.is_active && (
+                            <button
+                              onClick={() => handleRevokeClick(keyItem)}
+                              className={`${MECHANICAL_BTN} p-3 rounded-xl text-rose-400/80 hover:text-rose-400 !border-b-[4px]`}
+                              title="Revoke Key"
                             >
-                              {keyItem.is_active ? 'Active' : 'Revoked'}
-                            </span>
-                          </div>
-                        </motion.div>
-                      );
-                    })
-                  )}
-                </div>
-
-                {/* Gateway URL strip */}
-                <div className="mt-6 bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-900/30 dark:to-blue-900/30 border border-indigo-200 dark:border-indigo-800 rounded-xl p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Gateway URL</span>
+                              {isRevokingThis ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-5 h-5" />}
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => handleCopy(gatewayUrl, 'gateway')}
-                      aria-label="Copy gateway URL"
-                      className="p-1.5 rounded-lg bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-500/30 transition-all duration-200"
-                    >
-                      {copiedGateway ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    </motion.button>
-                  </div>
-                  <code className="text-sm text-indigo-600 dark:text-indigo-400 font-mono break-all mt-2 block">{gatewayUrl}</code>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Gateway URL strip */}
+            <div className={`${TACTILE_CARD} flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 p-7 rounded-[2rem]`}>
+              <div className="flex items-center gap-4">
+                <div className="p-4 rounded-2xl bg-black/30 shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)]">
+                  <Globe className="w-6 h-6 text-[var(--accent-cyan)]" />
+                </div>
+                <div>
+                  <h3 className={`text-xl font-bold tracking-tight font-geist ${ENGRAVED_TEXT}`}>Gateway Endpoint</h3>
+                  <code className={`${DATA_CLASS} text-[10px] mt-1 block opacity-60 tracking-wider`}>{gatewayUrl}</code>
                 </div>
               </div>
+              <button
+                onClick={() => handleCopy(gatewayUrl, 'gateway')}
+                className={`${MECHANICAL_BTN} px-6 py-3 rounded-xl text-xs gap-3 font-black tracking-widest`}
+              >
+                {copiedGateway ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                {copiedGateway ? 'LINK COPIED' : 'COPY ENDPOINT'}
+              </button>
             </div>
           </motion.div>
         )}
 
         {/* ── Individual account — Gateway Key Card ────────────────────────── */}
         {!isTeam && (
-          <motion.div variants={cardVariants} whileHover="hover" className="max-w-4xl mx-auto">
-            <div className="bg-white/90 dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/50 dark:border-slate-700/50 rounded-2xl shadow-xl dark:shadow-2xl shadow-cyan-500/10 dark:shadow-cyan-500/5 overflow-hidden">
-              <div className="bg-gradient-to-r from-cyan-500/5 to-teal-500/5 dark:from-cyan-500/10 dark:to-teal-500/10 px-6 py-4 border-b border-slate-200/50 dark:border-slate-700/50">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl bg-gradient-to-br from-cyan-500 to-teal-500 shadow-lg">
-                      <Lock className="w-5 h-5 text-white" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">Your Gateway Key</h2>
-                      <p className="text-sm text-slate-600 dark:text-slate-400">Individual account access</p>
-                    </div>
-                  </div>
-                  <div className="px-3 py-1.5 rounded-full bg-gradient-to-r from-cyan-500/10 to-teal-500/10 border border-cyan-200 dark:border-cyan-800">
-                    <span className="text-xs font-semibold text-cyan-700 dark:text-cyan-300 flex items-center gap-1.5">
-                      <User className="w-3 h-3" />
-                      Individual Plan
-                    </span>
-                  </div>
+          <motion.div variants={cardVariants} className="col-span-12 lg:col-span-8 lg:col-start-3">
+            <div className={`${TACTILE_CARD} p-8 rounded-[2.5rem]`}>
+              <div className="flex items-center gap-4 mb-8">
+                <div className="p-4 rounded-2xl bg-black/30 shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)]">
+                  <Lock className="w-6 h-6 text-[var(--accent-cyan)]" />
+                </div>
+                <div>
+                  <h2 className={`text-3xl font-bold tracking-tight font-geist ${ENGRAVED_TEXT}`}>Master Access Key</h2>
+                  <p className={`${DATA_CLASS} text-[10px] mt-1 uppercase tracking-widest opacity-40`}>Personal cryptographic token</p>
                 </div>
               </div>
 
-              <div className="p-6">
-                <div className="bg-slate-950 border border-cyan-500/30 rounded-xl p-4 mb-6">
-                  <div className="flex items-center justify-between gap-4">
-                    <code className="text-cyan-400 font-mono text-sm break-all leading-relaxed flex-1">
-                      {user?.redeyeApiKey ?? 'No key available'}
-                    </code>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => user?.redeyeApiKey && handleCopy(user.redeyeApiKey, 'user-key')}
-                      disabled={!user?.redeyeApiKey}
-                      aria-label="Copy API key"
-                      className="p-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-500/40 transition-all duration-200 text-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {copiedKey === 'user-key' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                    </motion.button>
-                  </div>
-                </div>
+              <div className="bg-black/30 shadow-[inset_0_4px_12px_rgba(0,0,0,0.6)] rounded-2xl p-6 mb-8 flex items-center justify-between gap-4 border border-white/5">
+                <code className={`${DATA_CLASS} text-[var(--accent-cyan)] text-base break-all group relative cursor-pointer px-3 py-2 rounded-lg overflow-hidden`} onClick={() => user?.redeyeApiKey && handleCopy(user.redeyeApiKey, 'user-key')} title="Click to copy">
+                  <span className="blur-xl group-hover:blur-none transition-all duration-500 font-bold tracking-tighter">
+                    {user?.redeyeApiKey ?? 'No key available'}
+                  </span>
+                </code>
+                <button
+                  onClick={() => user?.redeyeApiKey && handleCopy(user.redeyeApiKey, 'user-key')}
+                  disabled={!user?.redeyeApiKey}
+                  className={`${MECHANICAL_BTN} p-4 rounded-xl !bg-[var(--surface-container)]`}
+                >
+                  {copiedKey === 'user-key' ? <Check className="w-5 h-5 text-emerald-400" /> : <Copy className="w-5 h-5" />}
+                </button>
+              </div>
 
-                <div className="bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-900/30 dark:to-blue-900/30 border border-indigo-200 dark:border-indigo-800 rounded-xl p-4 mb-6">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2">
-                      <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Gateway URL</span>
-                    </div>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => handleCopy(gatewayUrl, 'gateway')}
-                      aria-label="Copy gateway URL"
-                      className="p-1.5 rounded-lg border border-indigo-500/20 bg-indigo-500/5 hover:bg-indigo-500/15 hover:border-indigo-500/40 transition-all duration-200 text-indigo-600 dark:text-indigo-400"
-                    >
-                      {copiedGateway ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    </motion.button>
+              <div className="bg-[var(--surface-container-low)] rounded-2xl p-5 mb-8 flex items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Globe className="w-4 h-4 text-[var(--accent-cyan)]" />
+                    <span className="text-sm font-bold text-[var(--on-surface)] font-geist">Gateway URL</span>
                   </div>
-                  <code className="text-sm text-indigo-600 dark:text-indigo-400 font-mono break-all mt-2 block">{gatewayUrl}</code>
+                  <code className={`${DATA_CLASS} text-[10px] text-[var(--on-surface-muted)]`}>{gatewayUrl}</code>
                 </div>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => handleCopy(gatewayUrl, 'gateway')}
+                  className="p-3 rounded-xl bg-[var(--surface-bright)] hover:bg-[rgba(255,255,255,0.1)] transition-all text-[var(--on-surface)]"
+                >
+                  {copiedGateway ? <Check className="w-5 h-5 text-[var(--accent-cyan)]" /> : <Copy className="w-5 h-5" />}
+                </motion.button>
+              </div>
 
-                <div className="text-center p-6 bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800/50 dark:to-slate-700/50 rounded-xl border border-slate-200 dark:border-slate-600">
-                  <div className="text-6xl mb-4">🚀</div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-2">Upgrade to Team Plan</h3>
-                  <p className="text-slate-600 dark:text-slate-400 mb-4">
-                    Need multiple keys for different environments or team members?
-                  </p>
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => push('Upgrade flow coming soon.', 'info')}
-                    className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 text-white font-semibold rounded-xl shadow-lg inline-flex items-center gap-2 transition-all duration-200"
-                  >
-                    <Users className="w-4 h-4" />
-                    Upgrade to Team Plan
-                  </motion.button>
-                </div>
+              <div className={`p-10 ${INDUSTRIAL_SLOT} border-none`}>
+                <h3 className={`text-2xl font-bold mb-3 font-geist ${ENGRAVED_TEXT}`}>Ready to Scale?</h3>
+                <p className="text-[var(--text-muted)] mb-8 max-w-md mx-auto font-geist text-sm leading-relaxed">
+                  Upgrade to a Team Plan to issue multiple virtual keys, track detailed usage per-key, and manage quotas.
+                </p>
+                <button
+                  onClick={() => push('Upgrade flow coming soon.', 'info')}
+                  className={`${MECHANICAL_BTN} px-8 py-4 rounded-2xl text-xs gap-3 font-black tracking-widest bg-gradient-to-br from-[var(--primary-amber)] to-[var(--primary-rose)] !text-black !border-b-[5px]`}
+                >
+                  <Users className="w-5 h-5" />
+                  UPGRADE INFRASTRUCTURE
+                </button>
               </div>
             </div>
           </motion.div>
         )}
-
-        {/* ── Add Provider Key Modal ──────────────────────────────────────── */}
-        <AnimatePresence>
-          {isProviderModalOpen && (
-            <motion.div
-              variants={modalVariants}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
-              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-slate-950/80 backdrop-blur-sm"
-            >
-              <motion.div
-                variants={modalVariants}
-                className="bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 shadow-2xl rounded-2xl w-full max-w-md overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-slate-50 flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />
-                    Add Provider Key
-                  </h3>
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    onClick={() => setIsProviderModalOpen(false)}
-                    aria-label="Close"
-                    className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors p-1"
-                  >
-                    <X className="w-5 h-5" />
-                  </motion.button>
-                </div>
-
-                <form onSubmit={(e) => void handleAddProvider(e)} className="p-6 space-y-4">
-                  <div className="bg-cyan-50 dark:bg-cyan-500/10 p-4 rounded-xl border border-cyan-200 dark:border-cyan-800">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="w-4 h-4 text-cyan-600 dark:text-cyan-400 shrink-0 mt-0.5" />
-                      <p className="text-sm text-cyan-700 dark:text-cyan-300">
-                        Your API key will be AES-256-GCM encrypted before storage. We never log keys in plaintext.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div>
-                      <label htmlFor="provider-select" className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 block">
-                        Provider
-                      </label>
-                      <select
-                        id="provider-select"
-                        value={newProviderName}
-                        onChange={(e) => setNewProviderName(e.target.value)}
-                        className="w-full rounded-lg bg-white dark:bg-slate-950/70 border border-slate-300 dark:border-slate-700 px-4 py-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-200"
-                      >
-                        {SUPPORTED_PROVIDERS.map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {provider.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="provider-key-input" className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 block">
-                        API Key
-                      </label>
-                      <input
-                        id="provider-key-input"
-                        type="password"
-                        required
-                        autoFocus
-                        placeholder="sk-…"
-                        value={newProviderKey}
-                        onChange={(e) => setNewProviderKey(e.target.value)}
-                        className="w-full rounded-lg bg-white dark:bg-slate-950/70 border border-slate-300 dark:border-slate-700 px-4 py-3 text-sm text-slate-900 dark:text-slate-100 font-mono placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-200"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3 justify-end pt-2">
-                    <motion.button
-                      type="button"
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => setIsProviderModalOpen(false)}
-                      className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all duration-200"
-                    >
-                      Cancel
-                    </motion.button>
-                    <motion.button
-                      type="submit"
-                      disabled={submitting}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-2 text-sm font-semibold text-white shadow-lg transition-all duration-200"
-                    >
-                      {submitting ? <><Loader2 className="w-4 h-4 animate-spin" />Adding…</> : 'Add Provider Key'}
-                    </motion.button>
-                  </div>
-                </form>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── Generate Key Modal ──────────────────────────────────────────── */}
-        <AnimatePresence>
-          {isKeyModalOpen && isTeam && (
-            <motion.div
-              variants={modalVariants}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
-              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 dark:bg-slate-950/80 backdrop-blur-sm"
-            >
-              <motion.div
-                variants={modalVariants}
-                className="bg-white dark:bg-slate-900/90 border border-rose-200 dark:border-rose-800 shadow-2xl rounded-2xl w-full max-w-md overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between px-6 py-4 border-b border-rose-100 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/20">
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-slate-50 flex items-center gap-2">
-                    <ShieldCheck className="w-5 h-5 text-rose-600 dark:text-rose-400" />
-                    Generate Virtual API Key
-                  </h3>
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    onClick={() => setIsKeyModalOpen(false)}
-                    aria-label="Close"
-                    className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors p-1"
-                  >
-                    <X className="w-5 h-5" />
-                  </motion.button>
-                </div>
-
-                <form onSubmit={handleGenerate} className="p-6">
-                  <div className="bg-rose-50 dark:bg-rose-500/10 p-4 rounded-xl border border-rose-200 dark:border-rose-800 mb-6">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                      <p className="text-sm text-rose-700 dark:text-rose-300">
-                        For security, your new key will only be shown once. Have your clipboard ready.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 mb-6">
-                    <div>
-                      <label htmlFor="new-key-name" className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 block">
-                        Key Name
-                      </label>
-                      <input
-                        id="new-key-name"
-                        type="text"
-                        required
-                        autoFocus
-                        placeholder="e.g. Production Frontend App"
-                        value={newKeyName}
-                        onChange={(e) => setNewKeyName(e.target.value)}
-                        className="w-full rounded-lg bg-white dark:bg-slate-950/70 border border-slate-300 dark:border-rose-900/50 px-4 py-3 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 transition-all duration-200"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-3 justify-end">
-                    <motion.button
-                      type="button"
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => setIsKeyModalOpen(false)}
-                      className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all duration-200"
-                    >
-                      Cancel
-                    </motion.button>
-                    <motion.button
-                      type="submit"
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-400 hover:to-pink-400 px-5 py-2 text-sm font-semibold text-white shadow-lg transition-all duration-200"
-                    >
-                      Generate Key
-                    </motion.button>
-                  </div>
-                </form>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── Revoke Confirmation Modal ───────────────────────────────────── */}
-        <AnimatePresence>
-          {pendingRevoke && (
-            <RevokeConfirmModal
-              keyToRevoke={pendingRevoke}
-              isRevoking={revokingId === pendingRevoke.id}
-              onConfirm={() => void handleRevokeConfirm()}
-              onCancel={() => setPendingRevoke(null)}
-            />
-          )}
-        </AnimatePresence>
       </motion.div>
 
-      {/* Toast notifications */}
+      {/* ── Modals ────────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {isProviderModalOpen && (
+          <motion.div
+            variants={modalVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--bg-canvas)]/80 backdrop-blur-md"
+          >
+            <motion.div
+              variants={modalVariants}
+              className="bg-[var(--surface-container)] shadow-2xl shadow-[var(--accent-cyan)]/10 rounded-3xl w-full max-w-md overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-5 bg-[rgba(255,255,255,0.02)]">
+                <h3 className="text-lg font-bold text-[var(--on-surface)] flex items-center gap-2 font-geist">
+                  <ShieldCheck className="w-5 h-5 text-[var(--accent-cyan)]" />
+                  Add Provider Key
+                </h3>
+                <button
+                  onClick={() => setIsProviderModalOpen(false)}
+                  className="text-[var(--text-muted)] hover:text-[var(--on-surface)] transition-colors p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddProvider} className="p-6 space-y-5">
+                <div className="bg-[rgba(34,211,238,0.1)] p-4 rounded-2xl">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-4 h-4 text-[var(--accent-cyan)] shrink-0 mt-0.5" />
+                    <p className="text-sm text-[var(--on-surface)] font-geist">
+                      Your API key is AES-256-GCM encrypted. We never log plaintext keys.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label htmlFor="provider-select" className={`${LABEL_CLASS} mb-2 block`}>
+                      Provider
+                    </label>
+                    <select
+                      id="provider-select"
+                      value={newProviderName}
+                      onChange={(e) => setNewProviderName(e.target.value)}
+                      className="w-full rounded-xl bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-[var(--on-surface)] focus:outline-none focus:ghost-border transition-all"
+                    >
+                      {SUPPORTED_PROVIDERS.map((provider) => (
+                        <option key={provider.id} value={provider.id} className="bg-[var(--surface-container)]">
+                          {provider.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="provider-key-input" className={`${LABEL_CLASS} mb-2 block`}>
+                      API Key
+                    </label>
+                    <input
+                      id="provider-key-input"
+                      type="password"
+                      required
+                      autoFocus
+                      placeholder="sk-…"
+                      value={newProviderKey}
+                      onChange={(e) => setNewProviderKey(e.target.value)}
+                      className="w-full rounded-xl bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-[var(--on-surface)] font-mono placeholder:text-[var(--text-subtle)] focus:outline-none focus:ghost-border transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 justify-end pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsProviderModalOpen(false)}
+                    className="rounded-xl px-5 py-2.5 text-sm font-semibold text-[var(--text-muted)] hover:text-[var(--on-surface)] hover:bg-[rgba(255,255,255,0.05)] transition-colors font-geist"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className={`${MECHANICAL_BTN} px-6 py-3 rounded-xl text-sm bg-[var(--accent-cyan)] !text-black font-black !border-b-[4px]`}
+                  >
+                    {submitting ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />Syncing…</> : 'FORGE KEY'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isKeyModalOpen && isTeam && (
+          <motion.div
+            variants={modalVariants}
+            initial="hidden"
+            animate="visible"
+            exit="exit"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--bg-canvas)]/80 backdrop-blur-md"
+          >
+            <motion.div
+              variants={modalVariants}
+              className="bg-[var(--surface-container)] shadow-2xl shadow-[var(--primary-rose)]/10 rounded-3xl w-full max-w-md overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-5 bg-[rgba(255,255,255,0.02)]">
+                <h3 className="text-lg font-bold text-[var(--on-surface)] flex items-center gap-2 font-geist">
+                  <ShieldCheck className="w-5 h-5 text-[var(--primary-rose)]" />
+                  Generate Virtual Key
+                </h3>
+                <button
+                  onClick={() => setIsKeyModalOpen(false)}
+                  className="text-[var(--text-muted)] hover:text-[var(--on-surface)] transition-colors p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleGenerate} className="p-6">
+                <div className="bg-[rgba(244,63,94,0.1)] p-4 rounded-2xl mb-6">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-4 h-4 text-[var(--primary-rose)] shrink-0 mt-0.5" />
+                    <p className="text-sm text-[var(--on-surface)] font-geist">
+                      For security, the new key is shown only once. Be ready to copy it.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-4 mb-8">
+                  <div>
+                    <label htmlFor="new-key-name" className={`${LABEL_CLASS} mb-2 block`}>
+                      Key Name
+                    </label>
+                    <input
+                      id="new-key-name"
+                      type="text"
+                      required
+                      autoFocus
+                      placeholder="e.g. Production Frontend App"
+                      value={newKeyName}
+                      onChange={(e) => setNewKeyName(e.target.value)}
+                      className="w-full rounded-xl bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-[var(--on-surface)] focus:outline-none focus:ghost-border transition-all placeholder:text-[var(--text-subtle)]"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsKeyModalOpen(false)}
+                    className="rounded-xl px-5 py-2.5 text-sm font-semibold text-[var(--text-muted)] hover:text-[var(--on-surface)] hover:bg-[rgba(255,255,255,0.05)] transition-colors font-geist"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className={`${MECHANICAL_BTN} px-6 py-3 rounded-xl text-sm bg-gradient-to-br from-[var(--primary-amber)] to-[var(--primary-rose)] !text-black font-black !border-b-[4px]`}
+                  >
+                    MINT NEW TOKEN
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {pendingRevoke && (
+          <RevokeConfirmModal
+            keyToRevoke={pendingRevoke}
+            isRevoking={revokingId === pendingRevoke.id}
+            onConfirm={() => void handleRevokeConfirm()}
+            onCancel={() => setPendingRevoke(null)}
+          />
+        )}
+      </AnimatePresence>
+
       <ToastList toasts={toasts} dismiss={dismiss} />
     </>
   );

@@ -1,6 +1,5 @@
 // Presentation Page — OnboardingWizard
-// Step 1: Workspace name | Step 2: LLM API key | Step 3: RedEye key reveal
-// Theme: "Cool Revival" — Midnight Obsidian + Neon Cyan/Teal
+// Theme: "The Obsidian Command" — Liquid Glass, Dynamic Theme, Tactical Gauges.
 // On finish → navigate /dashboard
 
 import { useState, type FormEvent } from 'react';
@@ -18,9 +17,34 @@ import {
   User,
   Users,
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 type Step = 1 | 2 | 3 | 4;
 type AccountType = 'individual' | 'team';
+
+/**
+ * Segmented Tactical Gauge (RPM Style)
+ */
+function TacticalGauge({ current, total }: { current: number; total: number }) {
+  return (
+    <div className="flex gap-1 h-1 w-full max-w-[240px]">
+      {Array.from({ length: total }).map((_, i) => (
+        <div
+          key={i}
+          className={`h-full flex-1 rounded-full transition-all duration-700 ${
+            i < current 
+              ? 'bg-[var(--accent-cyan)] shadow-[0_0_8px_var(--accent-cyan)]' 
+              : 'bg-[var(--surface-bright)] opacity-20'
+          }`}
+        />
+      ))}
+    </div>
+  );
+}
+
+const BTN_3D = "w-full inline-flex items-center justify-center gap-2 bg-gradient-to-b from-[var(--surface-bright)] to-[var(--surface-container)] text-[var(--on-surface)] font-geist font-medium border border-[rgba(255,255,255,0.1)] dark:border-[rgba(255,255,255,0.05)] shadow-[inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_0_20px_rgba(34,211,238,0.4)] hover:border-[var(--accent-cyan)] active:translate-y-[2px] active:shadow-none transition-all duration-200 rounded-lg px-6 py-3 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer";
+
+const BENTO_GLASS = "backdrop-blur-[40px] saturate-[200%] bg-[var(--surface-container)] border border-white/5 rounded-[2rem] p-8 shadow-2xl relative overflow-hidden";
 
 export function OnboardingWizard() {
   const navigate = useNavigate();
@@ -68,284 +92,309 @@ export function OnboardingWizard() {
   }
 
   const providerLabels: Record<string, string> = {
-    openai: 'OpenAI',
-    gemini: 'Google Gemini',
-    groq: 'Groq',
-    anthropic: 'Anthropic',
+    openai: 'OpenAI Protocol',
+    gemini: 'Google Gemini Core',
+    groq: 'Groq LPU Array',
+    anthropic: 'Anthropic Claude',
   };
 
   return (
-    <div className="relative min-h-screen bg-slate-950 flex items-center justify-center px-4 overflow-hidden">
+    <div className="relative min-h-screen bg-[var(--bg-canvas)] flex items-center justify-center px-4 overflow-hidden font-geist">
 
-      {/* ── Ambient Glow Blobs ─────────────────────────────────── */}
-      <div className="absolute -top-32 -left-32 w-96 h-96 rounded-full bg-cyan-500/10 blur-[120px] pointer-events-none" />
-      <div className="absolute -bottom-32 -right-32 w-96 h-96 rounded-full bg-teal-500/10 blur-[120px] pointer-events-none" />
+      {/* ── Ambient Mesh Background ────────────────────────────── */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-cyan-500/10 blur-[140px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-amber-500/5 blur-[120px] rounded-full" />
+      </div>
 
-      <div className="relative w-full max-w-md z-10">
+      <div className="relative w-full max-w-lg z-10">
 
-        {/* ── Brand + Step Indicators ────────────────────────────── */}
-        <div className="flex items-center justify-between mb-10">
+        {/* ── HUD Header ────────────────────────────────────────── */}
+        <div className="flex items-center justify-between mb-10 px-2">
           {/* Logo */}
-          <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-cyan-500 to-teal-500 flex items-center justify-center shadow-[0_0_20px_rgba(34,211,238,0.45)]">
-              <span className="text-xs font-bold text-slate-950">RE</span>
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-cyan-500 flex items-center justify-center shadow-[0_0_20px_rgba(34,211,238,0.45)]">
+              <span className="text-[11px] font-black text-[#050505]">RE</span>
             </div>
-            <span className="text-sm font-semibold text-slate-100 tracking-wide">RedEye</span>
+            <div>
+              <p className="text-[9px] uppercase tracking-[0.25em] font-black text-[var(--on-surface-muted)]">RedEye</p>
+              <p className="text-xs font-bold tracking-tight leading-none text-[var(--on-surface)]">Deployment Wizard</p>
+            </div>
           </div>
 
-          {/* Step dots — neon cyan when active / complete, muted slate otherwise */}
-          <div className="flex items-center gap-3">
-            {([1, 2, 3, 4] as Step[]).map((s) => (
-              <div key={s} className="relative flex items-center justify-center">
-                {s === step ? (
-                  /* Active — glowing cyan dot */
-                  <div className="h-2.5 w-2.5 rounded-full bg-cyan-400 neon-dot" />
-                ) : s < step ? (
-                  /* Completed — solid teal */
-                  <div className="h-2.5 w-2.5 rounded-full bg-teal-500/70" />
-                ) : (
-                  /* Upcoming — muted slate */
-                  <div className="h-2.5 w-2.5 rounded-full bg-slate-700" />
-                )}
-              </div>
-            ))}
+          {/* Tactical Progress */}
+          <div className="flex flex-col items-end gap-2">
+            <span className="text-[10px] font-bold text-[var(--accent-cyan)] uppercase tracking-widest">
+              Stage 0{step} / 04
+            </span>
+            <TacticalGauge current={step} total={4} />
           </div>
         </div>
 
-        {/* ══════════════════════════════════════════════════════════
-            STEP 1 — Workspace Name
-        ══════════════════════════════════════════════════════════ */}
-        {step === 1 && (
-          <div className="glass-panel p-8">
-            <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/20 mb-5">
-              <Building2 className="w-5 h-5 text-cyan-400" />
-            </div>
-            <h1 className="text-xl font-bold text-slate-50 mb-1.5">Name your workspace</h1>
-            <p className="text-sm text-slate-400 mb-7 leading-relaxed">
-              This appears in your dashboard and audit logs.
-            </p>
-            <form onSubmit={handleStep1} className="space-y-4">
-              <input
-                type="text"
-                required
-                autoFocus
-                value={workspaceName}
-                onChange={(e) => setWorkspaceName(e.target.value)}
-                placeholder="e.g. Acme AI Platform"
-                className="premium-input"
-              />
-              <button
-                type="submit"
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 px-4 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_20px_rgba(34,211,238,0.25)] hover:shadow-[0_0_30px_rgba(34,211,238,0.4)] transition-all duration-200"
-              >
-                Continue <ChevronRight className="w-4 h-4" />
-              </button>
-            </form>
-          </div>
-        )}
+        {/* ── Wizard Bento Container ────────────────────────────── */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={step}
+            initial={{ opacity: 0, scale: 0.98, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 1.02, y: -10 }}
+            transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
+            className={BENTO_GLASS}
+          >
+            {/* Background scanner line animation */}
+            <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-[var(--accent-cyan)]/20 to-transparent animate-scan z-0" />
 
-        {/* ══════════════════════════════════════════════════════════
-            STEP 2 — Account Type Selection
-        ══════════════════════════════════════════════════════════ */}
-        {step === 2 && (
-          <div className="glass-panel p-8">
-            <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/20 mb-5">
-              <Users className="w-5 h-5 text-cyan-400" />
-            </div>
-            <h1 className="text-xl font-bold text-slate-50 mb-1.5">How are you building?</h1>
-            <p className="text-sm text-slate-400 mb-7 leading-relaxed">
-              Select the option that best describes your setup. This helps us tailor your experience.
-            </p>
-
-            <div className="space-y-4">
-              {/* Individual Card */}
-              <button
-                onClick={() => handleStep2('individual')}
-                className="w-full group relative flex items-start gap-4 p-5 rounded-xl border border-slate-700/80 bg-slate-900/50 hover:border-cyan-500/50 hover:bg-slate-800/50 transition-all duration-200 text-left"
-              >
-                <div className="flex-none flex items-center justify-center w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 group-hover:bg-cyan-500/20 group-hover:border-cyan-500/40 transition-all duration-200">
-                  <User className="w-6 h-6 text-cyan-400" />
+            {/* ══════════════════════════════════════════════════════════
+                STEP 1 — Workspace Name
+            ══════════════════════════════════════════════════════════ */}
+            {step === 1 && (
+              <div className="relative z-10">
+                <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 mb-6">
+                  <Building2 className="w-6 h-6 text-[var(--accent-cyan)]" />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-semibold text-slate-100 mb-1">Individual</h3>
-                  <p className="text-sm text-slate-400">Single developer, freelancer, or personal projects.</p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition-all duration-200 flex-none self-center" />
-              </button>
-
-              {/* Team Card */}
-              <button
-                onClick={() => handleStep2('team')}
-                className="w-full group relative flex items-start gap-4 p-5 rounded-xl border border-slate-700/80 bg-slate-900/50 hover:border-teal-500/50 hover:bg-slate-800/50 transition-all duration-200 text-left"
-              >
-                <div className="flex-none flex items-center justify-center w-12 h-12 rounded-xl bg-teal-500/10 border border-teal-500/20 group-hover:bg-teal-500/20 group-hover:border-teal-500/40 transition-all duration-200">
-                  <Users className="w-6 h-6 text-teal-400" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-semibold text-slate-100 mb-1">Team</h3>
-                  <p className="text-sm text-slate-400">Startup, enterprise, or multi-developer organization.</p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-teal-400 group-hover:translate-x-0.5 transition-all duration-200 flex-none self-center" />
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setStep(1)}
-              className="mt-6 w-full rounded-xl border border-slate-700/80 bg-slate-900/50 px-4 py-3 text-sm font-semibold text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-all duration-200"
-            >
-              Back
-            </button>
-          </div>
-        )}
-
-        {/* ══════════════════════════════════════════════════════════
-            STEP 3 — LLM API Key
-        ══════════════════════════════════════════════════════════ */}
-        {step === 3 && (
-          <div className="glass-panel p-8">
-            <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/20 mb-5">
-              <KeyRound className="w-5 h-5 text-cyan-400" />
-            </div>
-            <h1 className="text-xl font-bold text-slate-50 mb-1.5">Connect your LLM provider</h1>
-            <p className="text-sm text-slate-400 mb-7 leading-relaxed">
-              Your key is stored encrypted and never logged in plaintext.
-            </p>
-
-            <form onSubmit={handleFinish} className="space-y-4">
-              {/* Provider Select */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-                  Provider
-                </label>
-                <select
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value)}
-                  className="premium-input appearance-none cursor-pointer"
-                >
-                  {Object.entries(providerLabels).map(([value, label]) => (
-                    <option key={value} value={value} className="bg-slate-900 text-slate-100">
-                      {label}
-                    </option>
-                  ))}
-                </select>
+                <h1 className="text-2xl font-bold text-[var(--on-surface)] mb-2 tracking-tight">Identity Designation</h1>
+                <p className="text-sm text-[var(--on-surface-muted)] mb-8 leading-relaxed font-medium">
+                  Establish a unique identifier for your operational workspace. This will be broadcasted in telemetry logs.
+                </p>
+                <form onSubmit={handleStep1} className="space-y-6">
+                  <div className="relative group">
+                    <div className="absolute top-[-10px] left-0 text-[10px] font-bold uppercase tracking-widest text-[var(--on-surface-muted)] group-focus-within:text-[var(--accent-cyan)] transition-colors">
+                      Workspace Label
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      autoFocus
+                      value={workspaceName}
+                      onChange={(e) => setWorkspaceName(e.target.value)}
+                      placeholder="e.g. OMEGA_COMMAND_CENTER"
+                      className="w-full bg-transparent border-0 border-b border-[var(--surface-bright)] focus:border-[var(--accent-cyan)] focus:ring-0 rounded-none px-0 py-3 text-[var(--on-surface)] placeholder:text-[var(--on-surface-muted)]/30 transition-all font-jetbrains uppercase tracking-wider"
+                    />
+                  </div>
+                  <button type="submit" className={BTN_3D}>
+                    Proceed to Context <ChevronRight className="w-4 h-4" />
+                  </button>
+                </form>
               </div>
+            )}
 
-              {/* API Key Input */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-widest text-slate-500">
-                  API Key
-                </label>
-                <input
-                  type="password"
-                  required
-                  autoFocus
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Paste your API key"
-                  className="premium-input font-mono tracking-widest"
-                />
-              </div>
-
-              {/* ── Inline Error Alert ─────────────────────────────── */}
-              {error && (
-                <div className="flex items-start gap-3 rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 shadow-[0_0_20px_rgba(244,63,94,0.08)]">
-                  <ShieldAlert className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-rose-300 leading-relaxed">{error}</p>
+            {/* ══════════════════════════════════════════════════════════
+                STEP 2 — Account Type Selection
+            ══════════════════════════════════════════════════════════ */}
+            {step === 2 && (
+              <div className="relative z-10">
+                <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 mb-6">
+                  <Users className="w-6 h-6 text-[var(--accent-cyan)]" />
                 </div>
-              )}
+                <h1 className="text-2xl font-bold text-[var(--on-surface)] mb-2 tracking-tight">Operational Mode</h1>
+                <p className="text-sm text-[var(--on-surface-muted)] mb-8 leading-relaxed font-medium">
+                  Define the scale of your intelligence deployment.
+                </p>
 
-              <div className="flex gap-3 pt-1">
+                <div className="space-y-4">
+                  {/* Individual Card */}
+                  <button
+                    onClick={() => handleStep2('individual')}
+                    className="w-full group relative flex items-start gap-5 p-6 rounded-2xl border border-white/5 bg-[var(--surface-bright)]/20 hover:border-[var(--accent-cyan)] hover:bg-[var(--accent-cyan)]/5 hover:shadow-[0_0_30px_rgba(34,211,238,0.1)] transition-all duration-300 text-left"
+                  >
+                    <div className="flex-none flex items-center justify-center w-12 h-12 rounded-xl bg-[var(--surface-bright)] border border-white/5 group-hover:bg-[var(--accent-cyan)] group-hover:text-[#050505] transition-all duration-300">
+                      <User className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-base font-bold text-[var(--on-surface)] mb-1 uppercase tracking-tight">Tactical / Solo</h3>
+                      <p className="text-xs text-[var(--on-surface-muted)] font-medium">Single operator, specialized deployment, or laboratory testing.</p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-[var(--on-surface-muted)] group-hover:text-[var(--accent-cyan)] group-hover:translate-x-1 transition-all duration-300 self-center" />
+                  </button>
+
+                  {/* Team Card */}
+                  <button
+                    onClick={() => handleStep2('team')}
+                    className="w-full group relative flex items-start gap-5 p-6 rounded-2xl border border-white/5 bg-[var(--surface-bright)]/20 hover:border-teal-400 hover:bg-teal-400/5 hover:shadow-[0_0_30px_rgba(45,212,191,0.1)] transition-all duration-300 text-left"
+                  >
+                    <div className="flex-none flex items-center justify-center w-12 h-12 rounded-xl bg-[var(--surface-bright)] border border-white/5 group-hover:bg-teal-400 group-hover:text-[#050505] transition-all duration-300">
+                      <Users className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-base font-bold text-[var(--on-surface)] mb-1 uppercase tracking-tight">Strategic / Org</h3>
+                      <p className="text-xs text-[var(--on-surface-muted)] font-medium">Multi-operator coordination, enterprise-grade auditing, and shared protocols.</p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-[var(--on-surface-muted)] group-hover:text-teal-400 group-hover:translate-x-1 transition-all duration-300 self-center" />
+                  </button>
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setStep(2)}
-                  className="flex-none rounded-xl border border-slate-700/80 bg-slate-900/50 px-4 py-3 text-sm font-semibold text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-all duration-200"
+                  onClick={() => setStep(1)}
+                  className="mt-8 w-full rounded-xl border border-white/5 bg-[var(--surface-bright)]/30 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--on-surface-muted)] hover:text-[var(--on-surface)] hover:bg-[var(--surface-bright)] transition-all duration-200"
                 >
-                  Back
+                  Return to Base
                 </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_20px_rgba(34,211,238,0.25)] hover:shadow-[0_0_30px_rgba(34,211,238,0.4)] transition-all duration-200"
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Verifying connection securely...
-                    </>
-                  ) : (
-                    <>
-                      Verify &amp; Next <ChevronRight className="w-4 h-4" />
-                    </>
+              </div>
+            )}
+
+            {/* ══════════════════════════════════════════════════════════
+                STEP 3 — LLM API Key
+            ══════════════════════════════════════════════════════════ */}
+            {step === 3 && (
+              <div className="relative z-10">
+                <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 mb-6">
+                  <KeyRound className="w-6 h-6 text-[var(--accent-cyan)]" />
+                </div>
+                <h1 className="text-2xl font-bold text-[var(--on-surface)] mb-2 tracking-tight">Neural Uplink</h1>
+                <p className="text-sm text-[var(--on-surface-muted)] mb-8 leading-relaxed font-medium">
+                  Connect your primary LLM provider. Data remains encrypted via AES-256 standard.
+                </p>
+
+                <form onSubmit={handleFinish} className="space-y-6">
+                  {/* Provider Select */}
+                  <div className="relative group">
+                    <div className="absolute top-[-10px] left-0 text-[10px] font-bold uppercase tracking-widest text-[var(--on-surface-muted)] group-focus-within:text-[var(--accent-cyan)] transition-colors">
+                      Protocol Provider
+                    </div>
+                    <select
+                      value={provider}
+                      onChange={(e) => setProvider(e.target.value)}
+                      className="w-full bg-transparent border-0 border-b border-[var(--surface-bright)] focus:border-[var(--accent-cyan)] focus:ring-0 rounded-none px-0 py-3 text-[var(--on-surface)] font-bold appearance-none cursor-pointer"
+                    >
+                      {Object.entries(providerLabels).map(([value, label]) => (
+                        <option key={value} value={value} className="bg-[var(--surface-lowest)] text-[var(--on-surface)]">
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* API Key Input */}
+                  <div className="relative group">
+                    <div className="absolute top-[-10px] left-0 text-[10px] font-bold uppercase tracking-widest text-[var(--on-surface-muted)] group-focus-within:text-[var(--accent-cyan)] transition-colors">
+                      Secret Key Token
+                    </div>
+                    <input
+                      type="password"
+                      required
+                      autoFocus
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="sk-••••••••••••••••"
+                      className="w-full bg-transparent border-0 border-b border-[var(--surface-bright)] focus:border-[var(--accent-cyan)] focus:ring-0 rounded-none px-0 py-3 text-[var(--on-surface)] font-jetbrains tracking-[0.2em]"
+                    />
+                  </div>
+
+                  {/* ── Inline Error Alert ─────────────────────────────── */}
+                  {error && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="flex items-start gap-3 rounded-xl bg-rose-500/10 border border-rose-500/20 px-4 py-3"
+                    >
+                      <ShieldAlert className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
+                      <p className="text-xs text-rose-300 font-medium leading-relaxed uppercase tracking-wide">{error}</p>
+                    </motion.div>
                   )}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
 
-        {/* ══════════════════════════════════════════════════════════
-            STEP 4 — RedEye Key Reveal
-        ══════════════════════════════════════════════════════════ */}
-        {step === 4 && (
-          <div className="glass-panel p-8">
-            {/* Header */}
-            <div className="flex items-center justify-center w-11 h-11 rounded-xl bg-teal-500/10 border border-teal-500/20 mb-5">
-              <Terminal className="w-5 h-5 text-teal-400" />
-            </div>
-            <h1 className="text-xl font-bold text-slate-50 mb-1.5">Your RedEye Gateway Key</h1>
-            <p className="text-sm text-slate-400 mb-6 leading-relaxed">
-              Copy this key now. For your security,{' '}
-              <strong className="text-teal-400 font-semibold">you won't be able to see it again</strong>.
-            </p>
-
-            {/* ── Hacker-Terminal Key Display ──────────────────────── */}
-            <div className="relative rounded-xl bg-slate-950 border border-teal-500/30 shadow-[0_0_24px_rgba(45,212,191,0.08)] overflow-hidden mb-6">
-              {/* Terminal chrome bar */}
-              <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-teal-500/20 bg-slate-900/60">
-                <div className="w-2.5 h-2.5 rounded-full bg-rose-500/70" />
-                <div className="w-2.5 h-2.5 rounded-full bg-amber-500/70" />
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/70" />
-                <span className="ml-2 text-[10px] text-teal-500/60 font-mono uppercase tracking-widest">
-                  redeye_key.env
-                </span>
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setStep(2)}
+                      className="flex-none rounded-xl border border-white/5 bg-[var(--surface-bright)]/30 px-6 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--on-surface-muted)] hover:text-[var(--on-surface)] transition-all duration-200"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className={BTN_3D}
+                    >
+                      {loading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-cyan)]" />
+                          Initiating Uplink...
+                        </>
+                      ) : (
+                        <>
+                          Establish Link <ChevronRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
               </div>
-              {/* Key content */}
-              <div className="flex items-center justify-between gap-4 p-4">
-                <code className="text-teal-400 font-mono text-sm break-all leading-relaxed flex-1">
-                  {generatedRedEyeKey}
-                </code>
+            )}
+
+            {/* ══════════════════════════════════════════════════════════
+                STEP 4 — RedEye Key Reveal
+            ══════════════════════════════════════════════════════════ */}
+            {step === 4 && (
+              <div className="relative z-10">
+                {/* Header */}
+                <div className="flex items-center justify-center w-12 h-12 rounded-2xl bg-teal-500/10 border border-teal-500/20 mb-6">
+                  <Terminal className="w-6 h-6 text-teal-400" />
+                </div>
+                <h1 className="text-2xl font-bold text-[var(--on-surface)] mb-2 tracking-tight">Gateway Credentials</h1>
+                <p className="text-sm text-[var(--on-surface-muted)] mb-8 leading-relaxed font-medium">
+                  Capture your unique gateway key. For neural security,{' '}
+                  <strong className="text-[var(--accent-cyan)] font-bold underline decoration-[var(--accent-cyan)]/30 underline-offset-4">this token is single-reveal only</strong>.
+                </p>
+
+                {/* ── Tactical Key Display ─────────────────────────── */}
+                <div className="relative rounded-2xl bg-[var(--surface-bright)]/40 border border-white/5 shadow-2xl overflow-hidden mb-8">
+                  {/* Terminal chrome bar */}
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-white/5 bg-[var(--surface-lowest)]/50">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-rose-500/70" />
+                      <div className="w-2 h-2 rounded-full bg-amber-500/70" />
+                      <div className="w-2 h-2 rounded-full bg-emerald-500/70" />
+                      <span className="ml-3 text-[9px] text-[var(--on-surface-muted)] font-bold uppercase tracking-[0.3em]">
+                        SECRET_ACCESS_KEY
+                      </span>
+                    </div>
+                  </div>
+                  {/* Key content */}
+                  <div className="flex items-center justify-between gap-6 p-6">
+                    <code className="text-[var(--accent-cyan)] font-jetbrains text-sm break-all leading-relaxed flex-1 font-bold">
+                      {generatedRedEyeKey}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (generatedRedEyeKey) {
+                          navigator.clipboard.writeText(generatedRedEyeKey);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        }
+                      }}
+                      className="flex-none p-3 rounded-xl border border-[var(--accent-cyan)]/20 bg-[var(--accent-cyan)]/10 hover:bg-[var(--accent-cyan)]/20 transition-all duration-200 text-[var(--accent-cyan)]"
+                      title="Capture to memory"
+                    >
+                      {copied
+                        ? <Check className="w-5 h-5 text-emerald-400" />
+                        : <Copy className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* ── Proceed CTA ───────────────────────────────────────── */}
                 <button
-                  type="button"
-                  onClick={() => {
-                    if (generatedRedEyeKey) {
-                      navigator.clipboard.writeText(generatedRedEyeKey);
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 2000);
-                    }
-                  }}
-                  className="flex-none p-2 rounded-lg border border-teal-500/20 bg-teal-500/5 hover:bg-teal-500/15 hover:border-teal-500/40 transition-all duration-200 text-teal-400"
-                  title="Copy to clipboard"
+                  onClick={() => navigate('/dashboard')}
+                  className={BTN_3D}
                 >
-                  {copied
-                    ? <Check className="w-4 h-4 text-emerald-400" />
-                    : <Copy className="w-4 h-4" />}
+                  Enter Command Center <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
-            </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
 
-            {/* ── Proceed CTA ───────────────────────────────────────── */}
-            <button
-              onClick={() => navigate('/dashboard')}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-500 hover:from-cyan-400 hover:to-teal-400 px-4 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_24px_rgba(34,211,238,0.3)] hover:shadow-[0_0_36px_rgba(34,211,238,0.5)] transition-all duration-200"
-            >
-              Proceed to Dashboard <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {/* Step counter */}
-        <p className="mt-5 text-center text-xs text-slate-600">Step {step} of 4</p>
+        {/* HUD footer info */}
+        <div className="mt-8 flex items-center justify-center gap-6">
+           <div className="flex items-center gap-1.5">
+             <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+             <span className="text-[9px] font-bold text-[var(--on-surface-muted)] uppercase tracking-widest">Secure Link Active</span>
+           </div>
+           <div className="h-3 w-[1px] bg-white/5" />
+           <span className="text-[9px] font-bold text-[var(--on-surface-muted)] uppercase tracking-widest">Deployment Hash: 0X_RDY_0024</span>
+        </div>
       </div>
     </div>
   );

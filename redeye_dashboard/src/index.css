@@ -1,89 +1,500 @@
 @import "tailwindcss";
 
-/* ─── Design Tokens ──────────────────────────────────────────────────────── */
+/* ─── Google Fonts: Geist (Sans) + JetBrains Mono ───────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap");
+
+/* ─── Design Tokens (Tailwind Theme) ────────────────────────────────────── */
 @theme {
-  --color-redeye-dark:      #020617;   /* slate-950 */
-  --color-redeye-panel:     #0f172a;   /* slate-900 */
-  --color-redeye-primary:   #22d3ee;   /* cyan-400 */
-  --color-redeye-secondary: #2dd4bf;   /* teal-400 */
-  --color-redeye-success:   #10b981;   /* emerald-500 */
-  --color-redeye-danger:    #f43f5e;   /* rose-500 */
+  --color-redeye-primary: #22d3ee;
+  --color-redeye-secondary: #2dd4bf;
+  --color-redeye-success: #10b981;
+  --color-redeye-danger: #f43f5e;
+  --color-redeye-warning: #f59e0b;
+
+  /* Obsidian Surface Stack */
+  --color-surface-lowest: #0E0E0E;
+  --color-surface: #131313;
+  --color-surface-container: #201F1F;
+  --color-surface-bright: #3A3939;
 }
 
-/* ─── Dark Mode ──────────────────────────────────────────────────────────── */
-/* Tailwind v4 uses `darkMode: 'class'` semantics via the .dark class on <html> */
+/* ─── Spatial UI CSS Variables ───────────────────────────────────────────── */
+/*
+ * LIGHT MODE — default `:root` state (no `.dark` class on <html>).
+ * Surfaces are inverted: white canvas, light-grey containers.
+ * Structural spatial rules (blur, shadow scale, grid) are identical to dark.
+ * Typography and palette accent colors remain unchanged.
+ */
+:root {
+  /* ── Surface Stack — Light (inverted Obsidian) ── */
+  --bg-canvas: #FFFFFF;
+  --surface: #F5F5F5;
+  --surface-container-lowest: #E8E8E8;
+  --surface-container: rgba(0, 0, 0, 0.03);
+  /* tonal glass, not solid */
+  --surface-container-low: rgba(0, 0, 0, 0.02);
+  --surface-lowest: #FFFFFF;
+  --surface-bright: rgba(0, 0, 0, 0.05);
 
-/* ─── Base ───────────────────────────────────────────────────────────────── */
+  /* Text */
+  --on-surface: #050505;
+  --on-surface-muted: #52525B;
+  --text-muted: #64748b;
+  --text-subtle: rgba(0, 0, 0, 0.28);
+
+  /* Glass — light mode uses tonal depth, not borders */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: transparent;
+  --glass-shadow: 0 24px 48px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
+  --glass-shadow-hover: 0 32px 64px rgba(0, 0, 0, 0.12), 0 8px 20px rgba(0, 0, 0, 0.06);
+  --glass-inner-border: inset 0 1px 0 rgba(255, 255, 255, 0.90);
+
+  /* Palette — light-mode Obsidian Command (slightly warmer for legibility on white) */
+  --primary-amber: #f59e0b;
+  --primary-rose: #f43f5e;
+  --accent-cyan: #0ea5e9;
+
+  /* Legacy aliases — keep in sync with palette above */
+  --cyan: #0ea5e9;
+  --amber: #f59e0b;
+  --rose: #f43f5e;
+
+  /* Glows — attenuated in light */
+  --glow-cyan: 0 0 40px -8px rgba(14, 165, 233, 0.12);
+  --glow-amber: 0 0 40px -8px rgba(245, 158, 11, 0.12);
+  --glow-rose: 0 0 40px -8px rgba(244, 63, 94, 0.12);
+  --glow-emerald: 0 0 40px -8px rgba(16, 185, 129, 0.10);
+  --glow-none: 0 0 0 0 transparent;
+
+  /* 3D Button shadows — light */
+  --btn-primary-bottom: rgba(160, 40, 10, 0.55);
+  --btn-primary-glow: rgba(255, 84, 75, 0.35);
+
+  /* Aliases */
+  --canvas-bg: var(--bg-canvas);
+  --canvas-text: var(--on-surface);
+}
+
+/*
+ * DARK MODE — activated by adding `.dark` to <html>.
+ * Full Obsidian Command palette. This is the canonical design-system state.
+ * Applied via useTheme.ts; see design.md §2 "The Obsidian Palette".
+ */
+.dark {
+  /* ── Surface Stack — Obsidian Command ── */
+  --bg-canvas: #050505;
+  --surface: #131313;
+  --surface-container-lowest: #0E0E0E;
+  --surface-container: rgba(255, 255, 255, 0.03);
+  /* tonal glass, not solid */
+  --surface-container-low: rgba(255, 255, 255, 0.02);
+  --surface-lowest: #0E0E0E;
+  --surface-bright: rgba(255, 255, 255, 0.08);
+
+  /* Text */
+  --on-surface: #E5E2E1;
+  --on-surface-muted: #A09E9D;
+  --text-muted: #94a3b8;
+  --text-subtle: rgba(229, 226, 225, 0.28);
+
+  /* Glass */
+  --glass-bg: rgba(255, 255, 255, 0.02);
+  --glass-border: transparent;
+  --glass-shadow: 0 24px 48px rgba(0, 0, 0, 0.50);
+  --glass-shadow-hover: 0 32px 64px rgba(0, 0, 0, 0.65);
+  --glass-inner-border: inset 0 1px 1px rgba(255, 255, 255, 0.15), inset 0 -1px 1px rgba(0, 0, 0, 0.6);
+
+  /* Palette — full-luminance Obsidian Command accent colours */
+  --primary-amber: #fbbf24;
+  --primary-rose: #fb7185;
+  --accent-cyan: #22d3ee;
+
+  /* Legacy aliases */
+  --cyan: #22d3ee;
+  --amber: #fbbf24;
+  --rose: #fb7185;
+
+  /* Glows — luminous 3D */
+  --glow-cyan: 0 0 40px -8px rgba(34, 211, 238, 0.30);
+  --glow-amber: 0 0 40px -8px rgba(251, 191, 36, 0.28);
+  --glow-rose: 0 0 40px -8px rgba(251, 113, 133, 0.28);
+  --glow-emerald: 0 0 40px -8px rgba(16, 185, 129, 0.25);
+  --glow-none: 0 0 0 0 transparent;
+
+  /* 3D Button shadows — dark */
+  --btn-primary-bottom: rgba(180, 30, 10, 0.70);
+  --btn-primary-glow: rgba(255, 84, 75, 0.45);
+
+  /* Aliases */
+  --canvas-bg: var(--bg-canvas);
+  --canvas-text: var(--on-surface);
+}
+
+/* ─── SVG Noise Grain ────────────────────────────────────────────────────── */
+.grain::before {
+  content: '';
+  position: fixed;
+  inset: -200%;
+  width: 400%;
+  height: 400%;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  opacity: 0.022;
+  pointer-events: none;
+  z-index: 9999;
+  mix-blend-mode: overlay;
+}
+
+.dark .grain::before {
+  opacity: 0.04;
+}
+
+/* ─── Base & Transitions ─────────────────────────────────────────────────── */
 @layer base {
   html {
     @apply antialiased;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
+
   body {
-    @apply bg-slate-950 text-slate-200 min-h-screen overflow-x-hidden;
-    background: radial-gradient(ellipse at top, rgba(34, 211, 238, 0.08), #020617 50%, #000000);
+    @apply min-h-screen overflow-x-hidden;
+    background-color: var(--bg-canvas);
+    color: var(--on-surface);
+    font-family: 'Geist', system-ui, -apple-system, sans-serif;
+    transition:
+      background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 }
 
-/* ─── Glass Panel — Premium Glassmorphism ────────────────────────────────── */
-.glass-panel {
-  background: rgba(15, 23, 42, 0.50);
-  -webkit-backdrop-filter: blur(24px);
-  backdrop-filter: blur(24px);
-  border: 1px solid rgba(34, 211, 238, 0.15);
-  box-shadow:
-    0 0 15px rgba(34, 211, 238, 0.04),
-    0 4px 30px rgba(0, 0, 0, 0.4);
-  border-radius: 1.5rem;
-  transition: all 0.3s ease;
+/* ─── Typography Utilities ───────────────────────────────────────────────── */
+
+/* Sans-serif labels, headings, UI text */
+.font-geist {
+  font-family: 'Geist', system-ui, -apple-system, sans-serif;
 }
 
-.glass-panel:hover {
-  border-color: rgba(45, 212, 191, 0.30);
-  box-shadow:
-    0 0 20px rgba(45, 212, 191, 0.1),
-    0 4px 30px rgba(0, 0, 0, 0.5);
+/* Monospace metrics, code, tabular numerics */
+.font-jetbrains {
+  font-family: 'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
-/* ─── Premium Form Input ─────────────────────────────────────────────────── */
-.premium-input {
-  @apply w-full rounded-xl bg-slate-950/70 border border-slate-800 px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-400 focus:border-cyan-400 transition-colors;
+.metric-text {
+  font-family: 'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  color: var(--on-surface);
 }
 
-/* ─── Neon pulse — Cyan ──────────────────────────────────────────────────── */
-@keyframes neon-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(34, 211, 238, 0.5), 0 0 8px rgba(34, 211, 238, 0.25); }
-  50%       { box-shadow: 0 0 8px rgba(34, 211, 238, 0.8), 0 0 16px rgba(34, 211, 238, 0.45); }
+/* ─── BentoCard Base & Liquid Refraction ──────────────────────────────────── */
+.bento-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
 }
 
-.neon-dot {
-  animation: neon-pulse 2s ease-in-out infinite;
+/* ─── BentoCard Hover Animation ─────────────────────────────────────────────── */
+/* Subtle lift on hover for tactile feedback */
+.bento-card-glow-cyan:hover,
+.bento-card-glow-amber:hover,
+.bento-card-glow-rose:hover,
+.bento-card-glow-emerald:hover,
+.bento-card-glow-none:hover {
+  transform: translateY(-4px) scale(1.01);
+  transition:
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* ─── Custom Scrollbar — Cyan ────────────────────────────────────────────── */
-.custom-scrollbar::-webkit-scrollbar        { height: 4px; width: 4px; }
-.custom-scrollbar::-webkit-scrollbar-track  { background: rgba(34, 211, 238, 0.04); border-radius: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb  { background: rgba(34, 211, 238, 0.20); border-radius: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(34, 211, 238, 0.38); }
+/* ─── BentoCard Glow Variants ────────────────────────────────────────────── */
+/* These add to the base box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4) */
+/* Includes subtle inset shadow for proximity glow effect */
+.bento-card-glow-cyan:hover {
+  box-shadow: inset 0 1px 0 rgba(34, 211, 238, 0.1), var(--glow-cyan), 0 24px 48px rgba(0, 0, 0, 0.4);
+}
 
-/* ─── Button Micro-interactions ──────────────────────────────────────────── */
-/* Gradient primary button */
+.bento-card-glow-amber:hover {
+  box-shadow: inset 0 1px 0 rgba(251, 191, 36, 0.1), var(--glow-amber), 0 24px 48px rgba(0, 0, 0, 0.4);
+}
+
+.bento-card-glow-rose:hover {
+  box-shadow: inset 0 1px 0 rgba(251, 113, 133, 0.1), var(--glow-rose), 0 24px 48px rgba(0, 0, 0, 0.4);
+}
+
+.bento-card-glow-emerald:hover {
+  box-shadow: inset 0 1px 0 rgba(16, 185, 129, 0.1), var(--glow-emerald), 0 24px 48px rgba(0, 0, 0, 0.4);
+}
+
+.bento-card-glow-none:hover {
+  box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── Hazard Pulse ───────────────────────────────────────────────────────── */
+@keyframes hazard-pulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+
+  50% {
+    box-shadow: 0 0 40px 12px rgba(239, 68, 68, 0.14), 0 0 80px 24px rgba(239, 68, 68, 0.06);
+  }
+}
+
+.hazard-active {
+  animation: hazard-pulse 2.5s ease-in-out infinite;
+}
+
+/* ─── 3D Tactile Button System ───────────────────────────────────────────── */
+
+/*
+ * Primary — 135° gradient from #FFB4AB (warm blush) → #FF544B (vivid red-orange)
+ * 3D feel: bottom shadow as "ground plane" + active press sinks 2px
+ */
 .btn-primary {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl
-    bg-gradient-to-r from-cyan-500 to-teal-500
-    hover:from-cyan-400 hover:to-teal-400
-    active:scale-95
-    px-5 py-2.5 text-sm font-semibold text-slate-950
-    shadow-[0_0_20px_rgba(34,211,238,0.25)]
-    hover:shadow-[0_0_32px_rgba(34,211,238,0.45)]
-    transition-all duration-200 select-none;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.375rem;
+  border-radius: 0.75rem;
+  font-family: 'Geist', system-ui, -apple-system, sans-serif;
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #000000;
+  background: linear-gradient(135deg, #FFB4AB 0%, #FF544B 100%);
+  border: none;
+  outline: none;
+  cursor: pointer;
+  box-shadow:
+    0 4px 0 0 var(--btn-primary-bottom, rgba(160, 40, 10, 0.60)),
+    0 8px 24px -4px var(--btn-primary-glow, rgba(255, 84, 75, 0.40));
+  transition:
+    transform 0.10s ease,
+    box-shadow 0.10s ease;
+  user-select: none;
 }
 
-/* Ghost / outline button */
+.btn-primary:hover {
+  box-shadow:
+    0 4px 0 0 var(--btn-primary-bottom, rgba(160, 40, 10, 0.60)),
+    0 14px 32px -4px var(--btn-primary-glow, rgba(255, 84, 75, 0.50));
+}
+
+.btn-primary:active {
+  transform: translateY(2px);
+  box-shadow:
+    0 2px 0 0 var(--btn-primary-bottom, rgba(160, 40, 10, 0.60)),
+    0 4px 12px -4px var(--btn-primary-glow, rgba(255, 84, 75, 0.30));
+}
+
+/* Secondary — Cyan */
+.btn-secondary {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.375rem;
+  border-radius: 0.75rem;
+  font-family: 'Geist', system-ui, -apple-system, sans-serif;
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #000000;
+  background: var(--cyan);
+  border: none;
+  outline: none;
+  cursor: pointer;
+  box-shadow:
+    0 4px 0 0 rgba(6, 100, 140, 0.55),
+    0 8px 24px -4px rgba(34, 211, 238, 0.40);
+  transition:
+    transform 0.10s ease,
+    box-shadow 0.10s ease;
+  user-select: none;
+}
+
+.btn-secondary:hover {
+  box-shadow:
+    0 4px 0 0 rgba(6, 100, 140, 0.55),
+    0 14px 32px -4px rgba(34, 211, 238, 0.50);
+}
+
+.btn-secondary:active {
+  transform: translateY(2px);
+  box-shadow:
+    0 2px 0 0 rgba(6, 100, 140, 0.55),
+    0 4px 12px -4px rgba(34, 211, 238, 0.30);
+}
+
+/* Danger — Rose */
+.btn-danger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.375rem;
+  border-radius: 0.75rem;
+  font-family: 'Geist', system-ui, -apple-system, sans-serif;
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #000000;
+  background: var(--rose);
+  border: none;
+  outline: none;
+  cursor: pointer;
+  box-shadow:
+    0 4px 0 0 rgba(180, 20, 50, 0.55),
+    0 8px 24px -4px rgba(244, 63, 94, 0.40);
+  transition:
+    transform 0.10s ease,
+    box-shadow 0.10s ease;
+  user-select: none;
+}
+
+.btn-danger:active {
+  transform: translateY(2px);
+  box-shadow:
+    0 2px 0 0 rgba(180, 20, 50, 0.55),
+    0 4px 12px -4px rgba(244, 63, 94, 0.30);
+}
+
+/* Ghost — adapts to theme, no borders needed */
 .btn-ghost {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl
-    border border-slate-700 bg-transparent
-    hover:border-cyan-500/30 hover:text-cyan-300
-    active:scale-95
-    px-5 py-2.5 text-sm font-semibold text-slate-300
-    transition-all duration-200 select-none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.75rem;
+  font-family: 'Geist', system-ui, -apple-system, sans-serif;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--on-surface);
+  background: var(--glass-bg);
+  border: none;
+  outline: none;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+  user-select: none;
+}
+
+.btn-ghost:hover {
+  background: var(--surface-bright);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.20);
+}
+
+.btn-ghost:active {
+  transform: translateY(1px);
+}
+
+/* ─── Spatial Animations ─────────────────────────────────────────────────── */
+@keyframes spatial-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(34, 211, 238, 0.2), 0 0 24px rgba(34, 211, 238, 0.1);
+  }
+
+  50% {
+    box-shadow: 0 0 24px rgba(34, 211, 238, 0.4), 0 0 48px rgba(34, 211, 238, 0.2);
+  }
+}
+
+.animate-spatial-glow {
+  animation: spatial-glow 3s ease-in-out infinite;
+}
+
+@keyframes telemetry-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.animate-telemetry-ping {
+  animation: telemetry-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes incident-pulse {
+
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.45;
+    transform: scale(1.15);
+  }
+}
+
+.animate-incident-pulse {
+  animation: incident-pulse 1.5s ease-in-out infinite;
+}
+
+/* ─── No-Line Utilities ───────────────────────────────────────────────────── */
+/*
+ * THE "NO-LINE" RULE (design.md §2):
+ *   - 1px solid borders for sectioning are PROHIBITED.
+ *   - Boundaries = tonal shifts + negative space + luminous proximity.
+ *   - `.ghost-border` is the ONLY permitted border class, reserved
+ *     strictly for focus/interaction states — never decorative.
+ */
+
+/* Focus state ONLY — never use for sectioning or decoration */
+.ghost-border {
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Eradicate all default table borders globally */
+table {
+  border: none;
+  border-collapse: collapse;
+}
+
+td,
+th {
+  border: none;
+  outline: none;
+}
+
+/* ─── Custom Scrollbar ───────────────────────────────────────────────────── */
+.custom-scrollbar::-webkit-scrollbar {
+  height: 4px;
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.2);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.4);
 }

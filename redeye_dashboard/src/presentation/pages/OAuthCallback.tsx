@@ -8,16 +8,11 @@ export function OAuthCallback() {
   const { syncOAuthState } = useAuth();
 
   useEffect(() => {
-    const token = searchParams.get('token');
     const onboardingComplete = searchParams.get('onboarding_complete') === 'true';
 
-    if (!token) {
-      navigate('/login', { replace: true });
-      return;
-    }
-
     // Persist token AND hydrate React Context state before navigating
-    syncOAuthState(token).then(() => {
+    // syncOAuthState now triggers a /refresh call to establish session from cookies
+    syncOAuthState().then(() => {
       if (onboardingComplete) {
         navigate('/dashboard', { replace: true });
       } else {

@@ -117,31 +117,9 @@ export interface ComplianceMetrics {
 /** SWR cache key for compliance metrics. */
 export const COMPLIANCE_METRICS_URL = `${TRACER_URL}/v1/compliance/metrics`;
 
-/** Mock fallback data when the compliance backend is unreachable. */
-const COMPLIANCE_MOCK: ComplianceMetrics = {
-  total_scanned: 15420,
-  dpdp_blocks: 342,
-  pii_redactions: 890,
-  region_breakdown: [
-    { region: 'IN', count: 8240 },
-    { region: 'US', count: 4180 },
-    { region: 'EU', count: 2650 },
-    { region: 'GLOBAL', count: 350 },
-  ],
-};
-
 /**
  * SWR-compatible fetcher for /v1/compliance/metrics.
- *
- * Falls back to realistic mock data if the tracer is unreachable,
- * ensuring the dashboard always displays meaningful compliance stats.
  */
 export async function fetchComplianceMetrics(url: string): Promise<ComplianceMetrics> {
-  try {
-    return await fetchMetrics<ComplianceMetrics>(url);
-  } catch {
-    // Fail gracefully — return mock data so the UI is never empty.
-    console.warn('[ComplianceMetrics] Backend unreachable, using mock fallback');
-    return COMPLIANCE_MOCK;
-  }
+  return await fetchMetrics<ComplianceMetrics>(url);
 }

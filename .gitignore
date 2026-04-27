@@ -24,6 +24,7 @@ redeye_dashboard/dist/
 
 # ── Environment & Secrets ─────────────────────────────────────────────────────
 .env
+
 .env.*
 !.env.example
 *.pem
@@ -49,6 +50,7 @@ audit/
 errors.txt
 logs.txt
 
+
 # ── Compiled Binaries & OS Artifacts ──────────────────────────────────────────
 *.exe
 *.dll
@@ -67,6 +69,7 @@ app.exe
 **/*aider/
 **/Prompt_temp.md/
 .fastembed_cache/
+/design.md
 
 # ── Infrastructure & Mounts ──────────────────────────────────────────────────
 /mnt/

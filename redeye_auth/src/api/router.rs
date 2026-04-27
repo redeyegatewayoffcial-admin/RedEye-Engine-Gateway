@@ -49,6 +49,8 @@ fn create_cors_layer() -> CorsLayer {
             vec![
                 "http://localhost:5173".parse::<HeaderValue>().unwrap(),
                 "http://localhost:3000".parse::<HeaderValue>().unwrap(),
+                "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
+                "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
             ]
         }
     };

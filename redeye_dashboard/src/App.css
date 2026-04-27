@@ -1,3 +1,9 @@
-/* App.css — intentionally minimal */
-/* All global styles live in index.css */
+/* App.css — Minimal App specific overrides */
+/* All global Spatial UI styles, animations, and typography variables live in index.css */
 /* Component styles are co-located via Tailwind utility classes */
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
