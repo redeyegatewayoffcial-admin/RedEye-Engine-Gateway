@@ -7,15 +7,15 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{Request, State, Extension, ConnectInfo},
-    Json, 
-    http::{HeaderMap, HeaderValue, header::SET_COOKIE, StatusCode, request::Parts},
-    response::{IntoResponse, Response},
+    extract::{ConnectInfo, Extension, Request, State},
+    http::{header::SET_COOKIE, request::Parts, HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
+    response::{IntoResponse, Response},
+    Json,
 };
-use std::net::SocketAddr;
 use redis::AsyncCommands;
 use serde_json::json;
+use std::net::SocketAddr;
 use tracing::{debug, error, warn};
 
 use crate::domain::models::AppState;
@@ -27,7 +27,6 @@ const RATE_LIMIT_LUA: &str = r#"
     end
     return current
 "#;
-
 
 pub fn extract_identifiers(headers: &HeaderMap, addr: &SocketAddr) -> (String, String) {
     let tenant_id = headers
@@ -88,7 +87,10 @@ pub async fn rate_limit_middleware(
     let remaining = i64::max(0, limit as i64 - current_requests);
     let ttl: i64 = match current_requests {
         1 => window_secs as i64,
-        _ => conn.ttl::<_, i64>(&redis_key).await.unwrap_or(window_secs as i64),
+        _ => conn
+            .ttl::<_, i64>(&redis_key)
+            .await
+            .unwrap_or(window_secs as i64),
     };
 
     if current_requests > (limit as i64) {
@@ -123,10 +125,10 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-tenant-id", HeaderValue::from_static("tenant_123"));
         headers.insert("x-user-id", HeaderValue::from_static("user_456"));
-        
+
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let (tenant, user) = extract_identifiers(&headers, &addr);
-        
+
         assert_eq!(tenant, "tenant_123");
         assert_eq!(user, "user_456");
     }
@@ -135,11 +137,11 @@ mod tests {
     fn test_failure_handling_missing_headers() {
         let headers = HeaderMap::new();
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 100)), 8080);
-        
+
         // Tenant ID missing -> fallback to IP address
         // User ID missing -> fallback to "anon_user"
         let (tenant, user) = extract_identifiers(&headers, &addr);
-        
+
         assert_eq!(tenant, "192.168.1.100");
         assert_eq!(user, "anon_user");
     }

@@ -12,13 +12,13 @@ use serde::{Deserialize, Serialize};
 pub struct CompliancePolicy {
     /// E.g., "GDPR", "HIPAA", "DPDP"
     pub active_frameworks: Vec<String>,
-    
+
     /// True if PII detection should run before forwarding requests
     pub enable_pii_redaction: bool,
-    
+
     /// Specific PII entities to redact (e.g., ["CREDIT_CARD", "SSN"])
     pub target_entities: Vec<String>,
-    
+
     /// If true, blocks requests when OPA or PII engine is unreachable (fail closed)
     pub fail_closed: bool,
 }
@@ -30,10 +30,10 @@ pub struct CompliancePolicy {
 pub struct ResidencyRule {
     /// Client region or IP mask (e.g., "EU", "US")
     pub region: String,
-    
+
     /// Base URL of the regionally-compliant LLM endpoint
     pub regional_endpoint: String,
-    
+
     /// Whether data is allowed to leave this region
     pub strict_isolation: bool,
 }
@@ -65,7 +65,7 @@ pub struct OpaResponsePayload {
 pub struct OpaResult {
     /// If false, the request violates policy and must be blocked (HTTP 403)
     pub allow: bool,
-    
+
     /// The reason for blocking, if `allow` is false
     pub block_reason: Option<String>,
 }
@@ -78,19 +78,19 @@ pub struct OpaResult {
 pub struct ComplianceAuditRecord {
     pub trace_id: String,
     pub tenant_id: String,
-    
+
     /// The timestamp of the compliance check (ISO 8601)
     pub timestamp: String,
-    
+
     /// Final policy decision (true = allowed, false = blocked)
     pub policy_result: bool,
-    
+
     /// Number of distinct PII entities redacted from the prompt
     pub redacted_entity_count: u32,
-    
+
     /// The resolved destination region based on ResidencyRule (e.g., "EU")
     pub destination_region: String,
-    
+
     /// Optional field showing the reason for a block
     pub block_reason: Option<String>,
 }

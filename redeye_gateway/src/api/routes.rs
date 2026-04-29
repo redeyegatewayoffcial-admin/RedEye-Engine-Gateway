@@ -1,11 +1,11 @@
 //! api/routes.rs — Single source of truth for all route registrations.
 
-use std::sync::Arc;
 use std::env;
+use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{Request, ConnectInfo},
+    extract::{ConnectInfo, Request},
     http::header::{AUTHORIZATION, CONTENT_TYPE},
     routing::{get, post},
     Router,
@@ -68,7 +68,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
 /// Falls back to restricted local development origins if DASHBOARD_URL is not set.
 fn create_cors_layer() -> CorsLayer {
     let dashboard_url = env::var("DASHBOARD_URL").ok();
-    
+
     let origins = match dashboard_url {
         Some(url) => {
             vec![url.parse().expect("Invalid DASHBOARD_URL format")]
@@ -81,14 +81,16 @@ fn create_cors_layer() -> CorsLayer {
             ]
         }
     };
-    
+
     CorsLayer::new()
         .allow_origin(origins)
         .allow_credentials(true)
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::PUT, axum::http::Method::DELETE, axum::http::Method::OPTIONS])
-        .allow_headers([
-            AUTHORIZATION,
-            CONTENT_TYPE,
-            "x-csrf-token".parse().unwrap(),
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
         ])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE, "x-csrf-token".parse().unwrap()])
 }

@@ -8,7 +8,7 @@ pub struct CacheLookupRequest {
     pub prompt: String,
 }
 
-/// The structure of a cached completion response 
+/// The structure of a cached completion response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedResponse {
     pub content: String,

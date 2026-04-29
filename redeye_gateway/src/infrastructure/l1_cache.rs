@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use moka::future::Cache;
-use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
-use sha2::{Sha256, Digest};
 use tracing::{debug, info, warn};
 
 use crate::domain::models::GatewayError;
@@ -32,8 +32,9 @@ impl L1Cache {
 
         // 384 dimensions for BAAI/bge-small-en-v1.5
         let embedder_opts = InitOptions::new(EmbeddingModel::BGESmallENV15);
-        let embedder = TextEmbedding::try_new(embedder_opts)
-            .map_err(|e| GatewayError::ResponseBuild(format!("Failed to initialize L1 FastEmbed: {}", e)))?;
+        let embedder = TextEmbedding::try_new(embedder_opts).map_err(|e| {
+            GatewayError::ResponseBuild(format!("Failed to initialize L1 FastEmbed: {}", e))
+        })?;
 
         Ok(Self {
             exact_cache,
@@ -83,7 +84,7 @@ impl L1Cache {
         let vector = embeddings.first()?;
 
         let queue = self.semantic_cache.read().await;
-        
+
         let mut best_dist = f32::MAX;
         let mut best_response = None;
 
@@ -106,16 +107,18 @@ impl L1Cache {
     /// Insert into L1 if payload is small, caching Exact + Vectorized Semantic
     pub async fn insert(&self, prompt: &str, response: &str) -> Result<(), GatewayError> {
         let hash = Self::hash_prompt(prompt);
-        
+
         // Insert exact
         self.exact_cache.insert(hash, response.to_string()).await;
 
         // Vectorize and insert semantic
         let mut embedder = self.embedder.write().await;
-        let embeddings = embedder.embed(vec![prompt], None)
+        let embeddings = embedder
+            .embed(vec![prompt], None)
             .map_err(|e| GatewayError::ResponseBuild(format!("L1 Embed failed: {}", e)))?;
-        
-        let vector = embeddings.first()
+
+        let vector = embeddings
+            .first()
             .ok_or_else(|| GatewayError::ResponseBuild("L1 Embed returned empty".into()))?
             .clone();
 
@@ -124,7 +127,7 @@ impl L1Cache {
             queue.pop_front();
         }
         queue.push_back((vector, response.to_string()));
-        
+
         Ok(())
     }
 }
@@ -143,43 +146,57 @@ mod tests {
             }
         };
         cache.insert("Hello", "World").await.unwrap();
-        
+
         let exact = cache.get_exact("Hello").await;
         assert_eq!(exact, Some("World".to_string()));
-        
+
         let miss = cache.get_exact("Unknown").await;
         assert_eq!(miss, None);
     }
-    
+
     #[tokio::test]
     async fn test_l1_semantic_match() {
         let cache = match L1Cache::new(1024 * 1024) {
             Ok(c) => c,
             Err(_) => return, // Skip if offline
         };
-        cache.insert("This is a test prompt about rust.", "Rust response").await.unwrap();
-        
+        cache
+            .insert("This is a test prompt about rust.", "Rust response")
+            .await
+            .unwrap();
+
         // Very similar string, should have a distance < 0.1
-        let semantic = cache.get_semantic("This is a test prompt about rust programming.").await;
-        assert!(semantic.is_some(), "Expected semantic match to trigger for similar prompt");
+        let semantic = cache
+            .get_semantic("This is a test prompt about rust programming.")
+            .await;
+        assert!(
+            semantic.is_some(),
+            "Expected semantic match to trigger for similar prompt"
+        );
     }
 
     #[tokio::test]
     async fn test_moka_eviction_limits() {
         // Initialize an artificially small cache
-        let cache = match L1Cache::new(1024) { // 1 KB max capacity
+        let cache = match L1Cache::new(1024) {
+            // 1 KB max capacity
             Ok(c) => c,
             Err(_) => return,
         };
-        
+
         for i in 0..50 {
             let prompt = format!("Large Prompt {} with a lot of extra text to consume RAM", i);
-            let response = format!("Large Response {} with a lot of extra text to consume RAM", i);
+            let response = format!(
+                "Large Response {} with a lot of extra text to consume RAM",
+                i
+            );
             cache.insert(&prompt, &response).await.unwrap();
         }
-        
+
         // Moka eviction is async, but we can just check it handles things gracefully without crashing
-        let hit = cache.get_exact("Large Prompt 49 with a lot of extra text to consume RAM").await;
+        let hit = cache
+            .get_exact("Large Prompt 49 with a lot of extra text to consume RAM")
+            .await;
         assert!(hit.is_some() || hit.is_none());
     }
 

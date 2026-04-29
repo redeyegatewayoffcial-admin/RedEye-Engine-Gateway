@@ -59,145 +59,229 @@ pub fn get_pricing_catalog() -> &'static HashMap<&'static str, ModelPricing> {
         let mut m = HashMap::new();
 
         // ── OpenAI ───────────────────────────────────────────────────────
-        m.insert("openai/gpt-4o", ModelPricing {
-            cost_per_1k_input: 0.0025,
-            cost_per_1k_output: 0.010,
-        });
-        m.insert("openai/gpt-4o-mini", ModelPricing {
-            cost_per_1k_input: 0.00015,
-            cost_per_1k_output: 0.0006,
-        });
-        m.insert("openai/o1-preview", ModelPricing {
-            cost_per_1k_input: 0.015,
-            cost_per_1k_output: 0.060,
-        });
-        m.insert("openai/o3-mini", ModelPricing {
-            cost_per_1k_input: 0.0011,
-            cost_per_1k_output: 0.0044,
-        });
+        m.insert(
+            "openai/gpt-4o",
+            ModelPricing {
+                cost_per_1k_input: 0.0025,
+                cost_per_1k_output: 0.010,
+            },
+        );
+        m.insert(
+            "openai/gpt-4o-mini",
+            ModelPricing {
+                cost_per_1k_input: 0.00015,
+                cost_per_1k_output: 0.0006,
+            },
+        );
+        m.insert(
+            "openai/o1-preview",
+            ModelPricing {
+                cost_per_1k_input: 0.015,
+                cost_per_1k_output: 0.060,
+            },
+        );
+        m.insert(
+            "openai/o3-mini",
+            ModelPricing {
+                cost_per_1k_input: 0.0011,
+                cost_per_1k_output: 0.0044,
+            },
+        );
         // Provider-level default
-        m.insert("openai/*", ModelPricing {
-            cost_per_1k_input: 0.0025,
-            cost_per_1k_output: 0.010,
-        });
+        m.insert(
+            "openai/*",
+            ModelPricing {
+                cost_per_1k_input: 0.0025,
+                cost_per_1k_output: 0.010,
+            },
+        );
 
         // ── Anthropic ────────────────────────────────────────────────────
-        m.insert("anthropic/claude-3-haiku-20240307", ModelPricing {
-            cost_per_1k_input: 0.00025,
-            cost_per_1k_output: 0.00125,
-        });
-        m.insert("anthropic/claude-3-sonnet", ModelPricing {
-            cost_per_1k_input: 0.003,
-            cost_per_1k_output: 0.015,
-        });
-        m.insert("anthropic/claude-3-opus", ModelPricing {
-            cost_per_1k_input: 0.015,
-            cost_per_1k_output: 0.075,
-        });
-        m.insert("anthropic/*", ModelPricing {
-            cost_per_1k_input: 0.003,
-            cost_per_1k_output: 0.015,
-        });
+        m.insert(
+            "anthropic/claude-3-haiku-20240307",
+            ModelPricing {
+                cost_per_1k_input: 0.00025,
+                cost_per_1k_output: 0.00125,
+            },
+        );
+        m.insert(
+            "anthropic/claude-3-sonnet",
+            ModelPricing {
+                cost_per_1k_input: 0.003,
+                cost_per_1k_output: 0.015,
+            },
+        );
+        m.insert(
+            "anthropic/claude-3-opus",
+            ModelPricing {
+                cost_per_1k_input: 0.015,
+                cost_per_1k_output: 0.075,
+            },
+        );
+        m.insert(
+            "anthropic/*",
+            ModelPricing {
+                cost_per_1k_input: 0.003,
+                cost_per_1k_output: 0.015,
+            },
+        );
 
         // ── Groq ─────────────────────────────────────────────────────────
-        m.insert("groq/llama3-8b-8192", ModelPricing {
-            cost_per_1k_input: 0.00005,
-            cost_per_1k_output: 0.00008,
-        });
-        m.insert("groq/llama-3.3-70b-versatile", ModelPricing {
-            cost_per_1k_input: 0.00059,
-            cost_per_1k_output: 0.00079,
-        });
-        m.insert("groq/*", ModelPricing {
-            cost_per_1k_input: 0.00027,
-            cost_per_1k_output: 0.00027,
-        });
+        m.insert(
+            "groq/llama3-8b-8192",
+            ModelPricing {
+                cost_per_1k_input: 0.00005,
+                cost_per_1k_output: 0.00008,
+            },
+        );
+        m.insert(
+            "groq/llama-3.3-70b-versatile",
+            ModelPricing {
+                cost_per_1k_input: 0.00059,
+                cost_per_1k_output: 0.00079,
+            },
+        );
+        m.insert(
+            "groq/*",
+            ModelPricing {
+                cost_per_1k_input: 0.00027,
+                cost_per_1k_output: 0.00027,
+            },
+        );
 
         // ── Gemini ───────────────────────────────────────────────────────
-        m.insert("gemini/gemini-1.5-flash", ModelPricing {
-            cost_per_1k_input: 0.000075,
-            cost_per_1k_output: 0.0003,
-        });
-        m.insert("gemini/gemini-pro", ModelPricing {
-            cost_per_1k_input: 0.00025,
-            cost_per_1k_output: 0.0005,
-        });
-        m.insert("gemini/*", ModelPricing {
-            cost_per_1k_input: 0.000075,
-            cost_per_1k_output: 0.0003,
-        });
+        m.insert(
+            "gemini/gemini-1.5-flash",
+            ModelPricing {
+                cost_per_1k_input: 0.000075,
+                cost_per_1k_output: 0.0003,
+            },
+        );
+        m.insert(
+            "gemini/gemini-pro",
+            ModelPricing {
+                cost_per_1k_input: 0.00025,
+                cost_per_1k_output: 0.0005,
+            },
+        );
+        m.insert(
+            "gemini/*",
+            ModelPricing {
+                cost_per_1k_input: 0.000075,
+                cost_per_1k_output: 0.0003,
+            },
+        );
 
         // ── DeepSeek ─────────────────────────────────────────────────────
-        m.insert("deepseek/deepseek-coder", ModelPricing {
-            cost_per_1k_input: 0.00014,
-            cost_per_1k_output: 0.00028,
-        });
-        m.insert("deepseek/*", ModelPricing {
-            cost_per_1k_input: 0.00014,
-            cost_per_1k_output: 0.00028,
-        });
+        m.insert(
+            "deepseek/deepseek-coder",
+            ModelPricing {
+                cost_per_1k_input: 0.00014,
+                cost_per_1k_output: 0.00028,
+            },
+        );
+        m.insert(
+            "deepseek/*",
+            ModelPricing {
+                cost_per_1k_input: 0.00014,
+                cost_per_1k_output: 0.00028,
+            },
+        );
 
         // ── OpenRouter ───────────────────────────────────────────────────
-        m.insert("openrouter/meta-llama/llama-3.3-70b-instruct", ModelPricing {
-            cost_per_1k_input: 0.00039,
-            cost_per_1k_output: 0.0004,
-        });
-        m.insert("openrouter/*", ModelPricing {
-            cost_per_1k_input: 0.0005,
-            cost_per_1k_output: 0.0005,
-        });
+        m.insert(
+            "openrouter/meta-llama/llama-3.3-70b-instruct",
+            ModelPricing {
+                cost_per_1k_input: 0.00039,
+                cost_per_1k_output: 0.0004,
+            },
+        );
+        m.insert(
+            "openrouter/*",
+            ModelPricing {
+                cost_per_1k_input: 0.0005,
+                cost_per_1k_output: 0.0005,
+            },
+        );
 
         // ── Together ─────────────────────────────────────────────────────
-        m.insert("together/*", ModelPricing {
-            cost_per_1k_input: 0.0002,
-            cost_per_1k_output: 0.0002,
-        });
+        m.insert(
+            "together/*",
+            ModelPricing {
+                cost_per_1k_input: 0.0002,
+                cost_per_1k_output: 0.0002,
+            },
+        );
 
         // ── Mistral ──────────────────────────────────────────────────────
-        m.insert("mistral/open-mistral-7b", ModelPricing {
-            cost_per_1k_input: 0.00025,
-            cost_per_1k_output: 0.00025,
-        });
-        m.insert("mistral/*", ModelPricing {
-            cost_per_1k_input: 0.00025,
-            cost_per_1k_output: 0.00025,
-        });
+        m.insert(
+            "mistral/open-mistral-7b",
+            ModelPricing {
+                cost_per_1k_input: 0.00025,
+                cost_per_1k_output: 0.00025,
+            },
+        );
+        m.insert(
+            "mistral/*",
+            ModelPricing {
+                cost_per_1k_input: 0.00025,
+                cost_per_1k_output: 0.00025,
+            },
+        );
 
         // ── xAI ──────────────────────────────────────────────────────────
-        m.insert("xai/*", ModelPricing {
-            cost_per_1k_input: 0.002,
-            cost_per_1k_output: 0.010,
-        });
+        m.insert(
+            "xai/*",
+            ModelPricing {
+                cost_per_1k_input: 0.002,
+                cost_per_1k_output: 0.010,
+            },
+        );
 
         // ── Cerebras ─────────────────────────────────────────────────────
-        m.insert("cerebras/*", ModelPricing {
-            cost_per_1k_input: 0.0001,
-            cost_per_1k_output: 0.0001,
-        });
+        m.insert(
+            "cerebras/*",
+            ModelPricing {
+                cost_per_1k_input: 0.0001,
+                cost_per_1k_output: 0.0001,
+            },
+        );
 
         // ── Fireworks ────────────────────────────────────────────────────
-        m.insert("fireworks/*", ModelPricing {
-            cost_per_1k_input: 0.0002,
-            cost_per_1k_output: 0.0002,
-        });
+        m.insert(
+            "fireworks/*",
+            ModelPricing {
+                cost_per_1k_input: 0.0002,
+                cost_per_1k_output: 0.0002,
+            },
+        );
 
         // ── SiliconFlow ──────────────────────────────────────────────────
-        m.insert("siliconflow/*", ModelPricing {
-            cost_per_1k_input: 0.00015,
-            cost_per_1k_output: 0.00015,
-        });
+        m.insert(
+            "siliconflow/*",
+            ModelPricing {
+                cost_per_1k_input: 0.00015,
+                cost_per_1k_output: 0.00015,
+            },
+        );
 
         // ── Perplexity ───────────────────────────────────────────────────
-        m.insert("perplexity/*", ModelPricing {
-            cost_per_1k_input: 0.001,
-            cost_per_1k_output: 0.001,
-        });
+        m.insert(
+            "perplexity/*",
+            ModelPricing {
+                cost_per_1k_input: 0.001,
+                cost_per_1k_output: 0.001,
+            },
+        );
 
         // ── Cohere ───────────────────────────────────────────────────────
-        m.insert("cohere/*", ModelPricing {
-            cost_per_1k_input: 0.0003,
-            cost_per_1k_output: 0.0003,
-        });
+        m.insert(
+            "cohere/*",
+            ModelPricing {
+                cost_per_1k_input: 0.0003,
+                cost_per_1k_output: 0.0003,
+            },
+        );
 
         m
     })
@@ -247,12 +331,19 @@ pub fn estimate_input_tokens(body: &Value) -> usize {
     match tiktoken_rs::cl100k_base() {
         Ok(bpe) => {
             let tokens = bpe.encode_with_special_tokens(&text);
-            debug!(chars = text.len(), tokens = tokens.len(), "tiktoken BPE token estimate");
+            debug!(
+                chars = text.len(),
+                tokens = tokens.len(),
+                "tiktoken BPE token estimate"
+            );
             tokens.len()
         }
         Err(_) => {
             let estimated = text.len() / CHARS_PER_TOKEN_FALLBACK + 1;
-            debug!(chars = text.len(), estimated, "Fallback chars/4 token estimate");
+            debug!(
+                chars = text.len(),
+                estimated, "Fallback chars/4 token estimate"
+            );
             estimated
         }
     }
@@ -375,7 +466,9 @@ pub fn resolve_cost_optimized(
 
     // Among priced candidates, pick the cheapest.
     if let Some(best) = candidates.iter().min_by(|a, b| {
-        a.cost_usd.partial_cmp(&b.cost_usd).unwrap_or(std::cmp::Ordering::Equal)
+        a.cost_usd
+            .partial_cmp(&b.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
     }) {
         debug!(
             provider = %best.provider_id,
@@ -387,7 +480,10 @@ pub fn resolve_cost_optimized(
     }
 
     // No pricing found — return None so the caller uses default routing.
-    debug!("No pricing data for model '{}' — falling back to default strategy", model);
+    debug!(
+        "No pricing data for model '{}' — falling back to default strategy",
+        model
+    );
     None
 }
 
@@ -403,10 +499,22 @@ mod tests {
     #[test]
     fn test_routing_strategy_from_header() {
         assert_eq!(RoutingStrategy::from_header(None), RoutingStrategy::Default);
-        assert_eq!(RoutingStrategy::from_header(Some("")), RoutingStrategy::Default);
-        assert_eq!(RoutingStrategy::from_header(Some("garbage")), RoutingStrategy::Default);
-        assert_eq!(RoutingStrategy::from_header(Some("least_latency")), RoutingStrategy::LeastLatency);
-        assert_eq!(RoutingStrategy::from_header(Some("cost_optimized")), RoutingStrategy::CostOptimized);
+        assert_eq!(
+            RoutingStrategy::from_header(Some("")),
+            RoutingStrategy::Default
+        );
+        assert_eq!(
+            RoutingStrategy::from_header(Some("garbage")),
+            RoutingStrategy::Default
+        );
+        assert_eq!(
+            RoutingStrategy::from_header(Some("least_latency")),
+            RoutingStrategy::LeastLatency
+        );
+        assert_eq!(
+            RoutingStrategy::from_header(Some("cost_optimized")),
+            RoutingStrategy::CostOptimized
+        );
     }
 
     // ── Token estimation ─────────────────────────────────────────────────
@@ -422,7 +530,11 @@ mod tests {
         let tokens = estimate_input_tokens(&body);
         // "Hello, how are you today?" should be ~ 7 BPE tokens.
         assert!(tokens > 0, "Token count should be positive");
-        assert!(tokens < 50, "Token count should be reasonable: got {}", tokens);
+        assert!(
+            tokens < 50,
+            "Token count should be reasonable: got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -458,7 +570,11 @@ mod tests {
             ]
         });
         let tokens = estimate_input_tokens(&body);
-        assert!(tokens > 3, "Should include system prompt tokens: got {}", tokens);
+        assert!(
+            tokens > 3,
+            "Should include system prompt tokens: got {}",
+            tokens
+        );
     }
 
     // ── Pricing catalog ──────────────────────────────────────────────────
@@ -472,8 +588,8 @@ mod tests {
 
     #[test]
     fn test_lookup_pricing_wildcard_fallback() {
-        let p = lookup_pricing("openai", "some-future-model")
-            .expect("Should fall back to openai/*");
+        let p =
+            lookup_pricing("openai", "some-future-model").expect("Should fall back to openai/*");
         assert!(p.cost_per_1k_input > 0.0);
     }
 
@@ -488,14 +604,23 @@ mod tests {
     #[test]
     fn test_resolve_cost_optimized_selects_cheapest() {
         let keys = vec![
-            ProviderKey { provider_id: "openai".to_string(), decrypted_key: "sk-a".to_string() },
-            ProviderKey { provider_id: "groq".to_string(), decrypted_key: "sk-b".to_string() },
-            ProviderKey { provider_id: "anthropic".to_string(), decrypted_key: "sk-c".to_string() },
+            ProviderKey {
+                provider_id: "openai".to_string(),
+                decrypted_key: "sk-a".to_string(),
+            },
+            ProviderKey {
+                provider_id: "groq".to_string(),
+                decrypted_key: "sk-b".to_string(),
+            },
+            ProviderKey {
+                provider_id: "anthropic".to_string(),
+                decrypted_key: "sk-c".to_string(),
+            },
         ];
 
         // For model "gpt-4o" (or wildcard), groq/* is cheapest.
-        let (provider, cost) = resolve_cost_optimized("gpt-4o", 1000, &keys)
-            .expect("Should select a provider");
+        let (provider, cost) =
+            resolve_cost_optimized("gpt-4o", 1000, &keys).expect("Should select a provider");
 
         // Groq's wildcard = $0.00027/1K input → 1000 tokens = $0.00027
         assert_eq!(provider, "groq", "Groq should be cheapest");
@@ -510,12 +635,13 @@ mod tests {
 
     #[test]
     fn test_resolve_cost_optimized_single_provider() {
-        let keys = vec![
-            ProviderKey { provider_id: "openai".to_string(), decrypted_key: "sk-a".to_string() },
-        ];
+        let keys = vec![ProviderKey {
+            provider_id: "openai".to_string(),
+            decrypted_key: "sk-a".to_string(),
+        }];
 
-        let (provider, _cost) = resolve_cost_optimized("gpt-4o", 500, &keys)
-            .expect("Should select the only provider");
+        let (provider, _cost) =
+            resolve_cost_optimized("gpt-4o", 500, &keys).expect("Should select the only provider");
         assert_eq!(provider, "openai");
     }
 

@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
     Json,
+    extract::{Query, State},
 };
 use serde_json::json;
 use tracing::{error, info};
@@ -40,13 +40,17 @@ pub async fn traces_handler(
     let limit = params.limit.unwrap_or(50);
 
     if session_id.is_empty() {
-        return Err(AppError::BadRequest("session_id query parameter is required".into()));
+        return Err(AppError::BadRequest(
+            "session_id query parameter is required".into(),
+        ));
     }
 
-    let data = query::query_traces_by_session(&repo, &session_id, limit).await.map_err(|e| {
-        error!(error = %e, "Trace query failed");
-        AppError::Internal(format!("Failed to query traces: {}", e))
-    })?;
+    let data = query::query_traces_by_session(&repo, &session_id, limit)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Trace query failed");
+            AppError::Internal(format!("Failed to query traces: {}", e))
+        })?;
 
     Ok(Json(data))
 }
@@ -61,13 +65,17 @@ pub async fn audit_handler(
     let limit = params.limit.unwrap_or(50);
 
     if tenant_id.is_empty() {
-        return Err(AppError::BadRequest("tenant_id query parameter is required".into()));
+        return Err(AppError::BadRequest(
+            "tenant_id query parameter is required".into(),
+        ));
     }
 
-    let data = query::query_audit_by_tenant(&repo, &tenant_id, limit).await.map_err(|e| {
-        error!(error = %e, "Audit query failed");
-        AppError::Internal(format!("Failed to query audit: {}", e))
-    })?;
+    let data = query::query_audit_by_tenant(&repo, &tenant_id, limit)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Audit query failed");
+            AppError::Internal(format!("Failed to query audit: {}", e))
+        })?;
 
     Ok(Json(data))
 }
@@ -160,9 +168,7 @@ pub async fn compliance_metrics_handler(
 
     info!(
         total_scanned,
-        dpdp_blocks,
-        pii_redactions,
-        "Compliance metrics query complete"
+        dpdp_blocks, pii_redactions, "Compliance metrics query complete"
     );
 
     Ok(Json(ComplianceMetricsResponse {
@@ -208,4 +214,3 @@ fn parse_region_breakdown(value: &serde_json::Value) -> Vec<RegionCount> {
         })
         .unwrap_or_default()
 }
-

@@ -1,7 +1,7 @@
-use axum::{Json, extract::State};
-use std::sync::Arc;
 use crate::domain::models::ResidencyRule;
 use crate::usecases::pii_engine::PiiEngine;
+use axum::{extract::State, Json};
+use std::sync::Arc;
 
 /// Route LLM completion requests (Dummy for Step 2 Verification)
 pub async fn check_routing(

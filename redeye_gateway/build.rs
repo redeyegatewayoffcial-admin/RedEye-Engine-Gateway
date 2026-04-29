@@ -16,10 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // in-process mock gRPC servers via CacheServiceServer::new(...).
         .build_server(true)
         .build_client(true)
-        .compile_protos(
-            &["../proto/semantic_cache.proto"],
-            &["../proto"],
-        )?;
+        .compile_protos(&["../proto/semantic_cache.proto"], &["../proto"])?;
 
     // Re-run the build script if the proto changes.
     println!("cargo:rerun-if-changed=../proto/semantic_cache.proto");

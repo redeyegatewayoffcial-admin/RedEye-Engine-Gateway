@@ -1,9 +1,4 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -20,7 +15,10 @@ pub async fn lookup_handler(
     Json(req): Json<CacheLookupRequest>,
 ) -> impl IntoResponse {
     match state.search_use_case.check_cache(&req).await {
-        Ok(Some(cached_run)) => (StatusCode::OK, Json(json!({"hit": true, "data": cached_run}))),
+        Ok(Some(cached_run)) => (
+            StatusCode::OK,
+            Json(json!({"hit": true, "data": cached_run})),
+        ),
         Ok(None) => (StatusCode::OK, Json(json!({"hit": false}))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))),
     }

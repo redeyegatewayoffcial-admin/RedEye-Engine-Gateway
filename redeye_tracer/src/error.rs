@@ -2,9 +2,9 @@
 //! Provides standardized error handling with safe user-facing messages.
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde_json::json;
 
@@ -90,7 +90,9 @@ impl AppError {
     /// Get a safe user-facing message (never exposes internal details)
     pub fn user_message(&self) -> String {
         match self {
-            AppError::Internal(_) => "An unexpected error occurred. Please try again later.".to_string(),
+            AppError::Internal(_) => {
+                "An unexpected error occurred. Please try again later.".to_string()
+            }
             AppError::BadRequest(msg) => msg.clone(),
             AppError::Unauthorized(msg) => msg.clone(),
             AppError::Conflict(msg) => msg.clone(),

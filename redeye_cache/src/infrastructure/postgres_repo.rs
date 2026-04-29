@@ -1,8 +1,8 @@
+use pgvector::Vector;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use std::env;
 use uuid::Uuid;
-use pgvector::Vector;
 
 use crate::domain::models::CachedResponse;
 
@@ -23,11 +23,11 @@ impl PostgresRepo {
     /// Searches for the most similar prompt using HNSW Vector Search
     /// Bypasses the cache if `ast_hash` does not strictly match the stored record.
     pub async fn find_similar(
-        &self, 
-        tenant_id: &str, 
+        &self,
+        tenant_id: &str,
         ast_hash: i64,
-        embedding: &[f32], 
-        threshold: f32
+        embedding: &[f32],
+        threshold: f32,
     ) -> Result<Option<CachedResponse>, sqlx::Error> {
         let tenant_uuid = Uuid::parse_str(tenant_id).unwrap_or_default();
         let query_vector = Vector::from(embedding.to_vec());
@@ -46,7 +46,7 @@ impl PostgresRepo {
               AND (embedding <=> $3) < $4
             ORDER BY embedding <=> $3
             LIMIT 1
-            "
+            ",
         )
         .bind(tenant_uuid)
         .bind(ast_hash)
@@ -72,12 +72,12 @@ impl PostgresRepo {
 
     /// Stores a new prompt+response+embedding alongside its structural AST hash
     pub async fn store(
-        &self, 
-        tenant_id: &str, 
+        &self,
+        tenant_id: &str,
         ast_hash: i64,
-        prompt: &str, 
-        response_content: &str, 
-        embedding: &[f32]
+        prompt: &str,
+        response_content: &str,
+        embedding: &[f32],
     ) -> Result<(), sqlx::Error> {
         let tenant_uuid = Uuid::parse_str(tenant_id).unwrap_or_default();
         let vec = Vector::from(embedding.to_vec());

@@ -185,11 +185,7 @@ pub async fn enforce_burn_rate(
 /// All Redis errors are logged but never propagated — telemetry must
 /// never break the response path.
 #[instrument(skip(state), fields(session_id = %session_id, tokens))]
-pub async fn record_session_spend(
-    state: &Arc<AppState>,
-    session_id: &str,
-    tokens: u32,
-) {
+pub async fn record_session_spend(state: &Arc<AppState>, session_id: &str, tokens: u32) {
     let cost = (tokens as f64 / 1000.0) * 0.002;
     if cost == 0.0 {
         return;
@@ -202,7 +198,9 @@ pub async fn record_session_spend(
     // Atomic float increment + TTL in a single pipeline round-trip.
     let res: Result<(), _> = redis::pipe()
         .atomic()
-        .cmd("INCRBYFLOAT").arg(&key).arg(cost)
+        .cmd("INCRBYFLOAT")
+        .arg(&key)
+        .arg(cost)
         .expire(&key, BURN_KEY_TTL_SECS)
         .query_async(&mut conn)
         .await;

@@ -18,9 +18,9 @@ use tonic::transport::Server as GrpcServer;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use crate::api::handlers::{lookup_handler, store_handler, ApiState};
-use crate::api::grpc_server::CacheServiceImpl;
 use crate::api::grpc_server::proto::cache_service_server::CacheServiceServer;
+use crate::api::grpc_server::CacheServiceImpl;
+use crate::api::handlers::{lookup_handler, store_handler, ApiState};
 use crate::infrastructure::{local_embedder::LocalEmbedder, postgres_repo::PostgresRepo};
 use crate::usecases::semantic_search::SemanticSearchUseCase;
 
@@ -51,10 +51,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let search_use_case = Arc::new(SemanticSearchUseCase::new(pg_repo, embedder));
 
     // ── REST server (port 8081) ───────────────────────────────────────────────
-    let app_state = ApiState { search_use_case: search_use_case.clone() };
-    let rest_app  = Router::new()
+    let app_state = ApiState {
+        search_use_case: search_use_case.clone(),
+    };
+    let rest_app = Router::new()
         .route("/v1/cache/lookup", post(lookup_handler))
-        .route("/v1/cache/store",  post(store_handler))
+        .route("/v1/cache/store", post(store_handler))
         .with_state(app_state);
 
     let rest_port: u16 = std::env::var("PORT")

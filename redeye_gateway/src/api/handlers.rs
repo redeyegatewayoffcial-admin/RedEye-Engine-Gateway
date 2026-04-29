@@ -10,11 +10,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use tracing::{info, instrument, error};
+use tracing::{error, info, instrument};
 
 use crate::domain::models::{AppState, GatewayError, TraceContext};
-use crate::usecases::proxy;
 use crate::infrastructure::llm_router;
+use crate::usecases::proxy;
 
 /// GET /health
 pub async fn health_check() -> impl IntoResponse {
@@ -37,25 +37,36 @@ pub async fn chat_completions(
 
     // Extract metadata
     let model_name = llm_router::extract_model(&body).to_string();
-    let tenant_id = headers.get("x-tenant-id")
+    let tenant_id = headers
+        .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("anonymous")
         .to_string();
     let raw_prompt = serde_json::to_string(&body).unwrap_or_default();
-    let accept = headers.get("accept")
+    let accept = headers
+        .get("accept")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json");
 
     // Extract routing strategy from header
     let strategy = crate::infrastructure::routing_strategy::RoutingStrategy::from_header(
-        headers.get("x-redeye-routing-strategy")
-            .and_then(|v| v.to_str().ok())
+        headers
+            .get("x-redeye-routing-strategy")
+            .and_then(|v| v.to_str().ok()),
     );
-        
+
     // Delegate to use case
     let result = proxy::execute_proxy(
-        &state, &body, &tenant_id, &model_name, &raw_prompt, accept, &trace_ctx, strategy
-    ).await?;
+        &state,
+        &body,
+        &tenant_id,
+        &model_name,
+        &raw_prompt,
+        accept,
+        &trace_ctx,
+        strategy,
+    )
+    .await?;
 
     // Build Axum response
     let cache_header = if result.cache_hit { "HIT" } else { "MISS" };
@@ -75,7 +86,7 @@ pub async fn chat_completions(
             Ok(response)
         }
         crate::usecases::proxy::ProxyBody::SseStream(stream) => {
-            use axum::response::sse::{Sse, KeepAlive};
+            use axum::response::sse::{KeepAlive, Sse};
             let sse = Sse::new(stream).keep_alive(KeepAlive::default());
             let mut response = sse.into_response();
             if let Ok(value) = axum::http::HeaderValue::from_str(cache_header) {
@@ -134,7 +145,9 @@ pub async fn get_hot_swaps(
     if !resp.status().is_success() {
         let err_body = resp.text().await.unwrap_or_default();
         error!(error = %err_body, "ClickHouse hot-swaps query returned non-2xx");
-        return Err(GatewayError::ResponseBuild("ClickHouse hot-swaps query failed".to_string()));
+        return Err(GatewayError::ResponseBuild(
+            "ClickHouse hot-swaps query failed".to_string(),
+        ));
     }
 
     let ch_json: Value = resp.json().await.map_err(|e| {
@@ -147,7 +160,7 @@ pub async fn get_hot_swaps(
 
     for row in rows {
         let time = row["time"].as_str().unwrap_or("00:00").to_string();
-        
+
         let openai_success: u64 = match &row["openai_success"] {
             Value::String(s) => s.parse().unwrap_or(0),
             Value::Number(n) => n.as_u64().unwrap_or(0),
@@ -189,7 +202,8 @@ pub async fn admin_metrics(
         .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
 
     // 1. Summary Stats
-    let stats_query = format!("
+    let stats_query = format!(
+        "
         SELECT 
             count() as total_requests,
             avg(latency_ms) as avg_latency_ms,
@@ -198,10 +212,13 @@ pub async fn admin_metrics(
         FROM RedEye_telemetry.request_logs
         WHERE tenant_id = '{}'
         FORMAT JSON
-    ", parsed_tenant_id);
+    ",
+        parsed_tenant_id
+    );
 
     // 2. Traffic Series (Last 24 hours, hourly buckets)
-    let traffic_query = format!("
+    let traffic_query = format!(
+        "
         SELECT 
             formatDateTime(toStartOfHour(created_at), '%Y-%m-%dT%H:%M:%S') as timestamp,
             count() as requests
@@ -210,10 +227,13 @@ pub async fn admin_metrics(
         GROUP BY timestamp
         ORDER BY timestamp
         FORMAT JSON
-    ", parsed_tenant_id);
+    ",
+        parsed_tenant_id
+    );
 
     // 3. Model Distribution
-    let model_query = format!("
+    let model_query = format!(
+        "
         SELECT 
             model as name,
             count() as value
@@ -221,10 +241,13 @@ pub async fn admin_metrics(
         WHERE tenant_id = '{}'
         GROUP BY name
         FORMAT JSON
-    ", parsed_tenant_id);
+    ",
+        parsed_tenant_id
+    );
 
     // 4. Latency Buckets
-    let latency_query = format!("
+    let latency_query = format!(
+        "
         SELECT 
             case 
                 when latency_ms < 100 then '0-100ms'
@@ -238,17 +261,51 @@ pub async fn admin_metrics(
         GROUP BY bucket
         ORDER BY count DESC
         FORMAT JSON
-    ", parsed_tenant_id);
+    ",
+        parsed_tenant_id
+    );
 
     // Execute queries (simplified sequential for reliability, could use join_all)
-    let stats_resp = state.http_client.post(&state.clickhouse_url).body(stats_query).send().await
-        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
-    let traffic_resp = state.http_client.post(&state.clickhouse_url).body(traffic_query).send().await
-        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
-    let model_resp = state.http_client.post(&state.clickhouse_url).body(model_query).send().await
-        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
-    let latency_resp = state.http_client.post(&state.clickhouse_url).body(latency_query).send().await
-        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
+    let stats_resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(stats_query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e);
+            GatewayError::Proxy(e)
+        })?;
+    let traffic_resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(traffic_query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e);
+            GatewayError::Proxy(e)
+        })?;
+    let model_resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(model_query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e);
+            GatewayError::Proxy(e)
+        })?;
+    let latency_resp = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(latency_query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e);
+            GatewayError::Proxy(e)
+        })?;
 
     let stats_json: Value = stats_resp.json().await.unwrap_or(json!({"data": []}));
     let traffic_json: Value = traffic_resp.json().await.unwrap_or(json!({"data": []}));
@@ -395,14 +452,14 @@ pub async fn get_billing_breakdown(
 
     // Transform ClickHouse rows (where total_tokens is often a string) into typed entries + estimated_cost
     let rows = ch_json["data"].as_array().cloned().unwrap_or_default();
-    
+
     let mut breakdown = Vec::new();
     const COST_PER_THOUSAND: f64 = 0.002;
 
     for row in rows {
         let date = row["date"].as_str().unwrap_or("1970-01-01").to_string();
         let model = row["model"].as_str().unwrap_or("unknown").to_string();
-        
+
         let tokens: f64 = match &row["total_tokens"] {
             Value::String(s) => s.parse().unwrap_or(0.0),
             Value::Number(n) => n.as_f64().unwrap_or(0.0),
@@ -434,7 +491,8 @@ pub async fn get_traces(
     let parsed_tenant_id = uuid::Uuid::parse_str(&claims.tenant_id)
         .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".to_string()))?;
 
-    let query = format!("
+    let query = format!(
+        "
         SELECT 
             toString(id) as traceId,
             tenant_id as tenantId,
@@ -447,19 +505,33 @@ pub async fn get_traces(
         ORDER BY created_at DESC
         LIMIT 50
         FORMAT JSON
-    ", parsed_tenant_id);
+    ",
+        parsed_tenant_id
+    );
 
-    let response = state.http_client.post(&state.clickhouse_url).body(query).send().await
-        .map_err(|e| { error!(error = %e); GatewayError::Proxy(e) })?;
+    let response = state
+        .http_client
+        .post(&state.clickhouse_url)
+        .body(query)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e);
+            GatewayError::Proxy(e)
+        })?;
 
     if !response.status().is_success() {
         let err = response.text().await.unwrap_or_default();
         error!(error = %err, "ClickHouse traces query failed");
-        return Err(GatewayError::ResponseBuild("Traces query failed".to_string()));
+        return Err(GatewayError::ResponseBuild(
+            "Traces query failed".to_string(),
+        ));
     }
 
-    let clickhouse_json: Value = response.json().await
-        .map_err(|e| { error!(error = %e); GatewayError::ResponseBuild(e.to_string()) })?;
+    let clickhouse_json: Value = response.json().await.map_err(|e| {
+        error!(error = %e);
+        GatewayError::ResponseBuild(e.to_string())
+    })?;
 
     let data = clickhouse_json["data"].clone();
     Ok(Json(data))
@@ -524,9 +596,21 @@ pub async fn security_alerts(
 
     // ── Execute all three queries ──────────────────────────────────────────
     let (stats_res, daily_res, recent_res) = tokio::join!(
-        state.http_client.post(&state.clickhouse_url).body(stats_query).send(),
-        state.http_client.post(&state.clickhouse_url).body(daily_query).send(),
-        state.http_client.post(&state.clickhouse_url).body(recent_query).send(),
+        state
+            .http_client
+            .post(&state.clickhouse_url)
+            .body(stats_query)
+            .send(),
+        state
+            .http_client
+            .post(&state.clickhouse_url)
+            .body(daily_query)
+            .send(),
+        state
+            .http_client
+            .post(&state.clickhouse_url)
+            .body(recent_query)
+            .send(),
     );
 
     // ── Parse stats ────────────────────────────────────────────────────────
@@ -534,16 +618,19 @@ pub async fn security_alerts(
         Ok(r) if r.status().is_success() => r.json().await.unwrap_or(json!({"data": []})),
         _ => json!({"data": []}),
     };
-    let stats_row = stats_json["data"].as_array()
+    let stats_row = stats_json["data"]
+        .as_array()
         .and_then(|a| a.first())
         .cloned()
         .unwrap_or(json!({"total_loops": "0", "total_burns": "0"}));
 
-    let total_loops: u64 = stats_row["total_loops"].as_str()
+    let total_loops: u64 = stats_row["total_loops"]
+        .as_str()
         .and_then(|s| s.parse().ok())
         .or_else(|| stats_row["total_loops"].as_u64())
         .unwrap_or(0);
-    let total_burns: u64 = stats_row["total_burns"].as_str()
+    let total_burns: u64 = stats_row["total_burns"]
+        .as_str()
         .and_then(|s| s.parse().ok())
         .or_else(|| stats_row["total_burns"].as_u64())
         .unwrap_or(0);
@@ -558,7 +645,10 @@ pub async fn security_alerts(
         Ok(r) if r.status().is_success() => r.json().await.unwrap_or(json!({"data": []})),
         _ => json!({"data": []}),
     };
-    let daily_blocks = daily_json["data"].as_array().cloned().unwrap_or_default()
+    let daily_blocks = daily_json["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
         .into_iter()
         .map(|mut row| {
             // ClickHouse returns counts as strings in FORMAT JSON — normalise them.
@@ -577,14 +667,17 @@ pub async fn security_alerts(
         Ok(r) if r.status().is_success() => r.json().await.unwrap_or(json!({"data": []})),
         _ => json!({"data": []}),
     };
-    let recent_alerts: Vec<Value> = recent_json["data"].as_array().cloned().unwrap_or_default()
+    let recent_alerts: Vec<Value> = recent_json["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
         .into_iter()
         .map(|row| {
             let model = row["model"].as_str().unwrap_or("");
             let (reason, severity) = match model {
-                "__loop_blocked"      => ("Loop Detected",       "High"),
-                "__burn_rate_blocked" => ("Burn Rate Exceeded",  "Critical"),
-                _                     => ("Unknown Block",       "Medium"),
+                "__loop_blocked" => ("Loop Detected", "High"),
+                "__burn_rate_blocked" => ("Burn Rate Exceeded", "Critical"),
+                _ => ("Unknown Block", "Medium"),
             };
             json!({
                 "timestamp":  row["timestamp"],
@@ -676,8 +769,16 @@ pub async fn get_cache_metrics(
         _ => 0,
     };
 
-    let hit_ratio = if total_lookups > 0 { (hits as f64) / (total_lookups as f64) } else { 0.0 };
-    let miss_ratio = if total_lookups > 0 { (misses as f64) / (total_lookups as f64) } else { 0.0 };
+    let hit_ratio = if total_lookups > 0 {
+        (hits as f64) / (total_lookups as f64)
+    } else {
+        0.0
+    };
+    let miss_ratio = if total_lookups > 0 {
+        (misses as f64) / (total_lookups as f64)
+    } else {
+        0.0
+    };
 
     Ok(Json(json!({
         "hit_ratio": hit_ratio,
@@ -760,5 +861,3 @@ pub async fn get_compliance_metrics(
         "residency_routes": residency_routes,
     })))
 }
-
-

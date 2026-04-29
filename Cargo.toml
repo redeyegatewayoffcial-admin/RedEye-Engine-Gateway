@@ -1,6 +1,5 @@
 [workspace]
 resolver = "2"
-default-run = "redeye_gateway"
 
 members = [
     "redeye_gateway",

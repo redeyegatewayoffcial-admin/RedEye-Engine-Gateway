@@ -108,7 +108,7 @@ services:
     ports:
       - "8084:8084"
     environment:
-      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL must be set}
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - AES_MASTER_KEY=${AES_MASTER_KEY:?AES_MASTER_KEY must be set}
       - RUST_LOG=info

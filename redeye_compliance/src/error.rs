@@ -105,7 +105,9 @@ impl AppError {
     /// Get a safe user-facing message (never exposes internal details)
     pub fn user_message(&self) -> String {
         match self {
-            AppError::Internal(_) => "An unexpected error occurred. Please try again later.".to_string(),
+            AppError::Internal(_) => {
+                "An unexpected error occurred. Please try again later.".to_string()
+            }
             AppError::BadRequest(msg) => msg.clone(),
             AppError::Unauthorized(msg) => msg.clone(),
             AppError::Conflict(msg) => msg.clone(),
@@ -137,7 +139,8 @@ impl IntoResponse for AppError {
                     "Internal compliance error occurred"
                 );
             }
-            AppError::ServiceUnavailable(internal_msg) | AppError::PiiEngineFailure(internal_msg) => {
+            AppError::ServiceUnavailable(internal_msg)
+            | AppError::PiiEngineFailure(internal_msg) => {
                 tracing::error!(
                     error_code = %code.as_str(),
                     status = %status.as_u16(),

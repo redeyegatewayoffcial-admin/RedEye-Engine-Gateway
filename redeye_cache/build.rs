@@ -10,12 +10,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::env::set_var("PROTOC", protoc_path);
 
     tonic_build::configure()
-        .build_server(true)  // Cache service only needs the server stub.
+        .build_server(true) // Cache service only needs the server stub.
         .build_client(false)
-        .compile_protos(
-            &["../proto/semantic_cache.proto"],
-            &["../proto"],
-        )?;
+        .compile_protos(&["../proto/semantic_cache.proto"], &["../proto"])?;
 
     println!("cargo:rerun-if-changed=../proto/semantic_cache.proto");
 

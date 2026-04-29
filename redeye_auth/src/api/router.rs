@@ -1,12 +1,15 @@
+use super::handlers::{
+    add_provider_key, get_api_keys, get_provider_keys, github_callback, github_login,
+    google_callback, google_login, login, onboard, refresh, request_otp, signup, verify_otp,
+};
+use crate::AppState;
+use axum::http::{HeaderValue, Method};
 use axum::{
-    routing::{post, get},
+    routing::{get, post},
     Router,
 };
-use axum::http::{Method, HeaderValue};
-use tower_http::cors::CorsLayer;
 use std::env;
-use super::handlers::{signup, login, onboard, refresh, get_api_keys, request_otp, verify_otp, google_login, google_callback, github_login, github_callback, add_provider_key, get_provider_keys};
-use crate::AppState;
+use tower_http::cors::CorsLayer;
 
 pub fn create_router(state: AppState) -> Router {
     let cors = create_cors_layer();
@@ -16,7 +19,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api-keys", get(get_api_keys))
         .route("/provider-keys", post(add_provider_key))
         .route("/provider-keys", get(get_provider_keys))
-        .route_layer(axum::middleware::from_fn(crate::api::middleware::auth::auth_middleware));
+        .route_layer(axum::middleware::from_fn(
+            crate::api::middleware::auth::auth_middleware,
+        ));
 
     Router::new()
         .route("/v1/auth/signup", post(signup))
@@ -39,10 +44,12 @@ pub fn create_router(state: AppState) -> Router {
 /// Falls back to restricted local development origins if DASHBOARD_URL is not set.
 fn create_cors_layer() -> CorsLayer {
     let dashboard_url = env::var("DASHBOARD_URL").ok();
-    
+
     let origins = match dashboard_url {
         Some(url) => {
-            vec![url.parse::<HeaderValue>().expect("Invalid DASHBOARD_URL format")]
+            vec![url
+                .parse::<HeaderValue>()
+                .expect("Invalid DASHBOARD_URL format")]
         }
         None => {
             // Restricted development origins only
@@ -54,7 +61,7 @@ fn create_cors_layer() -> CorsLayer {
             ]
         }
     };
-    
+
     CorsLayer::new()
         .allow_origin(origins)
         .allow_credentials(true)

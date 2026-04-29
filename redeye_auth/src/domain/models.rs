@@ -51,8 +51,6 @@ pub struct ApiKey {
     pub is_active: bool,
 }
 
-
-
 /// An encrypted upstream LLM provider API key.
 /// Each tenant can store multiple provider keys for multi-LLM support.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

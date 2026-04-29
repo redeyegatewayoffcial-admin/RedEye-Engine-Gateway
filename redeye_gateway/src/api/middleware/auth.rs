@@ -1,21 +1,21 @@
-use std::sync::Arc;
-use axum::{
-    body::Body,
-    extract::State,
-    http::{Request, StatusCode, header},
-    middleware::Next,
-    response::Response,
-};
-use jsonwebtoken::{decode, DecodingKey, Validation};
-use serde::{Deserialize, Serialize};
-use sqlx::Row;
-use uuid::Uuid;
 use crate::domain::models::AppState;
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use sha2::{Sha256, Digest};
+use axum::{
+    body::Body,
+    extract::State,
+    http::{header, Request, StatusCode},
+    middleware::Next,
+    response::Response,
+};
+use jsonwebtoken::{decode, DecodingKey, Validation};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sqlx::Row;
+use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -39,10 +39,10 @@ pub async fn auth_middleware(
     if path == "/health" || path == "/v1/health" {
         return Ok(next.run(req).await);
     }
-    
+
     // 3. Strict Auth & Claims Extraction
     let mut token_opt: Option<(String, bool)> = None; // (token, is_api_key)
-    
+
     if let Some(auth_header) = req.headers().get(axum::http::header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
@@ -54,7 +54,7 @@ pub async fn auth_middleware(
             }
         }
     }
-    
+
     if token_opt.is_none() {
         if let Some(api_key_header) = req.headers().get("x-api-key") {
             if let Ok(token) = api_key_header.to_str() {
@@ -64,7 +64,7 @@ pub async fn auth_middleware(
             }
         }
     }
-    
+
     // 4. Cookie Fallback: Check for re_token cookie if no header auth found
     if token_opt.is_none() {
         if let Some(cookie_header) = req.headers().get(header::COOKIE) {
@@ -84,20 +84,28 @@ pub async fn auth_middleware(
             }
         }
     }
-    
+
     match token_opt {
         Some((token, true)) => handle_api_key(&state, &token, req, next).await,
         Some((token, false)) => handle_jwt(&token, req, next).await,
-    None => {
-        // Use debug level — unauthenticated dashboard polling on metrics endpoints
-        // is expected and not actionable. Only the proxy route (/v1/chat) warrants a warn.
-        if path.starts_with("/v1/chat") {
-            tracing::warn!("Missing authentication credentials for {} {}", req.method(), path);
-        } else {
-            tracing::debug!("Unauthenticated request to {} {} — returning 401", req.method(), path);
+        None => {
+            // Use debug level — unauthenticated dashboard polling on metrics endpoints
+            // is expected and not actionable. Only the proxy route (/v1/chat) warrants a warn.
+            if path.starts_with("/v1/chat") {
+                tracing::warn!(
+                    "Missing authentication credentials for {} {}",
+                    req.method(),
+                    path
+                );
+            } else {
+                tracing::debug!(
+                    "Unauthenticated request to {} {} — returning 401",
+                    req.method(),
+                    path
+                );
+            }
+            Err(StatusCode::UNAUTHORIZED)
         }
-        Err(StatusCode::UNAUTHORIZED)
-    }
     }
 }
 
@@ -131,18 +139,19 @@ async fn handle_jwt(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let claims = verify_jwt(token)?;
-    
+
     // BUG FIX 2: Reject invalid UUIDs (401 Unauthorized) instead of silently defaulting
     let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
         tracing::warn!("Invalid UUID format for tenant_id in token");
         StatusCode::UNAUTHORIZED
     })?;
 
-    req.headers_mut().insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
-    
+    req.headers_mut()
+        .insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
+
     // CRUCIAL: Inject decoded claims into request extensions
     req.extensions_mut().insert(claims);
-    
+
     Ok(next.run(req).await)
 }
 
@@ -156,15 +165,16 @@ async fn handle_api_key(
     hasher.update(api_key.as_bytes());
     let key_hash = hex::encode(hasher.finalize());
 
-    let row = sqlx::query("SELECT tenant_id FROM api_keys WHERE key_hash = $1 AND is_active = true")
-        .bind(&key_hash)
-        .fetch_optional(&state.db_pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("DB error during api key lookup: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-        
+    let row =
+        sqlx::query("SELECT tenant_id FROM api_keys WHERE key_hash = $1 AND is_active = true")
+            .bind(&key_hash)
+            .fetch_optional(&state.db_pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error during api key lookup: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
     let tenant_row = match row {
         Some(r) => r,
         None => {
@@ -172,17 +182,18 @@ async fn handle_api_key(
             return Err(StatusCode::UNAUTHORIZED);
         }
     };
-    
+
     let tenant_id: Uuid = tenant_row.get("tenant_id");
-    req.headers_mut().insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
-    
+    req.headers_mut()
+        .insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
+
     // Inject synthetic claims into extensions for API keys
     req.extensions_mut().insert(Claims {
         sub: "api_key".to_string(),
         tenant_id: tenant_id.to_string(),
         exp: 0, // Not applicable for API keys
     });
-    
+
     Ok(next.run(req).await)
 }
 
@@ -195,7 +206,7 @@ pub fn decrypt_api_key(encrypted_data: &[u8]) -> Result<String, ()> {
 
     let key = Key::<Aes256Gcm>::from_slice(master_key.as_bytes());
     let cipher = Aes256Gcm::new(key);
-    
+
     let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
     let nonce = Nonce::from_slice(nonce_bytes);
 

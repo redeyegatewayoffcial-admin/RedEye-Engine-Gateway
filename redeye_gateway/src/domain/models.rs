@@ -207,7 +207,22 @@ pub struct RedEyeConversation {
     pub system_prompt: Option<String>,
     pub messages: Vec<RedEyeMessage>,
     pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
+
+pub type StandardResponse = serde_json::Value;
+pub type StandardStreamChunk = String;
 
 #[cfg(test)]
 mod tests {
@@ -265,22 +280,30 @@ mod tests {
         }"#;
 
         // Verify Deserialization from JSON String
-        let conversation: RedEyeConversation = serde_json::from_str(json_str).expect("Failed to deserialize Universal Schema JSON");
-        
-        assert_eq!(conversation.system_prompt.as_deref(), Some("You are a helpful assistant."));
+        let conversation: RedEyeConversation =
+            serde_json::from_str(json_str).expect("Failed to deserialize Universal Schema JSON");
+
+        assert_eq!(
+            conversation.system_prompt.as_deref(),
+            Some("You are a helpful assistant.")
+        );
         assert_eq!(conversation.messages.len(), 3);
         assert_eq!(conversation.messages[0].role, RedEyeRole::User);
         assert_eq!(conversation.messages[1].role, RedEyeRole::Assistant);
         assert_eq!(conversation.messages[2].role, RedEyeRole::Tool);
 
         // Verify Serialization back to JSON with no data loss
-        let serialized_str = serde_json::to_string(&conversation).expect("Failed to serialize back to json");
-        
+        let serialized_str =
+            serde_json::to_string(&conversation).expect("Failed to serialize back to json");
+
         // Parse both as serde_json::Value to ignore whitespace formatting differences
         let original_val: serde_json::Value = serde_json::from_str(json_str).unwrap();
         let serialized_val: serde_json::Value = serde_json::from_str(&serialized_str).unwrap();
-        
-        assert_eq!(original_val, serialized_val, "Serialized JSON did not match original cleanly");
+
+        assert_eq!(
+            original_val, serialized_val,
+            "Serialized JSON did not match original cleanly"
+        );
     }
 }
 

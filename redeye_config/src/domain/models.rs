@@ -62,12 +62,12 @@ impl ClientConfig {
     pub fn default_for(tenant_id: Uuid) -> Self {
         Self {
             tenant_id,
-            pii_masking_enabled:      true,
+            pii_masking_enabled: true,
             semantic_caching_enabled: true,
             routing_fallback_enabled: true,
-            rate_limit_rpm:           None,
-            preferred_model:          None,
-            updated_at:               Utc::now(),
+            rate_limit_rpm: None,
+            preferred_model: None,
+            updated_at: Utc::now(),
         }
     }
 }
@@ -87,7 +87,7 @@ impl ClientConfig {
 /// Callers should map the `Err(String)` to [`crate::error::ConfigError::Validation`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateConfigRequest {
-    pub pii_masking_enabled:      Option<bool>,
+    pub pii_masking_enabled: Option<bool>,
     pub semantic_caching_enabled: Option<bool>,
     pub routing_fallback_enabled: Option<bool>,
 
@@ -119,12 +119,10 @@ impl UpdateConfigRequest {
         if let Some(Some(ref model)) = self.preferred_model {
             let trimmed = model.trim();
             if trimmed.is_empty() {
-                return Err(
-                    "`preferred_model` must not be an empty string. \
+                return Err("`preferred_model` must not be an empty string. \
                      Omit the field to preserve the current value, or send \
                      `null` to clear it."
-                        .into(),
-                );
+                    .into());
             }
             if trimmed.len() > 128 {
                 return Err(format!(
@@ -146,9 +144,7 @@ impl UpdateConfigRequest {
         ClientConfig {
             tenant_id: base.tenant_id,
 
-            pii_masking_enabled: self
-                .pii_masking_enabled
-                .unwrap_or(base.pii_masking_enabled),
+            pii_masking_enabled: self.pii_masking_enabled.unwrap_or(base.pii_masking_enabled),
 
             semantic_caching_enabled: self
                 .semantic_caching_enabled
@@ -165,8 +161,8 @@ impl UpdateConfigRequest {
             //   Some(None)     → explicit null in JSON → clear the value
             //   Some(Some(s))  → explicit string in JSON → set the value
             preferred_model: match &self.preferred_model {
-                None              => base.preferred_model.clone(),
-                Some(inner_opt)   => inner_opt.clone(),
+                None => base.preferred_model.clone(),
+                Some(inner_opt) => inner_opt.clone(),
             },
 
             updated_at: Utc::now(),
@@ -185,7 +181,7 @@ impl UpdateConfigRequest {
 /// instance and propagates revocations to the Redis cache.
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct ApiKeyRecord {
-    pub id:        Uuid,
+    pub id: Uuid,
     pub tenant_id: Uuid,
 
     /// SHA-256 hex-encoded hash of the raw bearer token.
@@ -198,7 +194,7 @@ pub struct ApiKeyRecord {
 
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
-    pub is_active:  bool,
+    pub is_active: bool,
 }
 
 // =============================================================================
@@ -210,7 +206,7 @@ pub struct ApiKeyRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigUpdateEvent {
     pub tenant_id: Uuid,
-    pub config:    ClientConfig,
+    pub config: ClientConfig,
 }
 
 /// Published to the `redeye:key_revocations` channel when an API key is
@@ -219,10 +215,10 @@ pub struct ConfigUpdateEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyRevocationEvent {
     pub tenant_id: Uuid,
-    pub key_id:    Uuid,
+    pub key_id: Uuid,
     /// Included so the gateway can delete `api_key:{key_hash}` without a
     /// second Postgres round-trip.
-    pub key_hash:  String,
+    pub key_hash: String,
 }
 
 // =============================================================================
@@ -236,13 +232,13 @@ mod tests {
 
     fn base_config() -> ClientConfig {
         ClientConfig {
-            tenant_id:               Uuid::new_v4(),
-            pii_masking_enabled:     true,
+            tenant_id: Uuid::new_v4(),
+            pii_masking_enabled: true,
             semantic_caching_enabled: false,
             routing_fallback_enabled: true,
-            rate_limit_rpm:          Some(500),
-            preferred_model:         Some("gpt-4o".into()),
-            updated_at:              Utc::now(),
+            rate_limit_rpm: Some(500),
+            preferred_model: Some("gpt-4o".into()),
+            updated_at: Utc::now(),
         }
     }
 
@@ -265,11 +261,11 @@ mod tests {
     #[test]
     fn validate_passes_for_empty_request() {
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      None,
+            pii_masking_enabled: None,
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           None,
-            preferred_model:          None,
+            rate_limit_rpm: None,
+            preferred_model: None,
         };
         assert!(req.validate().is_ok());
     }
@@ -277,11 +273,11 @@ mod tests {
     #[test]
     fn validate_rejects_non_positive_rpm() {
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      None,
+            pii_masking_enabled: None,
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           Some(0),
-            preferred_model:          None,
+            rate_limit_rpm: Some(0),
+            preferred_model: None,
         };
         let err = req.validate().unwrap_err();
         assert!(err.contains("rate_limit_rpm"), "error message: {err}");
@@ -292,11 +288,11 @@ mod tests {
         let req = UpdateConfigRequest {
             rate_limit_rpm: Some(-100),
             ..UpdateConfigRequest {
-                pii_masking_enabled:      None,
+                pii_masking_enabled: None,
                 semantic_caching_enabled: None,
                 routing_fallback_enabled: None,
-                rate_limit_rpm:           None,
-                preferred_model:          None,
+                rate_limit_rpm: None,
+                preferred_model: None,
             }
         };
         assert!(req.validate().is_err());
@@ -305,11 +301,11 @@ mod tests {
     #[test]
     fn validate_rejects_empty_preferred_model() {
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      None,
+            pii_masking_enabled: None,
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           None,
-            preferred_model:          Some(Some("   ".into())), // whitespace-only
+            rate_limit_rpm: None,
+            preferred_model: Some(Some("   ".into())), // whitespace-only
         };
         assert!(req.validate().is_err());
     }
@@ -318,11 +314,11 @@ mod tests {
     fn validate_rejects_model_exceeding_128_chars() {
         let long_model = "a".repeat(129);
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      None,
+            pii_masking_enabled: None,
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           None,
-            preferred_model:          Some(Some(long_model)),
+            rate_limit_rpm: None,
+            preferred_model: Some(Some(long_model)),
         };
         assert!(req.validate().is_err());
     }
@@ -331,11 +327,11 @@ mod tests {
     fn validate_accepts_exactly_128_char_model() {
         let model = "m".repeat(128);
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      None,
+            pii_masking_enabled: None,
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           None,
-            preferred_model:          Some(Some(model)),
+            rate_limit_rpm: None,
+            preferred_model: Some(Some(model)),
         };
         assert!(req.validate().is_ok());
     }
@@ -346,34 +342,43 @@ mod tests {
     fn apply_to_absent_fields_preserves_base_values() {
         let base = base_config();
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      None,
+            pii_masking_enabled: None,
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           None,
-            preferred_model:          None,
+            rate_limit_rpm: None,
+            preferred_model: None,
         };
         let merged = req.apply_to(&base);
-        assert_eq!(merged.pii_masking_enabled,      base.pii_masking_enabled);
-        assert_eq!(merged.semantic_caching_enabled, base.semantic_caching_enabled);
-        assert_eq!(merged.routing_fallback_enabled, base.routing_fallback_enabled);
-        assert_eq!(merged.rate_limit_rpm,           base.rate_limit_rpm);
-        assert_eq!(merged.preferred_model,          base.preferred_model);
+        assert_eq!(merged.pii_masking_enabled, base.pii_masking_enabled);
+        assert_eq!(
+            merged.semantic_caching_enabled,
+            base.semantic_caching_enabled
+        );
+        assert_eq!(
+            merged.routing_fallback_enabled,
+            base.routing_fallback_enabled
+        );
+        assert_eq!(merged.rate_limit_rpm, base.rate_limit_rpm);
+        assert_eq!(merged.preferred_model, base.preferred_model);
     }
 
     #[test]
     fn apply_to_overrides_present_fields() {
         let base = base_config();
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      Some(false),
+            pii_masking_enabled: Some(false),
             semantic_caching_enabled: Some(true),
             routing_fallback_enabled: None,
-            rate_limit_rpm:           Some(2000),
-            preferred_model:          Some(Some("claude-3-5-sonnet".into())),
+            rate_limit_rpm: Some(2000),
+            preferred_model: Some(Some("claude-3-5-sonnet".into())),
         };
         let merged = req.apply_to(&base);
         assert!(!merged.pii_masking_enabled);
         assert!(merged.semantic_caching_enabled);
-        assert_eq!(merged.routing_fallback_enabled, base.routing_fallback_enabled);
+        assert_eq!(
+            merged.routing_fallback_enabled,
+            base.routing_fallback_enabled
+        );
         assert_eq!(merged.rate_limit_rpm, Some(2000));
         assert_eq!(merged.preferred_model, Some("claude-3-5-sonnet".into()));
     }
@@ -382,11 +387,11 @@ mod tests {
     fn apply_to_explicit_null_clears_preferred_model() {
         let base = base_config(); // has preferred_model = Some("gpt-4o")
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      None,
+            pii_masking_enabled: None,
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           None,
-            preferred_model:          Some(None), // explicit null → clear it
+            rate_limit_rpm: None,
+            preferred_model: Some(None), // explicit null → clear it
         };
         let merged = req.apply_to(&base);
         assert!(merged.preferred_model.is_none());
@@ -397,11 +402,11 @@ mod tests {
         let base = base_config();
         let tid = base.tenant_id;
         let req = UpdateConfigRequest {
-            pii_masking_enabled:      Some(false),
+            pii_masking_enabled: Some(false),
             semantic_caching_enabled: None,
             routing_fallback_enabled: None,
-            rate_limit_rpm:           None,
-            preferred_model:          None,
+            rate_limit_rpm: None,
+            preferred_model: None,
         };
         let merged = req.apply_to(&base);
         assert_eq!(merged.tenant_id, tid);

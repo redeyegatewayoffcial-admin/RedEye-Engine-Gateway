@@ -75,7 +75,9 @@ impl AppError {
     /// Get a safe user-facing message (never exposes internal details)
     fn user_message(&self) -> String {
         match self {
-            AppError::Internal(_) => "An unexpected error occurred. Please try again later.".to_string(),
+            AppError::Internal(_) => {
+                "An unexpected error occurred. Please try again later.".to_string()
+            }
             AppError::BadRequest(msg) => msg.clone(),
             AppError::Unauthorized(msg) => msg.clone(),
             AppError::Conflict(msg) => msg.clone(),
@@ -126,14 +128,12 @@ impl IntoResponse for AppError {
 impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
         use sqlx::Error as SqlxError;
-        
+
         // Log the full error details for internal debugging
         tracing::error!(sqlx_error = %err, "Database error occurred");
-        
+
         match err {
-            SqlxError::RowNotFound => {
-                AppError::NotFound("Resource not found".into())
-            }
+            SqlxError::RowNotFound => AppError::NotFound("Resource not found".into()),
             SqlxError::Database(db_err) => {
                 // Check for unique constraint violations (PostgreSQL error code 23505)
                 if db_err.code().as_deref() == Some("23505") {

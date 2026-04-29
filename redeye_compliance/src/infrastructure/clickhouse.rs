@@ -30,9 +30,12 @@ impl ClickHouseLogger {
     /// Appends an audit record to ClickHouse.
     /// Spawns as a background Tokio task to NEVER block the gateway request.
     pub async fn log_audit_event(&self, record: ComplianceAuditRecord) {
-        let url = format!("{}/?query=INSERT INTO RedEye_telemetry.compliance_engine_audit FORMAT JSONEachRow", self.clickhouse_url);
+        let url = format!(
+            "{}/?query=INSERT INTO RedEye_telemetry.compliance_engine_audit FORMAT JSONEachRow",
+            self.clickhouse_url
+        );
         let client = self.http_client.clone();
-        
+
         // Push logging completely to the background
         tokio::spawn(async move {
             match client.post(&url).json(&record).send().await {
@@ -40,9 +43,15 @@ impl ClickHouseLogger {
                     let status = resp.status();
                     if !status.is_success() {
                         let err_text = resp.text().await.unwrap_or_default();
-                        error!("Failed to write compliance audit to ClickHouse: Status {}, {}", status, err_text);
+                        error!(
+                            "Failed to write compliance audit to ClickHouse: Status {}, {}",
+                            status, err_text
+                        );
                     } else {
-                        info!("✅ Compliance audit record committed to ClickHouse (Trace: {})", record.trace_id);
+                        info!(
+                            "✅ Compliance audit record committed to ClickHouse (Trace: {})",
+                            record.trace_id
+                        );
                     }
                 }
                 Err(e) => {

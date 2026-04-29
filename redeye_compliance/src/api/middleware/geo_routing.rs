@@ -14,13 +14,13 @@
 //! - No `.unwrap()`, `.expect()`, or `panic!()` — all fallible ops use `?` or
 //!   explicit match arms with safe defaults.
 
-use std::sync::Arc;
 use axum::{
     extract::{Request, State},
     http::HeaderMap,
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::domain::models::ResidencyRule;
@@ -38,10 +38,7 @@ pub struct SharedConfig {
 
 /// Models that are explicitly restricted to US infrastructure only.
 /// Requests from DPDP-locked regions to these models are rejected.
-const US_ONLY_MODELS: &[&str] = &[
-    "o1-preview",
-    "o1-mini",
-];
+const US_ONLY_MODELS: &[&str] = &["o1-preview", "o1-mini"];
 
 // ── Geo-IP Simulation ────────────────────────────────────────────────────────
 
@@ -118,7 +115,9 @@ pub async fn geo_routing_middleware(
     // 8. DPDP: inject strict allowed-regions header for Indian traffic.
     if is_indian_region || rule.region == "IN" {
         let val = axum::http::HeaderValue::from_static("in");
-        response.headers_mut().insert("x-redeye-allowed-regions", val);
+        response
+            .headers_mut()
+            .insert("x-redeye-allowed-regions", val);
     }
 
     Ok(response)
@@ -243,7 +242,10 @@ mod tests {
 
         let rule = build_residency_rule("IN", &config);
         assert_eq!(rule.region, "IN");
-        assert!(rule.strict_isolation, "India must have strict isolation for DPDP");
+        assert!(
+            rule.strict_isolation,
+            "India must have strict isolation for DPDP"
+        );
         assert_eq!(rule.regional_endpoint, "https://api.in.redeye.ai/v1");
     }
 

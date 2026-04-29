@@ -2,12 +2,15 @@
 //!
 //! Owns all observability data: trace ingestion, compliance audit storage, and query APIs.
 
-use std::{net::SocketAddr, sync::Arc, env};
-use axum::{routing::{get, post}, Router};
-use tower_http::cors::CorsLayer;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::{
+    Router,
+    routing::{get, post},
+};
+use std::{env, net::SocketAddr, sync::Arc};
+use tower_http::cors::CorsLayer;
 use tracing::info;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use redeye_tracer::api;
 
@@ -22,16 +25,15 @@ async fn main() {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
-    
+
     info!("Starting RedEye Tracer Microservice...");
 
     // ClickHouse connection
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| {
-            let default_url = "http://localhost:8123".to_string();
-            tracing::warn!("CLICKHOUSE_URL not set, using default: {}", default_url);
-            default_url
-        });
+    let clickhouse_url = std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| {
+        let default_url = "http://localhost:8123".to_string();
+        tracing::warn!("CLICKHOUSE_URL not set, using default: {}", default_url);
+        default_url
+    });
 
     let repo = ClickHouseRepo::new(clickhouse_url);
 
@@ -43,12 +45,11 @@ async fn main() {
     let shared_repo = Arc::new(repo);
 
     // ── Redis + Latency Worker ───────────────────────────────────────────────
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| {
-            let default = "redis://127.0.0.1:6379".to_string();
-            tracing::warn!("REDIS_URL not set, using default: {}", default);
-            default
-        });
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| {
+        let default = "redis://127.0.0.1:6379".to_string();
+        tracing::warn!("REDIS_URL not set, using default: {}", default);
+        default
+    });
 
     match redis::Client::open(redis_url.as_str()) {
         Ok(client) => match client.get_multiplexed_tokio_connection().await {
@@ -73,8 +74,16 @@ async fn main() {
         .route("/v1/traces/ingest", post(api::handlers::ingest_handler))
         .route("/v1/traces", get(api::handlers::traces_handler))
         .route("/v1/audit", get(api::handlers::audit_handler))
-        .route("/v1/compliance/metrics", get(api::handlers::compliance_metrics_handler))
-        .route("/health", get(|| async { axum::Json(serde_json::json!({"status": "ok", "service": "redeye_tracer"})) }))
+        .route(
+            "/v1/compliance/metrics",
+            get(api::handlers::compliance_metrics_handler),
+        )
+        .route(
+            "/health",
+            get(|| async {
+                axum::Json(serde_json::json!({"status": "ok", "service": "redeye_tracer"}))
+            }),
+        )
         .layer(cors)
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB limit
         .with_state(shared_repo);
@@ -82,10 +91,12 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], 8082));
     info!("🔍 RedEye Tracer listening on http://{}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
         .expect("Failed to bind TCP listener");
 
-    axum::serve(listener, app).await
+    axum::serve(listener, app)
+        .await
         .expect("Tracer server encountered a fatal error");
 }
 
@@ -94,7 +105,7 @@ async fn main() {
 /// Falls back to restricted local development origins if DASHBOARD_URL is not set.
 fn create_cors_layer() -> CorsLayer {
     let dashboard_url = env::var("DASHBOARD_URL").ok();
-    
+
     let origins = match dashboard_url {
         Some(url) => {
             vec![url.parse().expect("Invalid DASHBOARD_URL format")]
@@ -107,14 +118,14 @@ fn create_cors_layer() -> CorsLayer {
             ]
         }
     };
-    
+
     CorsLayer::new()
         .allow_origin(origins)
         .allow_credentials(true)
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::OPTIONS])
-        .allow_headers([
-            AUTHORIZATION,
-            CONTENT_TYPE,
-            "x-csrf-token".parse().unwrap(),
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::OPTIONS,
         ])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE, "x-csrf-token".parse().unwrap()])
 }

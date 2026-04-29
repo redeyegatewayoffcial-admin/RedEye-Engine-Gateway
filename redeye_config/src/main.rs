@@ -52,13 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Running database migrations…");
     let mut migrator = sqlx::migrate!("./migrations");
     migrator.set_ignore_missing(true);
-    migrator
-        .run(&pool)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "Database migration failed");
-            e
-        })?;
+    migrator.run(&pool).await.map_err(|e| {
+        tracing::error!(error = %e, "Database migration failed");
+        e
+    })?;
     tracing::info!("Migrations applied successfully");
 
     // ── 4. Redis client ──────────────────────────────────────────────────────
@@ -93,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── 5. Dependency wiring ─────────────────────────────────────────────────
     let state = AppState {
-        repo:  Arc::new(PgConfigRepository::new(pool)),
+        repo: Arc::new(PgConfigRepository::new(pool)),
         redis: Arc::new(RedisSyncClient::new(redis_client)),
     };
 

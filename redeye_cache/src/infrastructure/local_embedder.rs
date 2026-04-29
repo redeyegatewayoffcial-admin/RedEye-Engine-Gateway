@@ -60,8 +60,8 @@ impl LocalEmbedder {
 
         let opts = InitOptions::new(EmbeddingModel::BGESmallENV15);
 
-        let model = TextEmbedding::try_new(opts)
-            .map_err(|e| EmbedError::InitFailed(e.to_string()))?;
+        let model =
+            TextEmbedding::try_new(opts).map_err(|e| EmbedError::InitFailed(e.to_string()))?;
 
         info!("Local embedder initialized successfully (384-dim).");
 

@@ -53,21 +53,21 @@ pub struct ConfigResponse {
 /// field is *intentionally omitted* (`#[serde(skip)]` on [`ApiKeyRecord`]).
 #[derive(Debug, Serialize)]
 pub struct ApiKeyResponse {
-    pub id:         Uuid,
-    pub name:       String,
+    pub id: Uuid,
+    pub name: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub is_active:  bool,
+    pub is_active: bool,
 }
 
 impl From<ApiKeyRecord> for ApiKeyResponse {
     fn from(rec: ApiKeyRecord) -> Self {
         Self {
-            id:         rec.id,
-            name:       rec.name,
+            id: rec.id,
+            name: rec.name,
             created_at: rec.created_at,
             expires_at: rec.expires_at,
-            is_active:  rec.is_active,
+            is_active: rec.is_active,
         }
     }
 }
@@ -114,9 +114,9 @@ pub async fn upsert_config(
 
     // ── 2. Load existing config or fall back to system defaults ─────────────
     let base = match state.repo.get_config(tenant_id).await {
-        Ok(existing)                  => existing,
+        Ok(existing) => existing,
         Err(ConfigError::NotFound(_)) => ClientConfig::default_for(tenant_id),
-        Err(other)                    => return Err(other),
+        Err(other) => return Err(other),
     };
 
     // ── 3. Merge the partial update onto the base ────────────────────────────
@@ -235,10 +235,7 @@ mod tests {
     use crate::{
         api::router::create_router,
         domain::models::ClientConfig,
-        infrastructure::{
-            db::MockConfigRepository,
-            redis_sync::MockRedisSync,
-        },
+        infrastructure::{db::MockConfigRepository, redis_sync::MockRedisSync},
     };
 
     // ── Fixtures ────────────────────────────────────────────────────────────
@@ -246,34 +243,31 @@ mod tests {
     fn fixture_config(tenant_id: Uuid) -> ClientConfig {
         ClientConfig {
             tenant_id,
-            pii_masking_enabled:      true,
+            pii_masking_enabled: true,
             semantic_caching_enabled: true,
             routing_fallback_enabled: false,
-            rate_limit_rpm:           Some(1_000),
-            preferred_model:          Some("gpt-4o-mini".into()),
-            updated_at:               chrono::Utc::now(),
+            rate_limit_rpm: Some(1_000),
+            preferred_model: Some("gpt-4o-mini".into()),
+            updated_at: chrono::Utc::now(),
         }
     }
 
     fn fixture_api_key(tenant_id: Uuid) -> ApiKeyRecord {
         ApiKeyRecord {
-            id:         Uuid::new_v4(),
+            id: Uuid::new_v4(),
             tenant_id,
-            key_hash:   "sha256hashdeadbeef1234567890abcdef".into(),
-            name:       "Production Key".into(),
+            key_hash: "sha256hashdeadbeef1234567890abcdef".into(),
+            name: "Production Key".into(),
             created_at: chrono::Utc::now(),
             expires_at: None,
-            is_active:  true,
+            is_active: true,
         }
     }
 
     /// Builds a fully-configured Axum router with injected mocks.
-    fn build_app(
-        mock_repo:  MockConfigRepository,
-        mock_redis: MockRedisSync,
-    ) -> axum::Router {
+    fn build_app(mock_repo: MockConfigRepository, mock_redis: MockRedisSync) -> axum::Router {
         let state = AppState {
-            repo:  Arc::new(mock_repo),
+            repo: Arc::new(mock_repo),
             redis: Arc::new(mock_redis),
         };
         create_router(state)
@@ -284,7 +278,7 @@ mod tests {
     #[tokio::test]
     async fn get_config_returns_200_with_config_body() {
         let tenant_id = Uuid::new_v4();
-        let config    = fixture_config(tenant_id);
+        let config = fixture_config(tenant_id);
         let config_clone = config.clone();
 
         let mut mock_repo = MockConfigRepository::new();
@@ -393,7 +387,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_config_returns_200_and_pushes_to_redis() {
         let tenant_id = Uuid::new_v4();
-        let saved     = fixture_config(tenant_id);
+        let saved = fixture_config(tenant_id);
         let saved_clone = saved.clone();
 
         let mut mock_repo = MockConfigRepository::new();
@@ -468,7 +462,7 @@ mod tests {
         // Redis failure must NOT cause the handler to return an error —
         // the DB write is the authoritative operation.
         let tenant_id = Uuid::new_v4();
-        let saved     = fixture_config(tenant_id);
+        let saved = fixture_config(tenant_id);
         let saved_clone = saved.clone();
 
         let mut mock_repo = MockConfigRepository::new();
@@ -544,8 +538,8 @@ mod tests {
     #[tokio::test]
     async fn list_api_keys_returns_keys_without_key_hash() {
         let tenant_id = Uuid::new_v4();
-        let key       = fixture_api_key(tenant_id);
-        let key_id    = key.id;
+        let key = fixture_api_key(tenant_id);
+        let key_id = key.id;
 
         let mut mock_repo = MockConfigRepository::new();
         mock_repo
@@ -575,7 +569,10 @@ mod tests {
         assert_eq!(keys.len(), 1);
         // key_hash must NOT appear in the response (it is skip_serializing on ApiKeyRecord,
         // but double-check via the response DTO).
-        assert!(keys[0].get("key_hash").is_none(), "key_hash must never be serialised");
+        assert!(
+            keys[0].get("key_hash").is_none(),
+            "key_hash must never be serialised"
+        );
         assert_eq!(keys[0]["id"], key_id.to_string());
         assert_eq!(keys[0]["name"], "Production Key");
     }
@@ -585,8 +582,8 @@ mod tests {
     #[tokio::test]
     async fn revoke_api_key_returns_204_on_success() {
         let tenant_id = Uuid::new_v4();
-        let key       = fixture_api_key(tenant_id);
-        let key_id    = key.id;
+        let key = fixture_api_key(tenant_id);
+        let key_id = key.id;
 
         let mut mock_repo = MockConfigRepository::new();
         mock_repo
@@ -620,16 +617,17 @@ mod tests {
     #[tokio::test]
     async fn revoke_api_key_returns_404_when_key_not_found() {
         let tenant_id = Uuid::new_v4();
-        let key_id    = Uuid::new_v4();
+        let key_id = Uuid::new_v4();
 
         let mut mock_repo = MockConfigRepository::new();
         mock_repo
             .expect_revoke_api_key()
             .once()
             .returning(move |_, _| {
-                Err(ConfigError::NotFound(
-                    format!("API key {} not found for this tenant.", key_id),
-                ))
+                Err(ConfigError::NotFound(format!(
+                    "API key {} not found for this tenant.",
+                    key_id
+                )))
             });
 
         let app = build_app(mock_repo, MockRedisSync::new());
@@ -653,8 +651,8 @@ mod tests {
         // After DB hard-delete succeeds, a Redis failure must NOT cause a 5xx.
         // The key is already gone from the authoritative store.
         let tenant_id = Uuid::new_v4();
-        let key       = fixture_api_key(tenant_id);
-        let key_id    = key.id;
+        let key = fixture_api_key(tenant_id);
+        let key_id = key.id;
 
         let mut mock_repo = MockConfigRepository::new();
         mock_repo
@@ -690,13 +688,13 @@ mod tests {
     #[test]
     fn api_key_response_excludes_key_hash() {
         let rec = ApiKeyRecord {
-            id:         Uuid::new_v4(),
-            tenant_id:  Uuid::new_v4(),
-            key_hash:   "super_secret_hash".into(),
-            name:       "My Key".into(),
+            id: Uuid::new_v4(),
+            tenant_id: Uuid::new_v4(),
+            key_hash: "super_secret_hash".into(),
+            name: "My Key".into(),
             created_at: chrono::Utc::now(),
             expires_at: None,
-            is_active:  true,
+            is_active: true,
         };
         let response = ApiKeyResponse::from(rec);
         let json = serde_json::to_value(&response).unwrap();

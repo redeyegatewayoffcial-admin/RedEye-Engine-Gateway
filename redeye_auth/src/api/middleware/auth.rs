@@ -1,10 +1,10 @@
+use crate::infrastructure::security::verify_jwt;
 use axum::{
     body::Body,
-    http::{Request, StatusCode, HeaderMap},
+    http::{HeaderMap, Request, StatusCode},
     middleware::Next,
     response::Response,
 };
-use crate::infrastructure::security::verify_jwt;
 
 /// Sentinel returned alongside the token to signal how it was sourced.
 /// Used to enforce CSRF protection only on cookie-authenticated paths.
@@ -57,10 +57,7 @@ fn extract_token(headers: &HeaderMap) -> Option<(String, TokenSource)> {
     None
 }
 
-pub async fn auth_middleware(
-    mut req: Request<Body>,
-    next: Next,
-) -> Result<Response, StatusCode> {
+pub async fn auth_middleware(mut req: Request<Body>, next: Next) -> Result<Response, StatusCode> {
     if req.method() == axum::http::Method::OPTIONS {
         return Ok(next.run(req).await);
     }
@@ -80,7 +77,10 @@ pub async fn auth_middleware(
         let method = req.method();
         // Skip CSRF check for idempotent methods (GET, HEAD, OPTIONS)
         // Standard practice: CSRF only targets state-changing operations.
-        if method != axum::http::Method::GET && method != axum::http::Method::HEAD && method != axum::http::Method::OPTIONS {
+        if method != axum::http::Method::GET
+            && method != axum::http::Method::HEAD
+            && method != axum::http::Method::OPTIONS
+        {
             let csrf_present = req
                 .headers()
                 .get("x-csrf-token")

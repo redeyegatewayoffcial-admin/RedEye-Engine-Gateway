@@ -43,11 +43,11 @@ impl ErrorCode {
     /// Returns the canonical string representation used in JSON responses.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Internal            => "INTERNAL_ERROR",
-            Self::BadRequest          => "BAD_REQUEST",
-            Self::Unauthorized        => "UNAUTHORIZED",
-            Self::NotFound            => "NOT_FOUND",
-            Self::Conflict            => "CONFLICT",
+            Self::Internal => "INTERNAL_ERROR",
+            Self::BadRequest => "BAD_REQUEST",
+            Self::Unauthorized => "UNAUTHORIZED",
+            Self::NotFound => "NOT_FOUND",
+            Self::Conflict => "CONFLICT",
             Self::UnprocessableEntity => "UNPROCESSABLE_ENTITY",
         }
     }
@@ -64,7 +64,6 @@ impl ErrorCode {
 #[derive(Debug, Error)]
 pub enum ConfigError {
     // ── Client Errors (4xx) ────────────────────────────────────────────────
-
     /// The requested resource could not be found in the backing store.
     #[error("not found: {0}")]
     NotFound(String),
@@ -83,7 +82,6 @@ pub enum ConfigError {
     Unauthorized(String),
 
     // ── Server Errors (5xx) ────────────────────────────────────────────────
-
     /// A database operation failed. Details are logged but opaque to clients.
     /// The inner string is a sanitised description, never raw SQL or stack trace.
     #[error("database error: {0}")]
@@ -116,15 +114,11 @@ impl From<sqlx::Error> for ConfigError {
                 Self::NotFound("The requested resource was not found.".into())
             }
             // PG error code 23505 = unique_violation → expose as a 409 Conflict.
-            sqlx::Error::Database(db_err)
-                if db_err.code().as_deref() == Some("23505") =>
-            {
+            sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23505") => {
                 Self::Conflict("A resource with this identifier already exists.".into())
             }
             // PG error code 23503 = foreign_key_violation → safe surface message.
-            sqlx::Error::Database(db_err)
-                if db_err.code().as_deref() == Some("23503") =>
-            {
+            sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23503") => {
                 Self::Validation(
                     "The referenced tenant does not exist. Ensure the tenant is \
                      provisioned via redeye_auth before configuring it."
@@ -154,25 +148,23 @@ impl From<redis::RedisError> for ConfigError {
 impl ConfigError {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::NotFound(_)            => StatusCode::NOT_FOUND,
-            Self::Conflict(_)            => StatusCode::CONFLICT,
-            Self::Validation(_)          => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::Unauthorized(_)        => StatusCode::UNAUTHORIZED,
-            Self::Database(_)
-            | Self::Redis(_)
-            | Self::Internal(_)          => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::Database(_) | Self::Redis(_) | Self::Internal(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
     fn error_code(&self) -> ErrorCode {
         match self {
-            Self::NotFound(_)     => ErrorCode::NotFound,
-            Self::Conflict(_)     => ErrorCode::Conflict,
-            Self::Validation(_)   => ErrorCode::UnprocessableEntity,
+            Self::NotFound(_) => ErrorCode::NotFound,
+            Self::Conflict(_) => ErrorCode::Conflict,
+            Self::Validation(_) => ErrorCode::UnprocessableEntity,
             Self::Unauthorized(_) => ErrorCode::Unauthorized,
-            Self::Database(_)
-            | Self::Redis(_)
-            | Self::Internal(_)   => ErrorCode::Internal,
+            Self::Database(_) | Self::Redis(_) | Self::Internal(_) => ErrorCode::Internal,
         }
     }
 
@@ -182,21 +174,21 @@ impl ConfigError {
     /// [`IntoResponse::into_response`] for the full details.
     fn user_message(&self) -> &str {
         match self {
-            Self::NotFound(msg)     => msg.as_str(),
-            Self::Conflict(msg)     => msg.as_str(),
-            Self::Validation(msg)   => msg.as_str(),
+            Self::NotFound(msg) => msg.as_str(),
+            Self::Conflict(msg) => msg.as_str(),
+            Self::Validation(msg) => msg.as_str(),
             Self::Unauthorized(msg) => msg.as_str(),
-            Self::Database(_)       => "An unexpected database error occurred. Please retry.",
-            Self::Redis(_)          => "A caching error occurred. Please retry.",
-            Self::Internal(_)       => "An unexpected internal error occurred. Please retry.",
+            Self::Database(_) => "An unexpected database error occurred. Please retry.",
+            Self::Redis(_) => "A caching error occurred. Please retry.",
+            Self::Internal(_) => "An unexpected internal error occurred. Please retry.",
         }
     }
 }
 
 impl IntoResponse for ConfigError {
     fn into_response(self) -> Response {
-        let status  = self.status_code();
-        let code    = self.error_code();
+        let status = self.status_code();
+        let code = self.error_code();
         let message = self.user_message().to_owned();
 
         // Emit structured telemetry before consuming `self`.
@@ -332,11 +324,14 @@ mod tests {
 
     #[test]
     fn error_code_as_str_is_stable() {
-        assert_eq!(ErrorCode::Internal.as_str(),            "INTERNAL_ERROR");
-        assert_eq!(ErrorCode::BadRequest.as_str(),          "BAD_REQUEST");
-        assert_eq!(ErrorCode::Unauthorized.as_str(),        "UNAUTHORIZED");
-        assert_eq!(ErrorCode::NotFound.as_str(),            "NOT_FOUND");
-        assert_eq!(ErrorCode::Conflict.as_str(),            "CONFLICT");
-        assert_eq!(ErrorCode::UnprocessableEntity.as_str(), "UNPROCESSABLE_ENTITY");
+        assert_eq!(ErrorCode::Internal.as_str(), "INTERNAL_ERROR");
+        assert_eq!(ErrorCode::BadRequest.as_str(), "BAD_REQUEST");
+        assert_eq!(ErrorCode::Unauthorized.as_str(), "UNAUTHORIZED");
+        assert_eq!(ErrorCode::NotFound.as_str(), "NOT_FOUND");
+        assert_eq!(ErrorCode::Conflict.as_str(), "CONFLICT");
+        assert_eq!(
+            ErrorCode::UnprocessableEntity.as_str(),
+            "UNPROCESSABLE_ENTITY"
+        );
     }
 }

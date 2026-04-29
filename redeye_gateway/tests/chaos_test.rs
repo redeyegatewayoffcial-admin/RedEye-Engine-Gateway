@@ -4,21 +4,21 @@
 //! and verify the gateway's ability to gracefully degrade or hot-swap without
 //! returning unhandled 500 errors to the client.
 
-use std::net::SocketAddr;
-use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use jsonwebtoken::{encode, EncodingKey, Header};
+use std::net::SocketAddr;
+use std::sync::Arc;
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::{postgres::Postgres, redis::Redis};
 use tower::ServiceExt; // Provides `.oneshot()`
+use uuid::Uuid;
 use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
-use jsonwebtoken::{encode, EncodingKey, Header};
-use uuid::Uuid;
 
 use redeye_gateway::api::middleware::auth::Claims;
 use redeye_gateway::api::routes::create_router;
@@ -27,7 +27,10 @@ use redeye_gateway::infrastructure::cache_client::CacheGrpcClient;
 
 /// Helper: encrypts a dummy plaintext api key (matches AES logic in auth).
 fn encrypt_test_api_key(plaintext: &str, master_key: &str) -> Vec<u8> {
-    use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Key, Nonce};
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Key, Nonce,
+    };
     let key = Key::<Aes256Gcm>::from_slice(master_key.as_bytes());
     let cipher = Aes256Gcm::new(key);
     let nonce_bytes = [0u8; 12];
@@ -43,9 +46,18 @@ fn generate_test_jwt(tenant_id: &str) -> String {
     let claims = Claims {
         sub: "chaos_user".to_string(),
         tenant_id: tenant_id.to_string(),
-        exp: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600) as usize,
+        exp: (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600) as usize,
     };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(b"secret")).unwrap()
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(b"secret"),
+    )
+    .unwrap()
 }
 
 pub struct ChaosTestEnv {
@@ -63,14 +75,29 @@ impl ChaosTestEnv {
         std::env::set_var("AES_MASTER_KEY", "01234567890123456789012345678901");
         std::env::set_var("JWT_SECRET", "secret");
 
-        let redis_node = Redis::default().start().await.expect("Failed to start Redis");
-        let postgres_node = Postgres::default().start().await.expect("Failed to start Postgres");
+        let redis_node = Redis::default()
+            .start()
+            .await
+            .expect("Failed to start Redis");
+        let postgres_node = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start Postgres");
 
-        let redis_port = redis_node.get_host_port_ipv4(6379).await.expect("Failed to get Redis port");
-        let pg_port = postgres_node.get_host_port_ipv4(5432).await.expect("Failed to get Postgres port");
+        let redis_port = redis_node
+            .get_host_port_ipv4(6379)
+            .await
+            .expect("Failed to get Redis port");
+        let pg_port = postgres_node
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get Postgres port");
 
         let redis_url = format!("redis://127.0.0.1:{}", redis_port);
-        let db_url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", pg_port);
+        let db_url = format!(
+            "postgres://postgres:postgres@127.0.0.1:{}/postgres",
+            pg_port
+        );
 
         let redis_conn = redis::Client::open(redis_url)
             .expect("Failed to create Redis client")
@@ -78,15 +105,27 @@ impl ChaosTestEnv {
             .await
             .expect("Failed to connect to Redis");
 
-        let db_pool = sqlx::PgPool::connect(&db_url).await.expect("Failed to connect to Postgres");
+        let db_pool = sqlx::PgPool::connect(&db_url)
+            .await
+            .expect("Failed to connect to Postgres");
 
-        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"").execute(&db_pool).await.unwrap();
-        sqlx::query("CREATE TABLE tenants (id UUID PRIMARY KEY DEFAULT gen_random_uuid())").execute(&db_pool).await.unwrap();
-        sqlx::query("CREATE TABLE api_keys (tenant_id UUID, key_hash TEXT, is_active BOOLEAN)").execute(&db_pool).await.unwrap();
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&db_pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE tenants (id UUID PRIMARY KEY DEFAULT gen_random_uuid())")
+            .execute(&db_pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE api_keys (tenant_id UUID, key_hash TEXT, is_active BOOLEAN)")
+            .execute(&db_pool)
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, encrypted_key BYTEA, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name))").execute(&db_pool).await.unwrap();
 
         let tenant_id = Uuid::new_v4().to_string();
-        let encrypted_key = encrypt_test_api_key("sk-mock-openai-key-123", "01234567890123456789012345678901");
+        let encrypted_key =
+            encrypt_test_api_key("sk-mock-openai-key-123", "01234567890123456789012345678901");
 
         sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)")
             .bind(Uuid::parse_str(&tenant_id).unwrap())
@@ -118,8 +157,8 @@ impl ChaosTestEnv {
         let (telemetry_tx, _telemetry_rx) = tokio::sync::mpsc::channel(100);
 
         let cache_grpc_client = {
-            let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1")
-                .connect_lazy();
+            let channel =
+                tonic::transport::Channel::from_static("http://127.0.0.1:1").connect_lazy();
             CacheGrpcClient::new(channel)
         };
 
@@ -136,7 +175,9 @@ impl ChaosTestEnv {
             dashboard_url: "http://localhost:3000".to_string(),
             llm_api_base_url: Some(mock_server.uri()),
             telemetry_tx,
-            l1_cache: Arc::new(redeye_gateway::infrastructure::l1_cache::L1Cache::new(1024 * 1024).unwrap()),
+            l1_cache: Arc::new(
+                redeye_gateway::infrastructure::l1_cache::L1Cache::new(1024 * 1024).unwrap(),
+            ),
         });
 
         Self {
@@ -155,7 +196,7 @@ impl ChaosTestEnv {
 #[tokio::test]
 async fn test_redis_crash_resilience() {
     let mut env = ChaosTestEnv::setup(5).await;
-    
+
     // Mock the upstream LLM to succeed, so we know it gracefully fell back to it.
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -182,7 +223,9 @@ async fn test_redis_crash_resilience() {
         .unwrap();
 
     // Mock ConnectInfo for the Rate Limiter which usually reads IP from it.
-    request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
 
     let response = app.oneshot(request).await.expect("Router returned error");
 
@@ -192,10 +235,13 @@ async fn test_redis_crash_resilience() {
         StatusCode::OK,
         "Gateway failed to bypass cache when Redis was unavailable"
     );
-    
+
     let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
     let resp_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(resp_json["choices"][0]["message"]["content"], "Succeeded despite missing Redis!");
+    assert_eq!(
+        resp_json["choices"][0]["message"]["content"],
+        "Succeeded despite missing Redis!"
+    );
 }
 
 /// Scenario 2: Upstream returns slowly, ensure Gateway respects its timeout,
@@ -229,7 +275,9 @@ async fn test_llm_provider_timeout() {
         ))
         .unwrap();
 
-    request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
 
     let response = app.oneshot(request).await.expect("Router returned error");
 
@@ -248,21 +296,28 @@ async fn test_llm_provider_timeout() {
 #[tokio::test]
 async fn test_hot_swap_on_critical_failure() {
     let env = ChaosTestEnv::setup(5).await;
-    
+
     // Add Anthropic key to DB for Hot-Swap
-    let encrypted_anthropic_key = encrypt_test_api_key("sk-mock-anthropic-key-456", "01234567890123456789012345678901");
-    sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)")
-        .bind(Uuid::parse_str(&env.tenant_id).unwrap())
-        .bind("anthropic")
-        .bind(&encrypted_anthropic_key)
-        .execute(&env.state.db_pool)
-        .await
-        .unwrap();
+    let encrypted_anthropic_key = encrypt_test_api_key(
+        "sk-mock-anthropic-key-456",
+        "01234567890123456789012345678901",
+    );
+    sqlx::query(
+        "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)",
+    )
+    .bind(Uuid::parse_str(&env.tenant_id).unwrap())
+    .bind("anthropic")
+    .bind(&encrypted_anthropic_key)
+    .execute(&env.state.db_pool)
+    .await
+    .unwrap();
 
     // Primary Mock: OpenAI crashes and returns HTTP 500 (Critical failure)
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Critical Error at OpenAI"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_string("Internal Critical Error at OpenAI"),
+        )
         .mount(&env.mock_server)
         .await;
 
@@ -270,19 +325,19 @@ async fn test_hot_swap_on_critical_failure() {
     Mock::given(method("POST"))
         .and(path("/messages"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-             "id": "msg_01",
-             "type": "message",
-             "role": "assistant",
-             "content": [
-                 {
-                     "type": "text",
-                     "text": "Hot-Swap Successful! Anthropic here."
-                 }
-             ],
-             "model": "claude-3-opus-20240229",
-             "stop_reason": "end_turn",
-             "usage": { "input_tokens": 10, "output_tokens": 15 }
-         })))
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hot-Swap Successful! Anthropic here."
+                }
+            ],
+            "model": "claude-3-opus-20240229",
+            "stop_reason": "end_turn",
+            "usage": { "input_tokens": 10, "output_tokens": 15 }
+        })))
         .mount(&env.mock_server)
         .await;
 
@@ -299,7 +354,9 @@ async fn test_hot_swap_on_critical_failure() {
         ))
         .unwrap();
 
-    request.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
 
     let response = app.oneshot(request).await.expect("Router returned error");
 
@@ -309,15 +366,15 @@ async fn test_hot_swap_on_critical_failure() {
         StatusCode::OK,
         "Expected Hot-Swap to recover with a 200 OK after OpenAI 500"
     );
-    
+
     let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
     let resp_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    
+
     let content = resp_json["choices"][0]["message"]["content"]
         .as_str()
         .or_else(|| resp_json["content"][0]["text"].as_str())
         .expect("Expected content field in response");
-        
+
     assert!(
         content.contains("Anthropic here"),
         "Expected the translated fallback response from Anthropic, got: {}",

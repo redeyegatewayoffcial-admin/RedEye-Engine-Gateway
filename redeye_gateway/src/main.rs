@@ -65,16 +65,16 @@ async fn main() {
         .init();
 
     // ── Config ────────────────────────────────────────────────────────────────
-    let port: u16              = parse_env("GATEWAY_PORT", DEFAULT_PORT);
-    let _jwt_secret            = require_env("JWT_SECRET"); // strictly enforces presence at boot
-    let redis_url              = require_env("REDIS_URL");
-    let clickhouse_url         = require_env("CLICKHOUSE_URL");
-    let db_url                 = require_env("DATABASE_URL");
-    let tracer_url             = optional_env("TRACER_URL", DEFAULT_TRACER_URL);
-    let cache_grpc_endpoint    = optional_env("CACHE_GRPC_ENDPOINT", DEFAULT_CACHE_GRPC_ENDPOINT);
-    let compliance_url         = optional_env("COMPLIANCE_URL", DEFAULT_COMPLIANCE_URL);
-    let dashboard_url          = optional_env("DASHBOARD_URL", "http://localhost:5173");
-    let rate_limit_max: u32    = parse_env("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX);
+    let port: u16 = parse_env("GATEWAY_PORT", DEFAULT_PORT);
+    let _jwt_secret = require_env("JWT_SECRET"); // strictly enforces presence at boot
+    let redis_url = require_env("REDIS_URL");
+    let clickhouse_url = require_env("CLICKHOUSE_URL");
+    let db_url = require_env("DATABASE_URL");
+    let tracer_url = optional_env("TRACER_URL", DEFAULT_TRACER_URL);
+    let cache_grpc_endpoint = optional_env("CACHE_GRPC_ENDPOINT", DEFAULT_CACHE_GRPC_ENDPOINT);
+    let compliance_url = optional_env("COMPLIANCE_URL", DEFAULT_COMPLIANCE_URL);
+    let dashboard_url = optional_env("DASHBOARD_URL", "http://localhost:5173");
+    let rate_limit_max: u32 = parse_env("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX);
     let rate_limit_window: u32 = parse_env("RATE_LIMIT_WINDOW_SECS", DEFAULT_RATE_LIMIT_WINDOW);
 
     // ── Infrastructure clients ────────────────────────────────────────────────
@@ -100,8 +100,10 @@ async fn main() {
     let (telemetry_tx, mut telemetry_rx) = tokio::sync::mpsc::channel(5000);
 
     // ── gRPC Channel (L2 Cache) — built once, pooled, fail-open ──────────────
-    let cache_grpc_client = match tonic::transport::Channel::from_shared(cache_grpc_endpoint.clone())
-        .map(|endpoint| endpoint.connect_lazy())
+    let cache_grpc_client = match tonic::transport::Channel::from_shared(
+        cache_grpc_endpoint.clone(),
+    )
+    .map(|endpoint| endpoint.connect_lazy())
     {
         Ok(channel) => {
             info!(endpoint = %cache_grpc_endpoint, "gRPC channel to L2 cache established (lazy)");
@@ -111,13 +113,16 @@ async fn main() {
             // Non-fatal: gateway can still serve requests; all cache calls will fail-open.
             tracing::warn!(error = %e, endpoint = %cache_grpc_endpoint, "Failed to build gRPC channel — cache will be bypassed");
             // Fall back to a dummy channel pointing at a no-op loopback.
-            let fallback = tonic::transport::Channel::from_static("http://127.0.0.1:0").connect_lazy();
+            let fallback =
+                tonic::transport::Channel::from_static("http://127.0.0.1:0").connect_lazy();
             CacheGrpcClient::new(fallback)
         }
     };
 
-    let l1_cache = Arc::new(infrastructure::l1_cache::L1Cache::new(500 * 1024 * 1024)
-        .expect("Failed to initialize Hybrid L1 Cache"));
+    let l1_cache = Arc::new(
+        infrastructure::l1_cache::L1Cache::new(500 * 1024 * 1024)
+            .expect("Failed to initialize Hybrid L1 Cache"),
+    );
 
     let state = Arc::new(AppState {
         http_client: http_client.clone(),
@@ -142,7 +147,7 @@ async fn main() {
     tokio::spawn(async move {
         let mut buffer: Vec<serde_json::Value> = Vec::with_capacity(1000);
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        
+
         // Ensure the first tick doesn't trigger immediately before buffering anything
         interval.tick().await;
 
@@ -181,7 +186,7 @@ async fn main() {
                                     .body(body)
                                     .send()
                                     .await;
-                                
+
                                 buffer.clear();
                                 // Reset interval so we don't immediately tick and flush an empty buffer
                                 interval.reset();
@@ -220,7 +225,10 @@ async fn main() {
         .await
         .expect("Failed to bind TCP listener");
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .expect("Axum server encountered a fatal error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("Axum server encountered a fatal error");
 }

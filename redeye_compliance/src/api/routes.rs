@@ -1,12 +1,9 @@
+use axum::{routing::post, Router};
 use std::sync::Arc;
-use axum::{
-    routing::post,
-    Router,
-};
 
+use crate::api::handlers::{check_routing, redact_prompt};
 use crate::api::middleware::geo_routing::{geo_routing_middleware, SharedConfig};
 use crate::api::middleware::security::{security_guard_middleware, SecurityState};
-use crate::api::handlers::{check_routing, redact_prompt};
 use crate::usecases::pii_engine::PiiEngine;
 
 #[derive(Clone)]

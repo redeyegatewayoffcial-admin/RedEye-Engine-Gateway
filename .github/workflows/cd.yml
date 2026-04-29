@@ -1,0 +1,57 @@
+# name: CD
+
+# on:
+#   push:
+#     branches: [ main ]
+
+# jobs:
+#   build-and-publish:
+#     name: Build & Push Production Images
+#     runs-on: ubuntu-latest
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v4
+
+#       - name: Set up Docker Buildx
+#         uses: docker/setup-buildx-action@v3
+
+#       - name: Login to Docker Hub
+#         uses: docker/login-action@v3
+#         with:
+#           username: ${{ secrets.DOCKERHUB_USERNAME }}
+#           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+#       # ── Gateway Service ────────────────────────────────────────────────────────
+#       - name: Build & Push Gateway
+#         uses: docker/build-push-action@v5
+#         with:
+#           context: .
+#           file: ./redeye_gateway/Dockerfile
+#           push: true
+#           tags: |
+#             ${{ secrets.DOCKERHUB_USERNAME }}/redeye-gateway:latest
+#             ${{ secrets.DOCKERHUB_USERNAME }}/redeye-gateway:${{ github.sha }}
+
+#       # ── Auth Service ───────────────────────────────────────────────────────────
+#       - name: Build & Push Auth
+#         uses: docker/build-push-action@v5
+#         with:
+#           context: .
+#           file: ./redeye_auth/Dockerfile
+#           push: true
+#           tags: |
+#             ${{ secrets.DOCKERHUB_USERNAME }}/redeye-auth:latest
+#             ${{ secrets.DOCKERHUB_USERNAME }}/redeye-auth:${{ github.sha }}
+
+#       # ── Dashboard Service ──────────────────────────────────────────────────────
+#       - name: Build & Push Dashboard
+#         uses: docker/build-push-action@v5
+#         with:
+#           context: .
+#           file: ./redeye_dashboard/Dockerfile
+#           push: true
+#           tags: |
+#             ${{ secrets.DOCKERHUB_USERNAME }}/redeye-dashboard:latest
+#             ${{ secrets.DOCKERHUB_USERNAME }}/redeye-dashboard:${{ github.sha }}

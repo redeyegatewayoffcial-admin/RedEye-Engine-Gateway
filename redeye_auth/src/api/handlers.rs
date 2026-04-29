@@ -1,13 +1,24 @@
-use axum::{extract::{State, Extension}, Json, http::{HeaderMap, HeaderValue, header::SET_COOKIE}};
-use serde::{Deserialize, Serialize};
-use crate::{AppState, error::AppError, infrastructure::security::{hash_password, verify_password, generate_jwt, encrypt_api_key, generate_redeye_api_key, verify_jwt, generate_refresh_token, Claims}};
-use uuid::Uuid;
-use sqlx::Row;
-use rand::Rng;
-use oauth2::{
-    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret,
-    CsrfToken, RedirectUrl, Scope, TokenResponse, TokenUrl, reqwest::async_http_client,
+use crate::{
+    error::AppError,
+    infrastructure::security::{
+        encrypt_api_key, generate_jwt, generate_redeye_api_key, generate_refresh_token,
+        hash_password, verify_jwt, verify_password, Claims,
+    },
+    AppState,
 };
+use axum::{
+    extract::{Extension, State},
+    http::{header::SET_COOKIE, HeaderMap, HeaderValue},
+    Json,
+};
+use oauth2::{
+    basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
+    ClientSecret, CsrfToken, RedirectUrl, Scope, TokenResponse, TokenUrl,
+};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use sqlx::Row;
+use uuid::Uuid;
 
 use reqwest::Client;
 
@@ -15,11 +26,14 @@ use reqwest::Client;
 pub const JWT_MAX_AGE_SECS: usize = 604800;
 
 fn create_cookie_header(name: &str, value: &str, max_age_secs: usize, same_site: &str) -> String {
-    let mut cookie = format!("{}={}; HttpOnly; Path=/; Max-Age={}; SameSite={}", name, value, max_age_secs, same_site);
+    let mut cookie = format!(
+        "{}={}; HttpOnly; Path=/; Max-Age={}; SameSite={}",
+        name, value, max_age_secs, same_site
+    );
 
-    let is_prod = std::env::var("APP_ENV").unwrap_or_default().to_lowercase() == "production" || 
-                  std::env::var("NODE_ENV").unwrap_or_default().to_lowercase() == "production";
-    
+    let is_prod = std::env::var("APP_ENV").unwrap_or_default().to_lowercase() == "production"
+        || std::env::var("NODE_ENV").unwrap_or_default().to_lowercase() == "production";
+
     if is_prod {
         cookie.push_str("; Secure");
     }
@@ -54,7 +68,8 @@ async fn send_real_otp_email(to_email: &str, otp_code: &str) -> Result<(), AppEr
         "html": email_html
     });
 
-    let res = client.post("https://api.resend.com/emails")
+    let res = client
+        .post("https://api.resend.com/emails")
         .bearer_auth(api_key)
         .json(&payload)
         .send()
@@ -94,25 +109,25 @@ pub async fn signup(
     State(state): State<AppState>,
     Json(payload): Json<SignupRequest>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    
     // 1. Check if email already exists
     let email_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
         .bind(&payload.email)
         .fetch_one(&state.db_pool)
         .await?
         .get(0);
-        
+
     if email_exists {
         return Err(AppError::Conflict("Email already registered".into()));
     }
-    
+
     // 2. Check if company_name already exists
-    let workspace_exists: bool = sqlx::query("SELECT EXISTS(SELECT 1 FROM tenants WHERE name = $1)")
-        .bind(&payload.company_name)
-        .fetch_one(&state.db_pool)
-        .await?
-        .get(0);
-        
+    let workspace_exists: bool =
+        sqlx::query("SELECT EXISTS(SELECT 1 FROM tenants WHERE name = $1)")
+            .bind(&payload.company_name)
+            .fetch_one(&state.db_pool)
+            .await?
+            .get(0);
+
     if workspace_exists {
         return Err(AppError::Conflict("Workspace name already taken".into()));
     }
@@ -122,16 +137,14 @@ pub async fn signup(
     // 3. Begin Atomic Transaction
     let mut tx = state.db_pool.begin().await?;
 
-    let tenant_id: Uuid = sqlx::query(
-        "INSERT INTO tenants (name) VALUES ($1) RETURNING id"
-    )
-    .bind(&payload.company_name)
-    .fetch_one(&mut *tx)
-    .await?
-    .get("id");
+    let tenant_id: Uuid = sqlx::query("INSERT INTO tenants (name) VALUES ($1) RETURNING id")
+        .bind(&payload.company_name)
+        .fetch_one(&mut *tx)
+        .await?
+        .get("id");
 
     let user_id: Uuid = sqlx::query(
-        "INSERT INTO users (email, password_hash, tenant_id) VALUES ($1, $2, $3) RETURNING id"
+        "INSERT INTO users (email, password_hash, tenant_id) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(&payload.email)
     .bind(&hashed_pw)
@@ -153,22 +166,26 @@ pub async fn signup(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let refresh_cookie =
+        create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
     let jwt_cookie = create_cookie_header("re_token", &token, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
     headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
-    Ok((headers, Json(AuthResponse { 
-        id: user_id,
-        email: payload.email,
-        tenant_id,
-        workspace_name: payload.company_name,
-        onboarding_complete: false,
-        token,
-        redeye_api_key: None,
-    })))
+    Ok((
+        headers,
+        Json(AuthResponse {
+            id: user_id,
+            email: payload.email,
+            tenant_id,
+            workspace_name: payload.company_name,
+            onboarding_complete: false,
+            token,
+            redeye_api_key: None,
+        }),
+    ))
 }
 
 // --- POST /v1/auth/login ---
@@ -196,7 +213,7 @@ pub async fn login(
 
     let p_hash: String = user_row.get("password_hash");
     let is_valid = verify_password(&p_hash, &payload.password)?;
-    
+
     if !is_valid {
         return Err(AppError::Unauthorized("Invalid email or password".into()));
     }
@@ -217,22 +234,26 @@ pub async fn login(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let refresh_cookie =
+        create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
     let jwt_cookie = create_cookie_header("re_token", &token, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
     headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
-    Ok((headers, Json(AuthResponse {
-        id: user_id,
-        email: payload.email,
-        tenant_id,
-        workspace_name,
-        onboarding_complete,
-        token,
-        redeye_api_key: None,
-    })))
+    Ok((
+        headers,
+        Json(AuthResponse {
+            id: user_id,
+            email: payload.email,
+            tenant_id,
+            workspace_name,
+            onboarding_complete,
+            token,
+            redeye_api_key: None,
+        }),
+    ))
 }
 
 // --- POST /v1/auth/refresh ---
@@ -241,24 +262,26 @@ pub async fn refresh(
     headers: HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     // Read the refresh_token from cookies
-    let cookie_header = headers.get(axum::http::header::COOKIE)
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| AppError::Unauthorized("Missing refresh token cookie".into()))?;
-        
-    let raw_refresh = cookie_header.split(';')
+
+    let raw_refresh = cookie_header
+        .split(';')
         .map(|s| s.trim())
         .find(|s| s.starts_with("refresh_token="))
         .map(|s| &s["refresh_token=".len()..])
         .ok_or_else(|| AppError::Unauthorized("Refresh token cookie not found".into()))?;
 
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(raw_refresh.as_bytes());
     let old_token_hash = hex::encode(hasher.finalize());
 
     // Verify the old refresh token exists and is valid
     let row = sqlx::query(
-        "SELECT user_id FROM refresh_tokens WHERE token_hash = $1 AND expires_at > NOW()"
+        "SELECT user_id FROM refresh_tokens WHERE token_hash = $1 AND expires_at > NOW()",
     )
     .bind(&old_token_hash)
     .fetch_optional(&state.db_pool)
@@ -266,7 +289,11 @@ pub async fn refresh(
 
     let user_id: Uuid = match row {
         Some(r) => r.get("user_id"),
-        None => return Err(AppError::Unauthorized("Invalid or expired refresh token".into())),
+        None => {
+            return Err(AppError::Unauthorized(
+                "Invalid or expired refresh token".into(),
+            ))
+        }
     };
 
     // REFRESH TOKEN ROTATION: Delete the old refresh token (invalidate it)
@@ -280,7 +307,7 @@ pub async fn refresh(
         .bind(user_id)
         .fetch_one(&state.db_pool)
         .await?;
-        
+
     let email: String = user_row.get("email");
     let tenant_id: Uuid = user_row.get("tenant_id");
 
@@ -288,7 +315,7 @@ pub async fn refresh(
         .bind(tenant_id)
         .fetch_one(&state.db_pool)
         .await?;
-        
+
     let workspace_name: String = tenant_row.get("name");
     let onboarding_complete: bool = tenant_row.get("onboarding_status");
 
@@ -307,7 +334,12 @@ pub async fn refresh(
 
     // Set new HttpOnly, Secure cookies with the new tokens
     let jwt_cookie = create_cookie_header("re_token", &jwt, JWT_MAX_AGE_SECS, "Lax");
-    let refresh_cookie = create_cookie_header("refresh_token", &new_raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let refresh_cookie = create_cookie_header(
+        "refresh_token",
+        &new_raw_refresh,
+        JWT_MAX_AGE_SECS,
+        "Strict",
+    );
 
     let mut response_headers = HeaderMap::new();
     response_headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
@@ -340,25 +372,25 @@ pub async fn onboard(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<OnboardRequest>,
 ) -> Result<Json<AuthResponse>, AppError> {
-    
-    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
-        AppError::Internal("Invalid tenant ID in token".into())
-    })?;
-    
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| {
-        AppError::Internal("Invalid user ID in token".into())
-    })?;
+    let tenant_id = Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| AppError::Internal("Invalid tenant ID in token".into()))?;
+
+    let user_id = Uuid::parse_str(&claims.sub)
+        .map_err(|_| AppError::Internal("Invalid user ID in token".into()))?;
 
     // Validate account_type
     let account_type = payload.account_type.to_lowercase();
     if account_type != "individual" && account_type != "team" {
-        return Err(AppError::BadRequest("account_type must be 'individual' or 'team'".into()));
+        return Err(AppError::BadRequest(
+            "account_type must be 'individual' or 'team'".into(),
+        ));
     }
 
     // Validate the provider API key against the provider
-    let is_valid = crate::infrastructure::llm_validator::validate_api_key(&payload.provider, &payload.api_key)
-        .await
-        .map_err(|e| AppError::Internal(e))?;
+    let is_valid =
+        crate::infrastructure::llm_validator::validate_api_key(&payload.provider, &payload.api_key)
+            .await
+            .map_err(|e| AppError::Internal(e))?;
 
     if !is_valid {
         return Err(AppError::BadRequest("Invalid Provider API Key".into()));
@@ -366,14 +398,16 @@ pub async fn onboard(
 
     // Encrypt the validated provider API key
     let encrypted_key = encrypt_api_key(&payload.api_key)?;
-    
+
     // Generate RedEye Virtual API Key
     let redeye_api_key = generate_redeye_api_key();
     let key_hash = crate::infrastructure::security::hash_api_key(&redeye_api_key);
 
     // Determine virtual key name based on account type
     let key_name = if account_type == "team" {
-        payload.workspace_name.as_ref()
+        payload
+            .workspace_name
+            .as_ref()
             .map(|name| format!("{} Key", name))
             .unwrap_or_else(|| "Team Key".to_string())
     } else {
@@ -394,14 +428,12 @@ pub async fn onboard(
         .await?;
         ws_name.clone()
     } else {
-        sqlx::query(
-            "UPDATE tenants SET onboarding_status = true, account_type = $1 WHERE id = $2"
-        )
-        .bind(&account_type)
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
-        
+        sqlx::query("UPDATE tenants SET onboarding_status = true, account_type = $1 WHERE id = $2")
+            .bind(&account_type)
+            .bind(tenant_id)
+            .execute(&mut *tx)
+            .await?;
+
         // Fetch current tenant name
         sqlx::query("SELECT name FROM tenants WHERE id = $1")
             .bind(tenant_id)
@@ -414,7 +446,7 @@ pub async fn onboard(
     // Insert encrypted provider key into provider_keys table
     sqlx::query(
         "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3"
+         ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3",
     )
     .bind(tenant_id)
     .bind(&payload.provider)
@@ -423,20 +455,18 @@ pub async fn onboard(
     .await?;
 
     // Insert virtual API key into api_keys table
-    sqlx::query(
-        "INSERT INTO api_keys (tenant_id, key_hash, name) VALUES ($1, $2, $3)"
-    )
-    .bind(tenant_id)
-    .bind(&key_hash)
-    .bind(&key_name)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("INSERT INTO api_keys (tenant_id, key_hash, name) VALUES ($1, $2, $3)")
+        .bind(tenant_id)
+        .bind(&key_hash)
+        .bind(&key_name)
+        .execute(&mut *tx)
+        .await?;
 
     // Also update llm_routes for backward compatibility
     sqlx::query(
         "INSERT INTO llm_routes (tenant_id, provider, model, is_default, encrypted_api_key)
          VALUES ($1, $2, 'default', true, $3)
-         ON CONFLICT (tenant_id, provider) DO UPDATE SET encrypted_api_key = $3"
+         ON CONFLICT (tenant_id, provider) DO UPDATE SET encrypted_api_key = $3",
     )
     .bind(tenant_id)
     .bind(&payload.provider)
@@ -445,7 +475,7 @@ pub async fn onboard(
     .await?;
 
     tx.commit().await?;
-    
+
     let email: String = sqlx::query("SELECT email FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_one(&state.db_pool)
@@ -481,10 +511,8 @@ pub async fn get_api_keys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<ApiKeyResponse>>, AppError> {
-    
-    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
-        AppError::Internal("Invalid tenant ID in token".into())
-    })?;
+    let tenant_id = Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| AppError::Internal("Invalid tenant ID in token".into()))?;
 
     let rows = sqlx::query(
         "SELECT id, name, key_hash, created_at FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC"
@@ -493,13 +521,18 @@ pub async fn get_api_keys(
     .fetch_all(&state.db_pool)
     .await?;
 
-    let keys = rows.into_iter().map(|row| ApiKeyResponse {
-        id: row.try_get("id").unwrap_or_default(),
-        name: row.try_get("name").unwrap_or_default(),
-        key_hash: row.try_get("key_hash").unwrap_or_default(),
-        created_at: row.try_get("created_at").unwrap_or_else(|_| chrono::Utc::now()),
-        status: "Active".to_string(), // In a real app we'd track revoked status in DB. For now they are Active
-    }).collect();
+    let keys = rows
+        .into_iter()
+        .map(|row| ApiKeyResponse {
+            id: row.try_get("id").unwrap_or_default(),
+            name: row.try_get("name").unwrap_or_default(),
+            key_hash: row.try_get("key_hash").unwrap_or_default(),
+            created_at: row
+                .try_get("created_at")
+                .unwrap_or_else(|_| chrono::Utc::now()),
+            status: "Active".to_string(), // In a real app we'd track revoked status in DB. For now they are Active
+        })
+        .collect();
 
     Ok(Json(keys))
 }
@@ -507,7 +540,7 @@ pub async fn get_api_keys(
 // --- POST /v1/auth/provider-keys ---
 #[derive(Deserialize)]
 pub struct AddProviderKeyRequest {
-    pub provider_name: String,  // e.g., 'openai', 'anthropic', 'gemini', 'groq'
+    pub provider_name: String, // e.g., 'openai', 'anthropic', 'gemini', 'groq'
     pub provider_api_key: String,
 }
 
@@ -523,15 +556,16 @@ pub async fn add_provider_key(
     Extension(claims): Extension<Claims>,
     Json(payload): Json<AddProviderKeyRequest>,
 ) -> Result<Json<ProviderKeyResponse>, AppError> {
-    
-    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
-        AppError::Internal("Invalid tenant ID in token".into())
-    })?;
+    let tenant_id = Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| AppError::Internal("Invalid tenant ID in token".into()))?;
 
     // Validate the provider API key against the provider
-    let is_valid = crate::infrastructure::llm_validator::validate_api_key(&payload.provider_name, &payload.provider_api_key)
-        .await
-        .map_err(|e| AppError::Internal(e))?;
+    let is_valid = crate::infrastructure::llm_validator::validate_api_key(
+        &payload.provider_name,
+        &payload.provider_api_key,
+    )
+    .await
+    .map_err(|e| AppError::Internal(e))?;
 
     if !is_valid {
         return Err(AppError::BadRequest("Invalid Provider API Key".into()));
@@ -544,7 +578,7 @@ pub async fn add_provider_key(
     let row = sqlx::query(
         "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)
          ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3
-         RETURNING id, provider_name, created_at"
+         RETURNING id, provider_name, created_at",
     )
     .bind(tenant_id)
     .bind(&payload.provider_name)
@@ -552,14 +586,21 @@ pub async fn add_provider_key(
     .fetch_one(&state.db_pool)
     .await?;
 
-    let id: Uuid = row.try_get("id")
+    let id: Uuid = row
+        .try_get("id")
         .map_err(|_| AppError::Internal("Failed to fetch provider key ID".into()))?;
-    let provider_name: String = row.try_get("provider_name")
+    let provider_name: String = row
+        .try_get("provider_name")
         .map_err(|_| AppError::Internal("Failed to fetch provider name".into()))?;
-    let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")
+    let created_at: chrono::DateTime<chrono::Utc> = row
+        .try_get("created_at")
         .map_err(|_| AppError::Internal("Failed to fetch created_at".into()))?;
 
-    tracing::info!("Added provider key for tenant {}: provider={}", tenant_id, provider_name);
+    tracing::info!(
+        "Added provider key for tenant {}: provider={}",
+        tenant_id,
+        provider_name
+    );
 
     Ok(Json(ProviderKeyResponse {
         id,
@@ -573,10 +614,8 @@ pub async fn get_provider_keys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<ProviderKeyResponse>>, AppError> {
-    
-    let tenant_id = Uuid::parse_str(&claims.tenant_id).map_err(|_| {
-        AppError::Internal("Invalid tenant ID in token".into())
-    })?;
+    let tenant_id = Uuid::parse_str(&claims.tenant_id)
+        .map_err(|_| AppError::Internal("Invalid tenant ID in token".into()))?;
 
     let rows = sqlx::query(
         "SELECT id, provider_name, created_at FROM provider_keys WHERE tenant_id = $1 ORDER BY created_at DESC"
@@ -585,11 +624,16 @@ pub async fn get_provider_keys(
     .fetch_all(&state.db_pool)
     .await?;
 
-    let keys = rows.into_iter().map(|row| ProviderKeyResponse {
-        id: row.try_get("id").unwrap_or_default(),
-        provider_name: row.try_get("provider_name").unwrap_or_default(),
-        created_at: row.try_get("created_at").unwrap_or_else(|_| chrono::Utc::now()),
-    }).collect();
+    let keys = rows
+        .into_iter()
+        .map(|row| ProviderKeyResponse {
+            id: row.try_get("id").unwrap_or_default(),
+            provider_name: row.try_get("provider_name").unwrap_or_default(),
+            created_at: row
+                .try_get("created_at")
+                .unwrap_or_else(|_| chrono::Utc::now()),
+        })
+        .collect();
 
     Ok(Json(keys))
 }
@@ -615,20 +659,20 @@ pub async fn request_otp(
     let expires_at = chrono::Utc::now() + chrono::Duration::minutes(10);
 
     // 3. Save to DB
-    sqlx::query(
-        "INSERT INTO auth_otps (email, otp_code, expires_at) VALUES ($1, $2, $3)"
-    )
-    .bind(&payload.email)
-    .bind(&otp_code)
-    .bind(expires_at)
-    .execute(&state.db_pool)
-    .await?;
+    sqlx::query("INSERT INTO auth_otps (email, otp_code, expires_at) VALUES ($1, $2, $3)")
+        .bind(&payload.email)
+        .bind(&otp_code)
+        .bind(expires_at)
+        .execute(&state.db_pool)
+        .await?;
 
     // --- REAL EMAIL SENDER ---
     send_real_otp_email(&payload.email, &otp_code).await?;
     tracing::info!("✉️ Real OTP Email sent to: {}", payload.email);
 
-    Ok(Json(serde_json::json!({"message": "OTP sent to email successfully"})))
+    Ok(Json(
+        serde_json::json!({"message": "OTP sent to email successfully"}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -642,7 +686,7 @@ pub async fn verify_otp(
     Json(payload): Json<OtpVerifyPayload>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let row = sqlx::query(
-        "SELECT id FROM auth_otps WHERE email = $1 AND otp_code = $2 AND expires_at > NOW()"
+        "SELECT id FROM auth_otps WHERE email = $1 AND otp_code = $2 AND expires_at > NOW()",
     )
     .bind(&payload.email)
     .bind(&payload.otp_code)
@@ -682,7 +726,7 @@ pub async fn verify_otp(
             .fetch_one(&mut *tx)
             .await?
             .get("id");
-        
+
         let new_u_id: Uuid = sqlx::query(
             "INSERT INTO users (email, tenant_id, auth_provider) VALUES ($1, $2, 'email_otp') RETURNING id"
         )
@@ -708,33 +752,45 @@ pub async fn verify_otp(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let refresh_cookie =
+        create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
     let jwt_cookie = create_cookie_header("re_token", &token, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.insert(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
     headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
-    Ok((headers, Json(AuthResponse {
-        id: user_id,
-        email: payload.email,
-        tenant_id,
-        workspace_name,
-        onboarding_complete,
-        token,
-        redeye_api_key: None,
-    })))
+    Ok((
+        headers,
+        Json(AuthResponse {
+            id: user_id,
+            email: payload.email,
+            tenant_id,
+            workspace_name,
+            onboarding_complete,
+            token,
+            redeye_api_key: None,
+        }),
+    ))
 }
 
 // --- Google OAuth Handlers ---
 fn google_oauth_client() -> BasicClient {
     BasicClient::new(
         ClientId::new(std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default()),
-        Some(ClientSecret::new(std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default())),
+        Some(ClientSecret::new(
+            std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default(),
+        )),
         AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
         Some(TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap()),
     )
-    .set_redirect_uri(RedirectUrl::new(std::env::var("GOOGLE_REDIRECT_URI").unwrap_or_else(|_| "http://localhost:8084/v1/auth/google/callback".to_string())).unwrap())
+    .set_redirect_uri(
+        RedirectUrl::new(
+            std::env::var("GOOGLE_REDIRECT_URI")
+                .unwrap_or_else(|_| "http://localhost:8084/v1/auth/google/callback".to_string()),
+        )
+        .unwrap(),
+    )
 }
 
 pub async fn google_login() -> impl axum::response::IntoResponse {
@@ -746,7 +802,10 @@ pub async fn google_login() -> impl axum::response::IntoResponse {
 
     let cookie = create_cookie_header("oauth_state", csrf_token.secret(), 600, "Lax");
     let mut headers = axum::http::HeaderMap::new();
-    headers.insert(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&cookie).unwrap());
+    headers.insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&cookie).unwrap(),
+    );
 
     (headers, axum::response::Redirect::to(auth_url.as_ref()))
 }
@@ -762,11 +821,13 @@ pub async fn google_callback(
     axum::extract::Query(query): axum::extract::Query<OAuthCallbackQuery>,
     headers: axum::http::HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let cookie_header = headers.get(axum::http::header::COOKIE)
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| AppError::Unauthorized("Missing OAuth state cookie".into()))?;
-        
-    let saved_state = cookie_header.split(';')
+
+    let saved_state = cookie_header
+        .split(';')
         .map(|s| s.trim())
         .find(|s| s.starts_with("oauth_state="))
         .map(|s| &s["oauth_state=".len()..])
@@ -794,8 +855,16 @@ pub async fn google_callback(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let email = user_info.get("email").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    let sub = user_info.get("sub").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let email = user_info
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let sub = user_info
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
 
     if email.is_empty() {
         return Err(AppError::Unauthorized("No email from Google".into()));
@@ -817,7 +886,7 @@ pub async fn google_callback(
             .await?;
         let t_name: String = t_row.get("name");
         let onboarding_sts: bool = t_row.get("onboarding_status");
-        
+
         sqlx::query("UPDATE users SET auth_provider = 'google', provider_id = $1 WHERE id = $2")
             .bind(&sub)
             .bind(u_id)
@@ -831,7 +900,7 @@ pub async fn google_callback(
             .fetch_one(&mut *tx)
             .await?
             .get("id");
-        
+
         let new_u_id: Uuid = sqlx::query(
             "INSERT INTO users (email, tenant_id, auth_provider, provider_id) VALUES ($1, $2, 'google', $3) RETURNING id"
         )
@@ -859,19 +928,27 @@ pub async fn google_callback(
     .await?;
 
     // Clear oauth_state cookie, set refresh_token cookie with appropriate env flags
-    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let refresh_cookie =
+        create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
     let state_clear_cookie = create_cookie_header("oauth_state", "", 0, "Lax");
     // Set JWT as HttpOnly Secure cookie instead of URL parameter
     let jwt_cookie = create_cookie_header("re_token", &jwt, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = HeaderMap::new();
     headers.append(SET_COOKIE, HeaderValue::from_str(&refresh_cookie).unwrap());
-    headers.append(SET_COOKIE, HeaderValue::from_str(&state_clear_cookie).unwrap());
+    headers.append(
+        SET_COOKIE,
+        HeaderValue::from_str(&state_clear_cookie).unwrap(),
+    );
     headers.append(SET_COOKIE, HeaderValue::from_str(&jwt_cookie).unwrap());
 
     // Redirect without token in URL - client reads from cookie
-    let dashboard_url = std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
-    let redirect_url = format!("{}{}?onboarding_complete={}", dashboard_url, "/oauth/callback", onboarding_complete);
+    let dashboard_url =
+        std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let redirect_url = format!(
+        "{}{}?onboarding_complete={}",
+        dashboard_url, "/oauth/callback", onboarding_complete
+    );
 
     Ok((headers, axum::response::Redirect::to(&redirect_url)))
 }
@@ -880,11 +957,19 @@ pub async fn google_callback(
 fn github_oauth_client() -> BasicClient {
     BasicClient::new(
         ClientId::new(std::env::var("GITHUB_CLIENT_ID").unwrap_or_default()),
-        Some(ClientSecret::new(std::env::var("GITHUB_CLIENT_SECRET").unwrap_or_default())),
+        Some(ClientSecret::new(
+            std::env::var("GITHUB_CLIENT_SECRET").unwrap_or_default(),
+        )),
         AuthUrl::new("https://github.com/login/oauth/authorize".to_string()).unwrap(),
         Some(TokenUrl::new("https://github.com/login/oauth/access_token".to_string()).unwrap()),
     )
-    .set_redirect_uri(RedirectUrl::new(std::env::var("GITHUB_REDIRECT_URI").unwrap_or_else(|_| "http://localhost:8084/v1/auth/github/callback".to_string())).unwrap())
+    .set_redirect_uri(
+        RedirectUrl::new(
+            std::env::var("GITHUB_REDIRECT_URI")
+                .unwrap_or_else(|_| "http://localhost:8084/v1/auth/github/callback".to_string()),
+        )
+        .unwrap(),
+    )
 }
 
 pub async fn github_login() -> impl axum::response::IntoResponse {
@@ -895,7 +980,10 @@ pub async fn github_login() -> impl axum::response::IntoResponse {
 
     let cookie = create_cookie_header("oauth_state", csrf_token.secret(), 600, "Lax");
     let mut headers = axum::http::HeaderMap::new();
-    headers.insert(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&cookie).unwrap());
+    headers.insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&cookie).unwrap(),
+    );
 
     (headers, axum::response::Redirect::to(auth_url.as_ref()))
 }
@@ -905,11 +993,13 @@ pub async fn github_callback(
     axum::extract::Query(query): axum::extract::Query<OAuthCallbackQuery>,
     headers: axum::http::HeaderMap,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
-    let cookie_header = headers.get(axum::http::header::COOKIE)
+    let cookie_header = headers
+        .get(axum::http::header::COOKIE)
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| AppError::Unauthorized("Missing OAuth state cookie".into()))?;
-        
-    let saved_state = cookie_header.split(';')
+
+    let saved_state = cookie_header
+        .split(';')
         .map(|s| s.trim())
         .find(|s| s.starts_with("oauth_state="))
         .map(|s| &s["oauth_state=".len()..])
@@ -939,11 +1029,18 @@ pub async fn github_callback(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let sub = user_info.get("id").map(|v| v.to_string()).unwrap_or_default();
-    
+    let sub = user_info
+        .get("id")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+
     // Github primary email might be null in /user, need to fetch /user/emails
-    let mut email = user_info.get("email").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    
+    let mut email = user_info
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
     if email.is_empty() {
         let emails_res = client
             .get("https://api.github.com/user/emails")
@@ -952,22 +1049,28 @@ pub async fn github_callback(
             .send()
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
-            
+
         let emails: Vec<serde_json::Value> = emails_res
             .json()
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
-            
+
         for e in emails {
             if e.get("primary").and_then(|v| v.as_bool()).unwrap_or(false) {
-                email = e.get("email").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                email = e
+                    .get("email")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 break;
             }
         }
     }
 
     if email.is_empty() {
-        return Err(AppError::Unauthorized("No primary email from GitHub".into()));
+        return Err(AppError::Unauthorized(
+            "No primary email from GitHub".into(),
+        ));
     }
 
     let mut tx = state.db_pool.begin().await?;
@@ -986,7 +1089,7 @@ pub async fn github_callback(
             .await?;
         let t_name: String = t_row.get("name");
         let onboarding_sts: bool = t_row.get("onboarding_status");
-        
+
         sqlx::query("UPDATE users SET auth_provider = 'github', provider_id = $1 WHERE id = $2")
             .bind(&sub)
             .bind(u_id)
@@ -1000,7 +1103,7 @@ pub async fn github_callback(
             .fetch_one(&mut *tx)
             .await?
             .get("id");
-        
+
         let new_u_id: Uuid = sqlx::query(
             "INSERT INTO users (email, tenant_id, auth_provider, provider_id) VALUES ($1, $2, 'github', $3) RETURNING id"
         )
@@ -1027,21 +1130,39 @@ pub async fn github_callback(
     .execute(&state.db_pool)
     .await?;
 
-    let refresh_cookie = create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
+    let refresh_cookie =
+        create_cookie_header("refresh_token", &raw_refresh, JWT_MAX_AGE_SECS, "Strict");
     let state_clear_cookie = create_cookie_header("oauth_state", "", 0, "Lax");
     // Set JWT as HttpOnly Secure cookie instead of URL fragment
     let jwt_cookie = create_cookie_header("re_token", &jwt, JWT_MAX_AGE_SECS, "Lax");
 
     let mut headers = axum::http::HeaderMap::new();
-    headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&refresh_cookie).unwrap());
-    headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&state_clear_cookie).unwrap());
-    headers.append(axum::http::header::SET_COOKIE, axum::http::HeaderValue::from_str(&jwt_cookie).unwrap());
+    headers.append(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&refresh_cookie).unwrap(),
+    );
+    headers.append(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&state_clear_cookie).unwrap(),
+    );
+    headers.append(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&jwt_cookie).unwrap(),
+    );
 
-    let dashboard_url = std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
-    let redirect_path = if onboarding_complete { "/dashboard" } else { "/onboarding" };
-    
+    let dashboard_url =
+        std::env::var("DASHBOARD_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let redirect_path = if onboarding_complete {
+        "/dashboard"
+    } else {
+        "/onboarding"
+    };
+
     // Redirect without token in URL - client reads from cookie
-    let redirect_url = format!("{}{}?onboarding_complete={}", dashboard_url, redirect_path, onboarding_complete);
+    let redirect_url = format!(
+        "{}{}?onboarding_complete={}",
+        dashboard_url, redirect_path, onboarding_complete
+    );
 
     Ok((headers, axum::response::Redirect::to(&redirect_url)))
 }

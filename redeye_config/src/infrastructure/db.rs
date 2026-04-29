@@ -54,7 +54,7 @@ pub trait ConfigRepository: Send + Sync {
     /// to a different tenant (prevents cross-tenant information leakage).
     async fn get_api_key_by_id(
         &self,
-        key_id:    Uuid,
+        key_id: Uuid,
         tenant_id: Uuid,
     ) -> Result<ApiKeyRecord, ConfigError>;
 
@@ -66,7 +66,7 @@ pub trait ConfigRepository: Send + Sync {
     /// Returns [`ConfigError::NotFound`] if the key does not exist for `tenant_id`.
     async fn revoke_api_key(
         &self,
-        key_id:    Uuid,
+        key_id: Uuid,
         tenant_id: Uuid,
     ) -> Result<ApiKeyRecord, ConfigError>;
 }
@@ -97,9 +97,7 @@ pub async fn create_pool() -> Result<PgPool, sqlx::Error> {
     let url = std::env::var("DATABASE_URL").map_err(|_| {
         // sqlx::Error does not have a direct "missing env var" variant, so we
         // surface it as a configuration error through the io channel.
-        sqlx::Error::Configuration(
-            "DATABASE_URL environment variable must be set".into(),
-        )
+        sqlx::Error::Configuration("DATABASE_URL environment variable must be set".into())
     })?;
 
     tracing::info!("Connecting to PostgreSQL (redeye_config)…");
@@ -131,7 +129,7 @@ impl ConfigRepository for PgConfigRepository {
         )
         .bind(tenant_id)
         .fetch_one(&self.pool)
-        .await?;  // sqlx::Error::RowNotFound auto-converts to ConfigError::NotFound
+        .await?; // sqlx::Error::RowNotFound auto-converts to ConfigError::NotFound
 
         tracing::debug!(%tenant_id, "Fetched client config from Postgres");
         Ok(config)
@@ -212,7 +210,7 @@ impl ConfigRepository for PgConfigRepository {
 
     async fn get_api_key_by_id(
         &self,
-        key_id:    Uuid,
+        key_id: Uuid,
         tenant_id: Uuid,
     ) -> Result<ApiKeyRecord, ConfigError> {
         let key = sqlx::query_as::<_, ApiKeyRecord>(
@@ -240,7 +238,7 @@ impl ConfigRepository for PgConfigRepository {
 
     async fn revoke_api_key(
         &self,
-        key_id:    Uuid,
+        key_id: Uuid,
         tenant_id: Uuid,
     ) -> Result<ApiKeyRecord, ConfigError> {
         // Hard delete, returning the deleted row so the caller can extract

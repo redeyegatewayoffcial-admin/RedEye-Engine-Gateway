@@ -1,10 +1,13 @@
-use std::sync::Arc;
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use http_body_util::BodyExt;
-use tower::ServiceExt;
 use serde_json::json;
+use std::sync::Arc;
 use testcontainers::{runners::AsyncRunner, ContainerAsync};
 use testcontainers_modules::postgres::Postgres;
+use tower::ServiceExt;
 
 use redeye_auth::api::router::create_router;
 use redeye_auth::AppState;
@@ -24,12 +27,23 @@ async fn setup_test_environment() -> TestEnv {
     std::env::set_var("JWT_SECRET", "super_secret_test_key");
 
     // Spin up an ephemeral testcontainer for Postgres
-    let postgres_node = Postgres::default().start().await.expect("Failed to start Postgres container");
-    let pg_port = postgres_node.get_host_port_ipv4(5432).await.expect("Failed to bind postgres port");
-    let db_url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", pg_port);
+    let postgres_node = Postgres::default()
+        .start()
+        .await
+        .expect("Failed to start Postgres container");
+    let pg_port = postgres_node
+        .get_host_port_ipv4(5432)
+        .await
+        .expect("Failed to bind postgres port");
+    let db_url = format!(
+        "postgres://postgres:postgres@127.0.0.1:{}/postgres",
+        pg_port
+    );
 
     // Bootstrap Pool
-    let db_pool = PgPool::connect(&db_url).await.expect("Failed to connect SQLx to local container");
+    let db_pool = PgPool::connect(&db_url)
+        .await
+        .expect("Failed to connect SQLx to local container");
 
     // Pre-initialize schemas manually since standard testing migrations block
     let init_queries = [
@@ -45,10 +59,15 @@ async fn setup_test_environment() -> TestEnv {
     ];
 
     for query in init_queries {
-        sqlx::query(query).execute(&db_pool).await.expect("Migration failed query execution");
+        sqlx::query(query)
+            .execute(&db_pool)
+            .await
+            .expect("Migration failed query execution");
     }
 
-    let state = AppState { db_pool: db_pool.clone() };
+    let state = AppState {
+        db_pool: db_pool.clone(),
+    };
     let app = create_router(state);
 
     TestEnv {
@@ -100,20 +119,31 @@ async fn test_auth_pipeline() {
         .unwrap();
 
     let res_provider = env.app.clone().oneshot(req_provider).await.unwrap();
-    assert_eq!(res_provider.status(), StatusCode::OK, "Failed to submit provider keys dynamically");
+    assert_eq!(
+        res_provider.status(),
+        StatusCode::OK,
+        "Failed to submit provider keys dynamically"
+    );
 
     // 3. Database AES Assertions (Validates DB isolation and AES encryption engine functionality)
-    let route_row = sqlx::query("SELECT encrypted_key FROM provider_keys WHERE provider_name = 'mock'")
-        .fetch_one(&env.db_pool)
-        .await
-        .expect("Provider key missing from mocked SQL db");
-        
+    let route_row =
+        sqlx::query("SELECT encrypted_key FROM provider_keys WHERE provider_name = 'mock'")
+            .fetch_one(&env.db_pool)
+            .await
+            .expect("Provider key missing from mocked SQL db");
+
     let db_ciphertext: Vec<u8> = route_row.get("encrypted_key");
 
     // Validate that the underlying text isn't raw and AES properly chunked it (12 byte nonce + payload + tag bounds)
-    assert!(db_ciphertext.len() > 12, "AES Ciphertext missing cryptographic padding/nonce bindings");
-    
+    assert!(
+        db_ciphertext.len() > 12,
+        "AES Ciphertext missing cryptographic padding/nonce bindings"
+    );
+
     // We shouldn't be able to just cast string to utf8 and see our secret
     let raw_string_fallback = String::from_utf8(db_ciphertext.clone()).unwrap_or_default();
-    assert!(!raw_string_fallback.contains("sk-my-super-secret-key"), "CRITICAL ERROR: DB Stored the key in plaintext!");
+    assert!(
+        !raw_string_fallback.contains("sk-my-super-secret-key"),
+        "CRITICAL ERROR: DB Stored the key in plaintext!"
+    );
 }

@@ -7,7 +7,7 @@ use reqwest::Client;
 use std::time::Duration;
 use tracing::error;
 
-use crate::domain::models::{OpaRequestPayload, OpaResult, OpaResponsePayload};
+use crate::domain::models::{OpaRequestPayload, OpaResponsePayload, OpaResult};
 
 pub struct OpaClient {
     http_client: Client,
@@ -20,15 +20,18 @@ impl OpaClient {
             .timeout(Duration::from_millis(50)) // Ultra-low timeout requirement (<10ms target)
             .build()
             .expect("Failed to build OPA client");
-            
-        Self { http_client, opa_url }
+
+        Self {
+            http_client,
+            opa_url,
+        }
     }
 
     /// Evaluates the request against the OPA policy engine.
     /// Returns the OpaResult (allow/block decision).
     pub async fn evaluate_policy(&self, payload: OpaRequestPayload) -> Result<OpaResult, String> {
         let url = format!("{}/v1/data/redeye/compliance/allow", self.opa_url);
-        
+
         match self.http_client.post(&url).json(&payload).send().await {
             Ok(resp) => {
                 if resp.status().is_success() {

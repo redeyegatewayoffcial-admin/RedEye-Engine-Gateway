@@ -25,7 +25,10 @@ pub async fn log_request(
     });
 
     let result = client
-        .post(format!("{}/?query=INSERT INTO RedEye_telemetry.request_logs FORMAT JSONEachRow", clickhouse_url))
+        .post(format!(
+            "{}/?query=INSERT INTO RedEye_telemetry.request_logs FORMAT JSONEachRow",
+            clickhouse_url
+        ))
         .json(&log_entry)
         .send()
         .await;
@@ -45,11 +48,7 @@ pub async fn log_request(
 }
 
 /// Sends trace + audit data to the redeye_tracer microservice.
-pub async fn send_trace_to_tracer(
-    client: &Client,
-    tracer_url: &str,
-    payload: &Value,
-) {
+pub async fn send_trace_to_tracer(client: &Client, tracer_url: &str, payload: &Value) {
     let url = format!("{}/v1/traces/ingest", tracer_url);
     let result = client.post(&url).json(payload).send().await;
 

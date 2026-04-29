@@ -21,8 +21,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
 
 use crate::domain::models::{AppState, GatewayError, TraceContext};
-use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 use crate::infrastructure::routing_strategy::RoutingStrategy;
+use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -109,14 +109,15 @@ pub async fn execute_proxy(
 
     // ── Stage 0: PII Redaction (fail-closed) ─────────────────────────────────
     let raw_prompt_owned = raw_prompt.to_string();
-    let is_pii_match = tokio::task::spawn_blocking(move || {
-        pii_regex().is_match(&raw_prompt_owned)
-    })
-    .await
-    .map_err(|e| GatewayError::ResponseBuild(format!("Regex task error: {}", e)))?;
+    let is_pii_match = tokio::task::spawn_blocking(move || pii_regex().is_match(&raw_prompt_owned))
+        .await
+        .map_err(|e| GatewayError::ResponseBuild(format!("Regex task error: {}", e)))?;
 
     let sanitized_storage: Option<Value> = if is_pii_match {
-        Some(call_compliance_redact(&state.http_client, &state.compliance_url, body, trace_ctx).await?)
+        Some(
+            call_compliance_redact(&state.http_client, &state.compliance_url, body, trace_ctx)
+                .await?,
+        )
     } else {
         None
     };
@@ -124,30 +125,57 @@ pub async fn execute_proxy(
 
     // ── Stage 1: L1 Exact & Semantic Cache Check ──────────────────────────────
     if let Some(cached_content) = state.l1_cache.get_exact(raw_prompt).await {
-        return handle_cache_hit(state, cached_content, tenant_id, model_name, raw_prompt, trace_ctx, start_time);
+        return handle_cache_hit(
+            state,
+            cached_content,
+            tenant_id,
+            model_name,
+            raw_prompt,
+            trace_ctx,
+            start_time,
+        );
     }
 
     if let Some(cached_content) = state.l1_cache.get_semantic(raw_prompt).await {
-        return handle_cache_hit(state, cached_content, tenant_id, model_name, raw_prompt, trace_ctx, start_time);
+        return handle_cache_hit(
+            state,
+            cached_content,
+            tenant_id,
+            model_name,
+            raw_prompt,
+            trace_ctx,
+            start_time,
+        );
     }
 
     // ── Stage 2: L2 gRPC Cache Check ──────────────────────────────────────────
-    if let Some(cached_content) =
-        cache_client::lookup_cache(&state.cache_grpc_client, tenant_id, model_name, raw_prompt, trace_ctx).await
+    if let Some(cached_content) = cache_client::lookup_cache(
+        &state.cache_grpc_client,
+        tenant_id,
+        model_name,
+        raw_prompt,
+        trace_ctx,
+    )
+    .await
     {
-        return handle_cache_hit(state, cached_content, tenant_id, model_name, raw_prompt, trace_ctx, start_time);
+        return handle_cache_hit(
+            state,
+            cached_content,
+            tenant_id,
+            model_name,
+            raw_prompt,
+            trace_ctx,
+            start_time,
+        );
     }
 
     // ── Stage 1.5: Token-Bucket Rate Limit ────────────────────────────────────
     enforce_token_bucket(state, tenant_id, raw_prompt).await?;
 
     // ── Stage 1.6: Behavior Control (Loop Detection) ─────────────────────────
-    if let Err(e) = crate::usecases::behavior_guard::enforce_loop_detection(
-        state,
-        &trace_ctx.session_id,
-        body,
-    )
-    .await
+    if let Err(e) =
+        crate::usecases::behavior_guard::enforce_loop_detection(state, &trace_ctx.session_id, body)
+            .await
     {
         let latency_ms = start_time.elapsed().as_millis() as u32;
         // Bug 4 Fix: Fallback JSON now includes all ClickHouse-required schema fields.
@@ -171,33 +199,38 @@ pub async fn execute_proxy(
             requested_provider: llm_router::detect_provider(model_name).to_string(),
             executed_provider: "".to_string(),
             is_hot_swapped: 0,
-        }).unwrap_or_else(|_| json!({
-            // Bug 4 Fix: Schema-valid sentinel — never send an empty object to ClickHouse.
-            "id": uuid::Uuid::new_v4().to_string(),
-            "trace_id": trace_ctx.trace_id,
-            "session_id": trace_ctx.session_id,
-            "tenant_id": tenant_id,
-            "model": "__loop_blocked",
-            "status": 429_u16,
-            "latency_ms": latency_ms,
-            "tokens": 0_u32,
-            "total_tokens": 0_u32,
-            "cache_hit": false,
-            "error": "serialization_failed"
-        }));
-        
+        })
+        .unwrap_or_else(|_| {
+            json!({
+                // Bug 4 Fix: Schema-valid sentinel — never send an empty object to ClickHouse.
+                "id": uuid::Uuid::new_v4().to_string(),
+                "trace_id": trace_ctx.trace_id,
+                "session_id": trace_ctx.session_id,
+                "tenant_id": tenant_id,
+                "model": "__loop_blocked",
+                "status": 429_u16,
+                "latency_ms": latency_ms,
+                "tokens": 0_u32,
+                "total_tokens": 0_u32,
+                "cache_hit": false,
+                "error": "serialization_failed"
+            })
+        });
+
         let _ = state.telemetry_tx.send(payload.clone()).await;
-        crate::infrastructure::clickhouse_logger::send_trace_to_tracer(&state.http_client, &state.tracer_url, &payload).await;
+        crate::infrastructure::clickhouse_logger::send_trace_to_tracer(
+            &state.http_client,
+            &state.tracer_url,
+            &payload,
+        )
+        .await;
 
         return Err(e);
     }
 
     // ── Stage 1.7: Burn-Rate Control ─────────────────────────────────────────
-    if let Err(e) = crate::usecases::behavior_guard::enforce_burn_rate(
-        state,
-        &trace_ctx.session_id,
-    )
-    .await
+    if let Err(e) =
+        crate::usecases::behavior_guard::enforce_burn_rate(state, &trace_ctx.session_id).await
     {
         let latency_ms = start_time.elapsed().as_millis() as u32;
         // Bug 4 Fix: Same schema-valid fallback for burn-rate guard events.
@@ -219,22 +252,30 @@ pub async fn execute_proxy(
             requested_provider: llm_router::detect_provider(model_name).to_string(),
             executed_provider: "".to_string(),
             is_hot_swapped: 0,
-        }).unwrap_or_else(|_| json!({
-            "id": uuid::Uuid::new_v4().to_string(),
-            "trace_id": trace_ctx.trace_id,
-            "session_id": trace_ctx.session_id,
-            "tenant_id": tenant_id,
-            "model": "__burn_rate_blocked",
-            "status": 429_u16,
-            "latency_ms": latency_ms,
-            "tokens": 0_u32,
-            "total_tokens": 0_u32,
-            "cache_hit": false,
-            "error": "serialization_failed"
-        }));
+        })
+        .unwrap_or_else(|_| {
+            json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "trace_id": trace_ctx.trace_id,
+                "session_id": trace_ctx.session_id,
+                "tenant_id": tenant_id,
+                "model": "__burn_rate_blocked",
+                "status": 429_u16,
+                "latency_ms": latency_ms,
+                "tokens": 0_u32,
+                "total_tokens": 0_u32,
+                "cache_hit": false,
+                "error": "serialization_failed"
+            })
+        });
 
         let _ = state.telemetry_tx.send(payload.clone()).await;
-        crate::infrastructure::clickhouse_logger::send_trace_to_tracer(&state.http_client, &state.tracer_url, &payload).await;
+        crate::infrastructure::clickhouse_logger::send_trace_to_tracer(
+            &state.http_client,
+            &state.tracer_url,
+            &payload,
+        )
+        .await;
 
         return Err(e);
     }
@@ -242,18 +283,33 @@ pub async fn execute_proxy(
     // ── Stage 1.8: Circuit-Breaker / Adaptive Fallback ────────────────────────
     let provider = llm_router::detect_provider(model_name);
 
+    // ── Stage 1.9: Translate Incoming JSON into RedEyeConversation ─────────────
+    let source_translator = crate::infrastructure::translators::OpenAiTranslator;
+    use crate::infrastructure::translators::BaseTranslator;
+    let conv = source_translator
+        .to_universal(body.clone())
+        .map_err(|e| GatewayError::ResponseBuild(format!("Incoming translation failed: {}", e)))?;
+
     // ── Stage 2 & 3: Dynamic Provider Key Resolution and Routing with Fallback ─
     let upstream_response = llm_router::route_chat_completion_with_fallback(
-        state, tenant_id, body, accept_header, strategy
-    ).await?;
+        state,
+        tenant_id,
+        &conv,
+        body,
+        accept_header,
+        strategy,
+    )
+    .await?;
 
     let requested_provider = provider.to_string();
-    let executed_provider = upstream_response.headers()
+    let executed_provider = upstream_response
+        .headers()
         .get("x-redeye-executed-provider")
         .and_then(|v| v.to_str().ok())
         .unwrap_or(provider)
         .to_string();
-    let is_hot_swapped: u8 = upstream_response.headers()
+    let is_hot_swapped: u8 = upstream_response
+        .headers()
         .get("x-redeye-hot-swapped")
         .map(|v| if v == "1" { 1 } else { 0 })
         .unwrap_or(0);
@@ -266,24 +322,49 @@ pub async fn execute_proxy(
         .unwrap_or("application/json")
         .to_string();
 
-    info!(status = upstream_status, provider = executed_provider.as_str(), "Received response from upstream LLM provider");
+    info!(
+        status = upstream_status,
+        provider = executed_provider.as_str(),
+        "Received response from upstream LLM provider"
+    );
 
-    let is_streaming = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_streaming = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // ── Stage 4a: SSE Streaming Path ─────────────────────────────────────────
     if is_streaming {
         return handle_streaming_response(
-            state, upstream_response, upstream_status, content_type,
-            tenant_id, model_name, raw_prompt, trace_ctx, start_time,
-            requested_provider, executed_provider, is_hot_swapped,
+            state,
+            upstream_response,
+            upstream_status,
+            content_type,
+            tenant_id,
+            model_name,
+            raw_prompt,
+            trace_ctx,
+            start_time,
+            requested_provider,
+            executed_provider,
+            is_hot_swapped,
         );
     }
 
     // ── Stage 4b: Buffered (non-streaming) Path ───────────────────────────────
     handle_buffered_response(
-        state, upstream_response, upstream_status, content_type,
-        tenant_id, model_name, raw_prompt, trace_ctx, start_time,
-        requested_provider, executed_provider, is_hot_swapped,
+        state,
+        upstream_response,
+        upstream_status,
+        content_type,
+        tenant_id,
+        model_name,
+        raw_prompt,
+        trace_ctx,
+        start_time,
+        requested_provider,
+        executed_provider,
+        is_hot_swapped,
     )
     .await
 }
@@ -315,9 +396,19 @@ fn handle_cache_hit(
     let requested_provider = llm_router::detect_provider(model_name).to_string();
 
     spawn_telemetry(
-        state, tenant_id, model_name, raw_prompt, trace_ctx,
-        200, latency_ms, 0, true, None,
-        requested_provider.clone(), requested_provider, 0,
+        state,
+        tenant_id,
+        model_name,
+        raw_prompt,
+        trace_ctx,
+        200,
+        latency_ms,
+        0,
+        true,
+        None,
+        requested_provider.clone(),
+        requested_provider,
+        0,
     );
 
     Ok(ProxyResult {
@@ -450,6 +541,10 @@ fn handle_streaming_response(
     let raw_prompt_c = raw_prompt.to_string();
     let trace_ctx_c = trace_ctx.clone();
 
+    let config = crate::infrastructure::llm_router::get_provider_config(&executed_provider);
+    // Since get_translator returns Box<dyn BaseTranslator> and we need it inside spawn, we map to schema format string and re-instantiate, or just pass schema format
+    let schema_format = config.map(|c| c.schema_format);
+
     tokio::spawn(async move {
         let mut event_stream = event_stream;
 
@@ -460,11 +555,33 @@ fn handle_streaming_response(
                 break;
             }
 
+            let mut final_data = event.data.clone();
+            if let Some(ref schema) = schema_format {
+                let translator = crate::infrastructure::llm_router::get_translator(schema);
+                match translator.unify_stream_chunk(format!("data: {}", event.data)) {
+                    Ok(unified) => {
+                        let trimmed = unified.trim();
+                        final_data = trimmed.trim_start_matches("data: ").trim().to_string();
+                    }
+                    Err(e) => {
+                        warn!("Stream unification error: {}", e);
+                    }
+                }
+            }
+
+            if final_data.is_empty() {
+                continue;
+            }
+
             // Bug 2 Fix: If the receiver is dropped (client disconnected), tx.send
             // returns Err. We break immediately to stop reading from the upstream LLM,
             // preventing a memory/connection leak where the gateway indefinitely buffers
             // SSE frames that no client will ever consume.
-            if tx.send(Ok(Event::default().data(event.data))).await.is_err() {
+            if tx
+                .send(Ok(Event::default().data(final_data)))
+                .await
+                .is_err()
+            {
                 warn!("SSE client disconnected — aborting upstream stream read");
                 break;
             }
@@ -474,9 +591,19 @@ fn handle_streaming_response(
         let latency_ms = start_time.elapsed().as_millis() as u32;
 
         fire_async_telemetry(
-            &state_c, &tenant_id_c, &model_name_c, &raw_prompt_c, &trace_ctx_c,
-            upstream_status, latency_ms, 0, false, None,
-            requested_provider, executed_provider, is_hot_swapped,
+            &state_c,
+            &tenant_id_c,
+            &model_name_c,
+            &raw_prompt_c,
+            &trace_ctx_c,
+            upstream_status,
+            latency_ms,
+            0,
+            false,
+            None,
+            requested_provider,
+            executed_provider,
+            is_hot_swapped,
         )
         .await;
     });
@@ -505,8 +632,25 @@ async fn handle_buffered_response(
     executed_provider: String,
     is_hot_swapped: u8,
 ) -> Result<ProxyResult, GatewayError> {
-    let body_bytes = upstream_response.bytes().await.unwrap_or_default().to_vec();
+    let mut body_bytes = upstream_response.bytes().await.unwrap_or_default().to_vec();
     let latency_ms = start_time.elapsed().as_millis() as u32;
+
+    let config = crate::infrastructure::llm_router::get_provider_config(&executed_provider);
+    if let Some(c) = config {
+        let translator = crate::infrastructure::llm_router::get_translator(&c.schema_format);
+        if let Ok(raw_json) = serde_json::from_slice::<Value>(&body_bytes) {
+            match translator.unify_response(raw_json) {
+                Ok(unified_json) => {
+                    if let Ok(unified_bytes) = serde_json::to_vec(&unified_json) {
+                        body_bytes = unified_bytes;
+                    }
+                }
+                Err(e) => {
+                    warn!("Response unification error: {}", e);
+                }
+            }
+        }
+    }
 
     let actual_tokens = serde_json::from_slice::<Value>(&body_bytes)
         .ok()
@@ -521,9 +665,19 @@ async fn handle_buffered_response(
     sync_token_bucket(state, tenant_id, estimated_tokens, actual_tokens).await;
 
     spawn_telemetry(
-        state, tenant_id, model_name, raw_prompt, trace_ctx,
-        upstream_status, latency_ms, actual_tokens, false, Some(body_bytes.clone()),
-        requested_provider, executed_provider, is_hot_swapped,
+        state,
+        tenant_id,
+        model_name,
+        raw_prompt,
+        trace_ctx,
+        upstream_status,
+        latency_ms,
+        actual_tokens,
+        false,
+        Some(body_bytes.clone()),
+        requested_provider,
+        executed_provider,
+        is_hot_swapped,
     );
 
     Ok(ProxyResult {
@@ -559,7 +713,22 @@ fn spawn_telemetry(
     let ctx = trace_ctx.clone();
 
     tokio::spawn(async move {
-        fire_async_telemetry(&s, &tid, &model, &prompt, &ctx, status_code, latency_ms, tokens, cache_hit, response_bytes, requested_provider, executed_provider, is_hot_swapped).await;
+        fire_async_telemetry(
+            &s,
+            &tid,
+            &model,
+            &prompt,
+            &ctx,
+            status_code,
+            latency_ms,
+            tokens,
+            cache_hit,
+            response_bytes,
+            requested_provider,
+            executed_provider,
+            is_hot_swapped,
+        )
+        .await;
     });
 }
 
@@ -580,7 +749,8 @@ async fn fire_async_telemetry(
     is_hot_swapped: u8,
 ) {
     // ── Record session spend for burn-rate tracking ──────────────────────────
-    crate::usecases::behavior_guard::record_session_spend(state, &trace_ctx.session_id, tokens).await;
+    crate::usecases::behavior_guard::record_session_spend(state, &trace_ctx.session_id, tokens)
+        .await;
 
     let response_content = extract_response_content(response_bytes.as_deref());
 
@@ -619,7 +789,8 @@ async fn fire_async_telemetry(
         "is_hot_swapped": is_hot_swapped
     });
 
-    clickhouse_logger::send_trace_to_tracer(&state.http_client, &state.tracer_url, &trace_payload).await;
+    clickhouse_logger::send_trace_to_tracer(&state.http_client, &state.tracer_url, &trace_payload)
+        .await;
 
     // 3. Cache injection for successful misses
     if !cache_hit && status_code == 200 && !response_content.is_empty() {
@@ -631,14 +802,22 @@ async fn fire_async_telemetry(
             }
             cache_client::store_in_cache(
                 &state.cache_grpc_client,
-                tenant_id, model_name, raw_prompt, &response_content, trace_ctx,
+                tenant_id,
+                model_name,
+                raw_prompt,
+                &response_content,
+                trace_ctx,
             )
             .await;
         } else {
             // Tokens >= 1000: Bulk response, L2 only to prevent L1 OOM
             cache_client::store_in_cache(
                 &state.cache_grpc_client,
-                tenant_id, model_name, raw_prompt, &response_content, trace_ctx,
+                tenant_id,
+                model_name,
+                raw_prompt,
+                &response_content,
+                trace_ctx,
             )
             .await;
         }
@@ -651,7 +830,11 @@ async fn fire_async_telemetry(
 fn extract_response_content(bytes: Option<&[u8]>) -> String {
     bytes
         .and_then(|b| serde_json::from_slice::<Value>(b).ok())
-        .and_then(|v| v["choices"][0]["message"]["content"].as_str().map(str::to_string))
+        .and_then(|v| {
+            v["choices"][0]["message"]["content"]
+                .as_str()
+                .map(str::to_string)
+        })
         .unwrap_or_default()
 }
 
@@ -667,7 +850,10 @@ async fn call_compliance_redact(
     payload: &Value,
     trace_ctx: &TraceContext,
 ) -> Result<Value, GatewayError> {
-    let endpoint = format!("{}/api/v1/compliance/redact", compliance_url.trim_end_matches('/'));
+    let endpoint = format!(
+        "{}/api/v1/compliance/redact",
+        compliance_url.trim_end_matches('/')
+    );
     debug!(endpoint = %endpoint, "Calling compliance redaction service");
 
     let resp = http_client
@@ -684,10 +870,14 @@ async fn call_compliance_redact(
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
-        error!(status = status, "Compliance service returned non-2xx — blocking request");
-        return Err(GatewayError::ComplianceFailure(
-            format!("Compliance service returned HTTP {}", status),
-        ));
+        error!(
+            status = status,
+            "Compliance service returned non-2xx — blocking request"
+        );
+        return Err(GatewayError::ComplianceFailure(format!(
+            "Compliance service returned HTTP {}",
+            status
+        )));
     }
 
     let compliance_json: Value = resp.json().await.map_err(|e| {
@@ -721,7 +911,7 @@ mod tests {
         let regex = pii_regex();
         let prompt = "My credit card number is 1234-5678-9012-3456, please don't share it.";
         // assert! na "ithu unmai nu prove pannu" nu artham. Match aagalana test fail aagum.
-        assert!(regex.is_match(prompt)); 
+        assert!(regex.is_match(prompt));
     }
 
     #[test]
@@ -736,7 +926,7 @@ mod tests {
         let regex = pii_regex();
         let prompt = "What is the capital of Tamil Nadu? Explain in 50 words.";
         // assert_eq! false check pannuthu. Safe prompt-a adhu block panna koodathu.
-        assert_eq!(regex.is_match(prompt), false); 
+        assert_eq!(regex.is_match(prompt), false);
     }
 
     #[tokio::test]
@@ -748,8 +938,12 @@ mod tests {
 
         // 2. Gateway Producer: User request vantha udane channel-la data poduthu
         tokio::spawn(async move {
-            tx.send("Log 1: Tenant A used 400 tokens".to_string()).await.unwrap();
-            tx.send("Log 2: Tenant B latency 45ms".to_string()).await.unwrap();
+            tx.send("Log 1: Tenant A used 400 tokens".to_string())
+                .await
+                .unwrap();
+            tx.send("Log 2: Tenant B latency 45ms".to_string())
+                .await
+                .unwrap();
         });
 
         // 3. Background Worker (Consumer): Channel-la irunthu data-va edukuthu
@@ -758,7 +952,7 @@ mod tests {
 
         let second_log = rx.recv().await.unwrap();
         assert_eq!(second_log, "Log 2: Tenant B latency 45ms");
-        
+
         // Ippadi thaan channel ulla data pass aaguthu nu compile aagi prove aagidum!
     }
 

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
 
-use crate::usecases::semantic_search::SemanticSearchUseCase;
 use crate::domain::models::{CacheLookupRequest, CacheStoreRequest};
+use crate::usecases::semantic_search::SemanticSearchUseCase;
 
 // Include generated stubs. The `semantic_cache` name matches the proto package.
 pub mod proto {
@@ -52,22 +52,22 @@ impl CacheService for CacheServiceImpl {
 
         let domain_req = CacheLookupRequest {
             tenant_id: req.tenant_id.clone(),
-            model:     req.model.clone(),
-            prompt:    req.prompt.clone(),
+            model: req.model.clone(),
+            prompt: req.prompt.clone(),
         };
 
         match self.use_case.check_cache(&domain_req).await {
             Ok(Some(cached)) => {
                 info!(tenant_id = %req.tenant_id, "L2 gRPC cache HIT");
                 Ok(Response::new(CacheResponse {
-                    hit:     true,
+                    hit: true,
                     content: cached.content,
                 }))
             }
             Ok(None) => {
                 debug!(tenant_id = %req.tenant_id, "L2 gRPC cache MISS");
                 Ok(Response::new(CacheResponse {
-                    hit:     false,
+                    hit: false,
                     content: String::new(),
                 }))
             }
@@ -92,9 +92,9 @@ impl CacheService for CacheServiceImpl {
         );
 
         let domain_req = CacheStoreRequest {
-            tenant_id:        req.tenant_id.clone(),
-            model:            req.model.clone(),
-            prompt:           req.prompt.clone(),
+            tenant_id: req.tenant_id.clone(),
+            model: req.model.clone(),
+            prompt: req.prompt.clone(),
             response_content: req.response_content.clone(),
         };
 

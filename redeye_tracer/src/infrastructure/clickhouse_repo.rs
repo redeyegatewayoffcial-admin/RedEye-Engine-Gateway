@@ -1,5 +1,5 @@
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, error, info};
 
 use crate::domain::models::TraceIngestPayload;
@@ -18,17 +18,14 @@ impl ClickHouseRepo {
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self {
-            client,
-            url,
-        }
+        Self { client, url }
     }
 
     /// Ensures the ClickHouse tables exist (idempotent DDL).
     pub async fn ensure_schema(&self) -> Result<(), String> {
-    let statements = vec![
-        "CREATE DATABASE IF NOT EXISTS RedEye_telemetry;",
-        r#"
+        let statements = vec![
+            "CREATE DATABASE IF NOT EXISTS RedEye_telemetry;",
+            r#"
             CREATE TABLE IF NOT EXISTS RedEye_telemetry.agent_traces (
                 trace_id UUID, session_id UUID, parent_trace_id Nullable(UUID),
                 tenant_id String, model String, status UInt16, latency_ms UInt32,
@@ -38,7 +35,7 @@ impl ClickHouseRepo {
             ) ENGINE = MergeTree ORDER BY (session_id, created_at)
             TTL created_at + INTERVAL 180 DAY;
         "#,
-        r#"
+            r#"
             CREATE TABLE IF NOT EXISTS RedEye_telemetry.compliance_audit_log (
                 trace_id UUID, session_id UUID, tenant_id String,
                 prompt_content String, response_content String, model String,
@@ -47,7 +44,7 @@ impl ClickHouseRepo {
             ) ENGINE = MergeTree ORDER BY (tenant_id, created_at)
             TTL created_at + INTERVAL 365 DAY;
         "#,
-        r#"
+            r#"
             CREATE TABLE IF NOT EXISTS RedEye_telemetry.compliance_engine_metrics (
                 trace_id          UUID,
                 tenant_id         String,
@@ -59,26 +56,29 @@ impl ClickHouseRepo {
             ) ENGINE = MergeTree ORDER BY (tenant_id, created_at)
             TTL created_at + INTERVAL 90 DAY;
         "#,
-    ];
+        ];
 
-    for stmt in statements {
-        let res = self.client
-            .post(&self.url)
-            .body(stmt)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        for stmt in statements {
+            let res = self
+                .client
+                .post(&self.url)
+                .body(stmt)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
 
-        if !res.status().is_success() {
-            let err = res.text().await.unwrap_or_default();
-            error!("ClickHouse schema DDL failed: {}", err);
-            return Err(err);
+            if !res.status().is_success() {
+                let err = res.text().await.unwrap_or_default();
+                error!("ClickHouse schema DDL failed: {}", err);
+                return Err(err);
+            }
         }
-    }
 
-    info!("ClickHouse schema verified (agent_traces + compliance_audit_log + compliance_engine_metrics)");
-    Ok(())
-}
+        info!(
+            "ClickHouse schema verified (agent_traces + compliance_audit_log + compliance_engine_metrics)"
+        );
+        Ok(())
+    }
 
     /// Inserts a trace row into `agent_traces`.
     pub async fn insert_trace(&self, payload: &TraceIngestPayload) -> Result<(), String> {
@@ -108,7 +108,8 @@ impl ClickHouseRepo {
             "model": payload.model
         });
 
-        self.insert_row("RedEye_telemetry.compliance_audit_log", &row).await
+        self.insert_row("RedEye_telemetry.compliance_audit_log", &row)
+            .await
     }
 
     /// Queries traces by session_id.
@@ -116,7 +117,7 @@ impl ClickHouseRepo {
         // Validate session_id as UUID to prevent SQL injection
         let session_uuid = uuid::Uuid::parse_str(session_id)
             .map_err(|e| format!("Invalid session_id format: {}", e))?;
-        
+
         let query = format!(
             "SELECT * FROM RedEye_telemetry.agent_traces WHERE session_id = '{}' ORDER BY created_at DESC LIMIT {} FORMAT JSON",
             session_uuid, limit
@@ -129,7 +130,7 @@ impl ClickHouseRepo {
         // Validate tenant_id as UUID to prevent SQL injection
         let tenant_uuid = uuid::Uuid::parse_str(tenant_id)
             .map_err(|e| format!("Invalid tenant_id format: {}", e))?;
-        
+
         let query = format!(
             "SELECT * FROM RedEye_telemetry.compliance_audit_log WHERE tenant_id = '{}' ORDER BY created_at DESC LIMIT {} FORMAT JSON",
             tenant_uuid, limit
@@ -144,7 +145,13 @@ impl ClickHouseRepo {
 
     async fn insert_row(&self, table: &str, row: &Value) -> Result<(), String> {
         let url = self.build_url(&format!("query=INSERT INTO {} FORMAT JSONEachRow", table));
-        let res = self.client.post(&url).json(row).send().await.map_err(|e| e.to_string())?;
+        let res = self
+            .client
+            .post(&url)
+            .json(row)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
         if !res.status().is_success() {
             let err = res.text().await.unwrap_or_default();
@@ -157,7 +164,13 @@ impl ClickHouseRepo {
 
     async fn run_query(&self, query: &str) -> Result<Value, String> {
         let url = &self.url;
-        let res = self.client.post(url).body(query.to_string()).send().await.map_err(|e| e.to_string())?;
+        let res = self
+            .client
+            .post(url)
+            .body(query.to_string())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
 
         if !res.status().is_success() {
             let err = res.text().await.unwrap_or_default();

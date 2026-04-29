@@ -1,17 +1,23 @@
-use std::sync::Arc;
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use http_body_util::BodyExt;
-use tower::ServiceExt;
 use serde_json::json;
-use wiremock::{MockServer, Mock, ResponseTemplate, matchers::{method, path}};
+use std::sync::Arc;
+use tower::ServiceExt;
+use wiremock::{
+    matchers::{method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 
-use redeye_compliance::api::routes::{create_router, AppState};
-use redeye_compliance::usecases::pii_engine::PiiEngine;
 use redeye_compliance::api::middleware::geo_routing::SharedConfig;
-use redeye_compliance::domain::models::CompliancePolicy;
 use redeye_compliance::api::middleware::security::SecurityState;
-use redeye_compliance::usecases::opa_client::OpaClient;
+use redeye_compliance::api::routes::{create_router, AppState};
+use redeye_compliance::domain::models::CompliancePolicy;
 use redeye_compliance::infrastructure::clickhouse::ClickHouseLogger;
+use redeye_compliance::usecases::opa_client::OpaClient;
+use redeye_compliance::usecases::pii_engine::PiiEngine;
 
 /// Helper: Sets up the test environment by mocking external downstream services
 /// required by the compliance engine (OPA for rules, Clickhouse for logs),
@@ -41,7 +47,7 @@ async fn setup_test_environment() -> (axum::Router, MockServer) {
     });
 
     let pii_engine = Arc::new(PiiEngine::new().unwrap());
-    
+
     let opa = Arc::new(OpaClient::new(mock_server.uri()));
     let clickhouse = Arc::new(ClickHouseLogger::new(mock_server.uri()));
 
@@ -58,8 +64,12 @@ async fn setup_test_environment() -> (axum::Router, MockServer) {
         clickhouse,
     };
 
-    let state = AppState { config, pii_engine, security_state };
-    
+    let state = AppState {
+        config,
+        pii_engine,
+        security_state,
+    };
+
     (create_router(state), mock_server)
 }
 
@@ -98,20 +108,39 @@ async fn test_redact_deeply_nested_pii() {
         .unwrap();
 
     // Tower ServiceExt::oneshot spins up the exact internal pipeline cleanly simulating integration dispatch events
-    let response = app.oneshot(request).await.expect("Failed to execute internal AXUM testing route.");
+    let response = app
+        .oneshot(request)
+        .await
+        .expect("Failed to execute internal AXUM testing route.");
 
-    assert_eq!(response.status(), StatusCode::OK, "Redact router encountered network error during pipeline translation");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "Redact router encountered network error during pipeline translation"
+    );
 
     // Extract underlying packet details
     let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
     let resp_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let sanitized_payload = resp_json["sanitized_payload"].to_string();
-    
+
     // Validate Data is Gone from sanitized boundaries
-    assert!(!sanitized_payload.contains("secret.agent@mi6.gov.uk"), "Security Escalation: Raw Email found dynamically executing through pipeline");
-    assert!(!sanitized_payload.contains("4111-2222-3333-4444"), "Security Escalation: Raw Credit card found dynamically executing through pipeline");
-    
+    assert!(
+        !sanitized_payload.contains("secret.agent@mi6.gov.uk"),
+        "Security Escalation: Raw Email found dynamically executing through pipeline"
+    );
+    assert!(
+        !sanitized_payload.contains("4111-2222-3333-4444"),
+        "Security Escalation: Raw Credit card found dynamically executing through pipeline"
+    );
+
     // Validate Mask Replacements
-    assert!(sanitized_payload.contains("EMAIL_REDACTED"), "Failed mapping string values accurately missing EMAIL block tags");
-    assert!(sanitized_payload.contains("CREDIT_CARD_REDACTED"), "Failed mapping string values accurately missing CREDIT CARD block tags");
+    assert!(
+        sanitized_payload.contains("EMAIL_REDACTED"),
+        "Failed mapping string values accurately missing EMAIL block tags"
+    );
+    assert!(
+        sanitized_payload.contains("CREDIT_CARD_REDACTED"),
+        "Failed mapping string values accurately missing CREDIT CARD block tags"
+    );
 }

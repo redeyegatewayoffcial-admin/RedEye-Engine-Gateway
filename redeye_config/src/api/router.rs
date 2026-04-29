@@ -1,10 +1,10 @@
 //! Axum router factory for the `redeye_config` service.
 
+use axum::http::{HeaderValue, Method};
 use axum::{
     routing::{delete, get, put},
     Router,
 };
-use axum::http::{HeaderValue, Method};
 use tower_http::cors::CorsLayer;
 
 use crate::{
@@ -26,11 +26,14 @@ use crate::{
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         // ── Config management ───────────────────────────────────────────────
-        .route("/v1/config/:tenant_id",                          get(get_config))
-        .route("/v1/config/:tenant_id",                          put(upsert_config))
+        .route("/v1/config/:tenant_id", get(get_config))
+        .route("/v1/config/:tenant_id", put(upsert_config))
         // ── API Key lifecycle ───────────────────────────────────────────────
-        .route("/v1/config/:tenant_id/api-keys",                 get(list_api_keys))
-        .route("/v1/config/:tenant_id/api-keys/:key_id",         delete(revoke_api_key))
+        .route("/v1/config/:tenant_id/api-keys", get(list_api_keys))
+        .route(
+            "/v1/config/:tenant_id/api-keys/:key_id",
+            delete(revoke_api_key),
+        )
         // ── Middleware ──────────────────────────────────────────────────────
         .layer(build_cors())
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024)) // 256 KB

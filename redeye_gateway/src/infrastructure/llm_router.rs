@@ -10,12 +10,16 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::Value;
 use sqlx::Row;
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::domain::models::{AppState, GatewayError};
 use crate::api::middleware::auth::decrypt_api_key;
+use crate::domain::models::RedEyeConversation;
+use crate::domain::models::{AppState, GatewayError};
 use crate::infrastructure::routing_strategy::{self, RoutingStrategy};
+use crate::infrastructure::translators::{
+    AnthropicTranslator, BaseTranslator, GeminiTranslator, OpenAiTranslator,
+};
 
 // ── Dynamic Config Structs ───────────────────────────────────────────────────
 
@@ -33,6 +37,14 @@ pub enum SchemaFormat {
     Gemini,
 }
 
+pub fn get_translator(schema: &SchemaFormat) -> Box<dyn BaseTranslator> {
+    match schema {
+        SchemaFormat::OpenAI => Box::new(OpenAiTranslator),
+        SchemaFormat::Anthropic => Box::new(AnthropicTranslator),
+        SchemaFormat::Gemini => Box::new(GeminiTranslator),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
     pub id: &'static str,
@@ -48,29 +60,102 @@ pub fn get_provider_registry() -> &'static HashMap<&'static str, ProviderConfig>
     PROVIDER_REGISTRY.get_or_init(|| {
         let mut m = HashMap::new();
         let configs = vec![
-            ("openai", "https://api.openai.com/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("anthropic", "https://api.anthropic.com/v1", AuthScheme::XApiKey, SchemaFormat::Anthropic),
-            ("gemini", "https://generativelanguage.googleapis.com/v1beta/models", AuthScheme::GoogleApiKey, SchemaFormat::Gemini),
-            ("groq", "https://api.groq.com/openai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("openrouter", "https://openrouter.ai/api/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("deepseek", "https://api.deepseek.com/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("together", "https://api.together.xyz/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("mistral", "https://api.mistral.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("xai", "https://api.x.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("cerebras", "https://api.cerebras.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("fireworks", "https://api.fireworks.ai/inference/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("siliconflow", "https://api.siliconflow.cn/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("perplexity", "https://api.perplexity.ai", AuthScheme::Bearer, SchemaFormat::OpenAI),
-            ("cohere", "https://api.cohere.ai/v1", AuthScheme::Bearer, SchemaFormat::OpenAI),
+            (
+                "openai",
+                "https://api.openai.com/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "anthropic",
+                "https://api.anthropic.com/v1",
+                AuthScheme::XApiKey,
+                SchemaFormat::Anthropic,
+            ),
+            (
+                "gemini",
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                AuthScheme::GoogleApiKey,
+                SchemaFormat::Gemini,
+            ),
+            (
+                "groq",
+                "https://api.groq.com/openai/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "openrouter",
+                "https://openrouter.ai/api/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "deepseek",
+                "https://api.deepseek.com/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "together",
+                "https://api.together.xyz/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "mistral",
+                "https://api.mistral.ai/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "xai",
+                "https://api.x.ai/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "cerebras",
+                "https://api.cerebras.ai/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "fireworks",
+                "https://api.fireworks.ai/inference/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "siliconflow",
+                "https://api.siliconflow.cn/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "perplexity",
+                "https://api.perplexity.ai",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
+            (
+                "cohere",
+                "https://api.cohere.ai/v1",
+                AuthScheme::Bearer,
+                SchemaFormat::OpenAI,
+            ),
         ];
 
         for (id, url, auth, schema) in configs {
-            m.insert(id, ProviderConfig {
+            m.insert(
                 id,
-                base_url: url,
-                auth_scheme: auth,
-                schema_format: schema,
-            });
+                ProviderConfig {
+                    id,
+                    base_url: url,
+                    auth_scheme: auth,
+                    schema_format: schema,
+                },
+            );
         }
         m
     })
@@ -92,38 +177,40 @@ pub async fn fetch_tenant_provider_keys(
     state: &Arc<AppState>,
     tenant_id: &str,
 ) -> Result<Vec<ProviderKey>, GatewayError> {
-    let tenant_uuid = Uuid::parse_str(tenant_id).map_err(|_| {
-        GatewayError::ResponseBuild("Invalid tenant ID format".into())
-    })?;
+    let tenant_uuid = Uuid::parse_str(tenant_id)
+        .map_err(|_| GatewayError::ResponseBuild("Invalid tenant ID format".into()))?;
 
-    let rows = sqlx::query(
-        "SELECT provider_name, encrypted_key FROM provider_keys WHERE tenant_id = $1"
-    )
-    .bind(tenant_uuid)
-    .fetch_all(&state.db_pool)
-    .await
-    .map_err(|e| {
-        error!(error = %e, "Database error fetching provider keys");
-        GatewayError::ResponseBuild("Failed to fetch provider keys".into())
-    })?;
+    let rows =
+        sqlx::query("SELECT provider_name, encrypted_key FROM provider_keys WHERE tenant_id = $1")
+            .bind(tenant_uuid)
+            .fetch_all(&state.db_pool)
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Database error fetching provider keys");
+                GatewayError::ResponseBuild("Failed to fetch provider keys".into())
+            })?;
 
     let mut keys = Vec::with_capacity(rows.len());
 
     let registry = get_provider_registry();
 
     for row in rows {
-        let provider_name: String = row.try_get("provider_name")
+        let provider_name: String = row
+            .try_get("provider_name")
             .map_err(|_| GatewayError::ResponseBuild("Failed to fetch provider_name".into()))?;
-        let encrypted_key: Vec<u8> = row.try_get("encrypted_key")
+        let encrypted_key: Vec<u8> = row
+            .try_get("encrypted_key")
             .map_err(|_| GatewayError::ResponseBuild("Failed to fetch encrypted_key".into()))?;
 
-        let decrypted_key = decrypt_api_key(&encrypted_key)
-            .map_err(|_| GatewayError::ResponseBuild(
-                format!("Failed to decrypt {} API key", provider_name)
-            ))?;
+        let decrypted_key = decrypt_api_key(&encrypted_key).map_err(|_| {
+            GatewayError::ResponseBuild(format!("Failed to decrypt {} API key", provider_name))
+        })?;
 
         if registry.contains_key(provider_name.as_str()) {
-            keys.push(ProviderKey { provider_id: provider_name, decrypted_key });
+            keys.push(ProviderKey {
+                provider_id: provider_name,
+                decrypted_key,
+            });
         } else {
             warn!("Unknown provider in database: {}", provider_name);
         }
@@ -135,14 +222,25 @@ pub async fn fetch_tenant_provider_keys(
 /// Detect provider ID from model name string (helper for generic routing).
 pub fn detect_primary_provider(model: &str) -> &'static str {
     let m = model.to_lowercase();
-    if m.starts_with("gemini-") { "gemini" }
-    else if m.starts_with("claude-") { "anthropic" }
-    else if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") { "openai" }
-    else if m.starts_with("mistral") { "mistral" }
-    else if m.starts_with("deepseek") { "deepseek" }
-    else if m.starts_with("cohere") { "cohere" }
-    else if m.contains("llama") || m.contains("mixtral") || m.contains("qwen") { "openrouter" } // Default preferred open-source router
-    else { "openai" } // Safe default
+    if m.starts_with("gemini-") {
+        "gemini"
+    } else if m.starts_with("claude-") {
+        "anthropic"
+    } else if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") {
+        "openai"
+    } else if m.starts_with("mistral") {
+        "mistral"
+    } else if m.starts_with("deepseek") {
+        "deepseek"
+    } else if m.starts_with("cohere") {
+        "cohere"
+    } else if m.contains("llama") || m.contains("mixtral") || m.contains("qwen") {
+        "openrouter"
+    }
+    // Default preferred open-source router
+    else {
+        "openai"
+    } // Safe default
 }
 
 /// Helper method used by proxy.rs
@@ -184,7 +282,7 @@ pub fn select_provider_for_model(
             }
         }
     }
-    
+
     // Pick first available
     if let Some(key) = available_keys.first() {
         return Some((key.provider_id.clone(), key.decrypted_key.clone()));
@@ -198,11 +296,11 @@ fn is_retryable_error(status: u16) -> bool {
 }
 
 fn prepare_fallback_body(
-    original_body: &Value,
+    original_conv: &RedEyeConversation,
     target_provider_id: &str,
     original_model: &str,
-) -> Value {
-    let mut body = original_body.clone();
+) -> RedEyeConversation {
+    let mut conv = original_conv.clone();
 
     // Mapping fallback models for target providers
     let fallback_model = match target_provider_id {
@@ -219,20 +317,21 @@ fn prepare_fallback_body(
     if target_provider_from_model == target_provider_id {
         // Keep original
     } else {
-        body["model"] = Value::String(fallback_model.to_string());
+        conv.model = Some(fallback_model.to_string());
     }
 
-    body
+    conv
 }
 
 pub async fn route_chat_completion_with_fallback(
     state: &Arc<AppState>,
     tenant_id: &str,
+    conv: &RedEyeConversation,
     body: &Value,
     accept_header: &str,
     strategy: RoutingStrategy,
 ) -> Result<reqwest::Response, GatewayError> {
-    let model = extract_model(body);
+    let model = conv.model.as_deref().unwrap_or("gpt-4o");
     let available_keys = fetch_tenant_provider_keys(state, tenant_id).await?;
 
     // In tests, llm_api_base_url is set to the wiremock server URI to intercept all calls.
@@ -240,7 +339,7 @@ pub async fn route_chat_completion_with_fallback(
 
     if available_keys.is_empty() {
         return Err(GatewayError::ResponseBuild(
-            "No provider keys configured for this tenant".into()
+            "No provider keys configured for this tenant".into(),
         ));
     }
 
@@ -255,7 +354,8 @@ pub async fn route_chat_completion_with_fallback(
                         strategy = "least_latency",
                         "Strategy selected provider"
                     );
-                    available_keys.iter()
+                    available_keys
+                        .iter()
                         .find(|k| k.provider_id == provider_id)
                         .map(|k| (k.provider_id.clone(), k.decrypted_key.clone()))
                 }
@@ -264,7 +364,8 @@ pub async fn route_chat_completion_with_fallback(
         }
         RoutingStrategy::CostOptimized => {
             let estimated_tokens = routing_strategy::estimate_input_tokens(body);
-            match routing_strategy::resolve_cost_optimized(model, estimated_tokens, &available_keys) {
+            match routing_strategy::resolve_cost_optimized(model, estimated_tokens, &available_keys)
+            {
                 Some((provider_id, est_cost)) => {
                     info!(
                         provider = %provider_id,
@@ -273,7 +374,8 @@ pub async fn route_chat_completion_with_fallback(
                         estimated_cost_usd = est_cost,
                         "Strategy selected cheapest provider"
                     );
-                    available_keys.iter()
+                    available_keys
+                        .iter()
                         .find(|k| k.provider_id == provider_id)
                         .map(|k| (k.provider_id.clone(), k.decrypted_key.clone()))
                 }
@@ -286,9 +388,9 @@ pub async fn route_chat_completion_with_fallback(
     // Use strategy result, or fall back to default model-based selection.
     let (primary_provider, primary_key) = strategy_provider
         .or_else(|| select_provider_for_model(model, &available_keys))
-        .ok_or_else(|| GatewayError::ResponseBuild(
-            "No compatible provider key available".into()
-        ))?;
+        .ok_or_else(|| {
+            GatewayError::ResponseBuild("No compatible provider key available".into())
+        })?;
 
     info!(
         provider = %primary_provider,
@@ -301,10 +403,11 @@ pub async fn route_chat_completion_with_fallback(
         &state.http_client,
         &primary_provider,
         &primary_key,
-        body,
+        conv,
         accept_header,
         base_url_override,
-    ).await;
+    )
+    .await;
 
     let primary_error = match primary_result {
         Ok(response) => {
@@ -333,17 +436,18 @@ pub async fn route_chat_completion_with_fallback(
         state,
         &available_keys,
         &primary_provider,
-        body,
+        conv,
         accept_header,
         model,
         base_url_override,
         primary_error,
-    ).await
+    )
+    .await
 }
 
 pub fn translate_model_name(original_model: &str, target_provider_id: &str) -> String {
     let m = original_model.to_lowercase();
-    
+
     match target_provider_id {
         "openai" | "anthropic" => {
             if m.contains("llama") || m.contains("mixtral") || m.contains("qwen") {
@@ -374,7 +478,7 @@ pub fn translate_model_name(original_model: &str, target_provider_id: &str) -> S
         }
         _ => {}
     }
-    
+
     original_model.to_string()
 }
 
@@ -382,22 +486,31 @@ async fn execute_provider_request(
     client: &reqwest::Client,
     provider_id: &str,
     api_key: &str,
-    body: &Value,
+    conv: &RedEyeConversation,
     accept_header: &str,
     base_url_override: Option<&str>,
 ) -> Result<reqwest::Response, GatewayError> {
-    let config = get_provider_config(provider_id)
-        .ok_or_else(|| GatewayError::ResponseBuild(format!("Provider config missing for {}", provider_id)))?;
+    let config = get_provider_config(provider_id).ok_or_else(|| {
+        GatewayError::ResponseBuild(format!("Provider config missing for {}", provider_id))
+    })?;
 
     let base_url = base_url_override.unwrap_or(config.base_url);
 
     let endpoint = if config.schema_format == SchemaFormat::Anthropic {
         format!("{}/messages", base_url)
+    } else if config.schema_format == SchemaFormat::Gemini {
+        let model = conv.model.as_deref().unwrap_or("gemini-1.5-pro");
+        if conv.stream.unwrap_or(false) {
+            format!("{}/{}:streamGenerateContent", base_url, model)
+        } else {
+            format!("{}/{}:generateContent", base_url, model)
+        }
     } else {
         format!("{}/chat/completions", base_url)
     };
 
-    let mut request = client.post(&endpoint)
+    let mut request = client
+        .post(&endpoint)
         .header("Content-Type", "application/json")
         .header("Accept", accept_header);
 
@@ -406,48 +519,34 @@ async fn execute_provider_request(
         AuthScheme::GoogleApiKey => request.header("x-goog-api-key", api_key),
         AuthScheme::XApiKey => {
             if config.schema_format == SchemaFormat::Anthropic {
-                request.header("x-api-key", api_key).header("anthropic-version", "2023-06-01")
+                request
+                    .header("x-api-key", api_key)
+                    .header("anthropic-version", "2023-06-01")
             } else {
                 request.header("x-api-key", api_key)
             }
         }
     };
 
-    let mut final_body = body.clone();
-    
-    let original_model = extract_model(body);
+    let original_model = conv.model.as_deref().unwrap_or("gpt-4o");
     let translated_model = translate_model_name(original_model, config.id);
-    final_body["model"] = Value::String(translated_model);
-    
-    if config.schema_format == SchemaFormat::Anthropic {
-        use crate::infrastructure::translators::{OpenAIChatRequest, AnthropicRequest};
-        use crate::domain::models::RedEyeConversation;
 
-        let openai_req: OpenAIChatRequest = serde_json::from_value(final_body.clone())
-            .map_err(|e| GatewayError::ResponseBuild(format!("OpenAI parse error for Anthropic format: {}", e)))?;
-        
-        let conv: RedEyeConversation = openai_req.try_into()
-            .map_err(|e| GatewayError::ResponseBuild(format!("To UMS error: {}", e)))?;
-            
-        let anthropic_req: AnthropicRequest = conv.try_into()
-            .map_err(|e| GatewayError::ResponseBuild(format!("To Anthropic error: {}", e)))?;
-            
-        final_body = serde_json::to_value(anthropic_req)
-            .map_err(|e| GatewayError::ResponseBuild(format!("Json Serialization Error: {}", e)))?;
-    }
+    let mut local_conv = conv.clone();
+    local_conv.model = Some(translated_model);
 
-    let response = request
-        .json(&final_body)
-        .send()
-        .await
-        .map_err(|e| {
-            error!(
-                provider = %config.id,
-                error = %e,
-                "Failed to reach upstream LLM provider"
-            );
-            GatewayError::UpstreamUnreachable(e)
-        })?;
+    let translator = get_translator(&config.schema_format);
+    let final_body = translator
+        .from_universal(&local_conv)
+        .map_err(|e| GatewayError::ResponseBuild(format!("Translation error: {}", e)))?;
+
+    let response = request.json(&final_body).send().await.map_err(|e| {
+        error!(
+            provider = %config.id,
+            error = %e,
+            "Failed to reach upstream LLM provider"
+        );
+        GatewayError::UpstreamUnreachable(e)
+    })?;
 
     Ok(response)
 }
@@ -456,14 +555,21 @@ async fn try_fallback_providers(
     state: &Arc<AppState>,
     available_keys: &[ProviderKey],
     failed_provider: &str,
-    body: &Value,
+    conv: &RedEyeConversation,
     accept_header: &str,
     original_model: &str,
     base_url_override: Option<&str>,
     mut final_error: GatewayError,
 ) -> Result<reqwest::Response, GatewayError> {
     let fallback_candidates = vec![
-        "openrouter", "together", "groq", "anthropic", "openai", "gemini", "mistral", "deepseek"
+        "openrouter",
+        "together",
+        "groq",
+        "anthropic",
+        "openai",
+        "gemini",
+        "mistral",
+        "deepseek",
     ];
 
     for fallback_provider in fallback_candidates {
@@ -471,7 +577,10 @@ async fn try_fallback_providers(
             continue;
         }
 
-        let Some(key_entry) = available_keys.iter().find(|k| k.provider_id == fallback_provider) else {
+        let Some(key_entry) = available_keys
+            .iter()
+            .find(|k| k.provider_id == fallback_provider)
+        else {
             continue;
         };
 
@@ -481,7 +590,7 @@ async fn try_fallback_providers(
             "Attempting automated fallback"
         );
 
-        let fallback_body = prepare_fallback_body(body, fallback_provider, original_model);
+        let fallback_body = prepare_fallback_body(conv, fallback_provider, original_model);
 
         match execute_provider_request(
             &state.http_client,
@@ -490,7 +599,9 @@ async fn try_fallback_providers(
             &fallback_body,
             accept_header,
             base_url_override,
-        ).await {
+        )
+        .await
+        {
             Ok(response) => {
                 let status = response.status().as_u16();
                 if !is_retryable_error(status) {
@@ -505,7 +616,8 @@ async fn try_fallback_providers(
                     status = status,
                     "Fallback provider also failed"
                 );
-                final_error = GatewayError::ResponseBuild(format!("Fallback provider returned {}", status));
+                final_error =
+                    GatewayError::ResponseBuild(format!("Fallback provider returned {}", status));
             }
             Err(e) => {
                 warn!(
@@ -530,119 +642,22 @@ pub fn extract_model(body: &Value) -> &str {
 pub async fn route_chat_completion(
     client: &reqwest::Client,
     api_key: &str,
-    body: &Value,
+    conv: &RedEyeConversation,
     accept_header: &str,
     base_url_override: Option<&str>,
 ) -> Result<reqwest::Response, GatewayError> {
-    let model = extract_model(body);
+    let model = conv.model.as_deref().unwrap_or("gpt-4o");
     let provider_id = detect_primary_provider(model);
-    
-    let mut response = execute_provider_request(
+
+    let response = execute_provider_request(
         client,
         provider_id,
         api_key,
-        body,
+        conv,
         accept_header,
         base_url_override,
-    ).await?;
-
-    // Agentic Hot-Swap Feature Support for basic internal retry logic
-    if provider_id == "openai" && (response.status().as_u16() == 503 || response.status().as_u16() == 429) {
-        tracing::warn!("Primary provider failed. Triggering RedEye Hot-Swap to Anthropic Mock...");
-
-        let anthropic_key = std::env::var("ANTHROPIC_BACKUP_KEY").unwrap_or_else(|_| "mock_backup_key".to_string());
-        
-        // Convert Request
-        use crate::infrastructure::translators::{OpenAIChatRequest, AnthropicRequest};
-        use crate::domain::models::RedEyeConversation;
-
-        let openai_req: OpenAIChatRequest = serde_json::from_value(body.clone())
-            .map_err(|_| GatewayError::ResponseBuild("Hot-Swap parse error for OpenAI request".to_string()))?;
-        
-        let conv: RedEyeConversation = openai_req.try_into()
-            .map_err(|e| GatewayError::ResponseBuild(format!("Hot-Swap to internal struct failed: {}", e)))?;
-        
-        let anthropic_req: AnthropicRequest = conv.try_into()
-            .map_err(|e| GatewayError::ResponseBuild(format!("Hot-Swap to Anthropic struct failed: {}", e)))?;
-
-        let anthropic_base = std::env::var("ANTHROPIC_MOCK_URL").unwrap_or_else(|_| "https://api.anthropic.com/v1".to_string());
-        let anthropic_endpoint = format!("{}/messages", anthropic_base.trim_end_matches('/'));
-        
-        // Fire request to Anthropic
-        let anthropic_resp = client.post(&anthropic_endpoint)
-            .header("x-api-key", anthropic_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&anthropic_req)
-            .send()
-            .await
-            .map_err(|e| {
-                error!(error = %e, "Anthropic fallback unreachable");
-                GatewayError::UpstreamUnreachable(e)
-            })?;
-        
-        // Translate Response
-        let anth_json: Value = anthropic_resp.json().await.map_err(|_| {
-            GatewayError::ResponseBuild("Failed to read Anthropic response JSON".into())
-        })?;
-        
-        let mapped_tool_calls = anth_json["content"]
-            .as_array()
-            .cloned()
-            .and_then(|arr| crate::infrastructure::schema_mapper::map_anthropic_tool_use_to_openai_calls(arr));
-
-        let text_content = anth_json["content"]
-            .as_array()
-            .and_then(|arr| {
-                arr.iter().find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
-            })
-            .and_then(|c| c["text"].as_str())
-            .unwrap_or("")
-            .to_string();
-            
-        let input_tokens = anth_json["usage"]["input_tokens"].as_u64().unwrap_or(0);
-        let output_tokens = anth_json["usage"]["output_tokens"].as_u64().unwrap_or(0);
-        
-        let finish_reason = if mapped_tool_calls.is_some() { "tool_calls" } else { "stop" };
-        
-        let mut message_obj = serde_json::json!({
-            "role": "assistant",
-            "content": text_content
-        });
-        
-        if let Some(tool_calls) = mapped_tool_calls {
-            message_obj["tool_calls"] = serde_json::json!(tool_calls);
-        }
-            
-        let mock_openai_resp = serde_json::json!({
-            "id": anth_json["id"].as_str().unwrap_or("chatcmpl-fallback"),
-            "object": "chat.completion",
-            "created": 0,
-            "model": "claude-fallback",
-            "choices": [{
-                "index": 0,
-                "message": message_obj,
-                "finish_reason": finish_reason
-            }],
-            "usage": {
-                "prompt_tokens": input_tokens,
-                "completion_tokens": output_tokens,
-                "total_tokens": input_tokens + output_tokens
-            }
-        });
-
-        let body_bytes = serde_json::to_vec(&mock_openai_resp)
-            .map_err(|_| GatewayError::ResponseBuild("Failed to serialize fallback JSON".into()))?;
-        let hr = axum::http::Response::builder()
-            .status(200)
-            .header("content-type", "application/json")
-            .header("x-redeye-hot-swapped", "1")
-            .header("x-redeye-executed-provider", "anthropic")
-            .body(reqwest::Body::from(body_bytes))
-            .map_err(|_| GatewayError::ResponseBuild("Failed to build HTTP response".into()))?;
-        
-        response = reqwest::Response::from(hr);
-    }
+    )
+    .await?;
 
     Ok(response)
 }
@@ -659,7 +674,10 @@ mod tests {
         assert_eq!(detect_primary_provider("claude-3-opus"), "anthropic");
         assert_eq!(detect_primary_provider("claude-3-sonnet"), "anthropic");
         assert_eq!(detect_primary_provider("gemini-pro"), "gemini");
-        assert_eq!(detect_primary_provider("meta-llama/Llama-3-70b"), "openrouter");
+        assert_eq!(
+            detect_primary_provider("meta-llama/Llama-3-70b"),
+            "openrouter"
+        );
         assert_eq!(detect_primary_provider("mixtral-8x7b"), "openrouter");
     }
 
@@ -702,12 +720,10 @@ mod tests {
     #[test]
     fn test_select_provider_fallback_order() {
         // Only Anthropic available, but requesting GPT
-        let keys = vec![
-            ProviderKey {
-                provider_id: "anthropic".to_string(),
-                decrypted_key: "sk-anthropic".to_string(),
-            },
-        ];
+        let keys = vec![ProviderKey {
+            provider_id: "anthropic".to_string(),
+            decrypted_key: "sk-anthropic".to_string(),
+        }];
 
         // Should fallback to Anthropic since no OpenAI key
         let (provider, key) = select_provider_for_model("gpt-4", &keys).unwrap();
@@ -726,14 +742,24 @@ mod tests {
 
     #[test]
     fn test_prepare_fallback_body() {
-        let body = serde_json::json!({"model": "gpt-4", "messages": []});
-        
+        let conv = crate::domain::models::RedEyeConversation {
+            system_prompt: None,
+            messages: vec![],
+            tools: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            stop: None,
+            stream: None,
+            model: Some("gpt-4".to_string()),
+        };
+
         // Fallback to Anthropic
-        let fallback = prepare_fallback_body(&body, "anthropic", "gpt-4");
-        assert_eq!(fallback["model"], "claude-3-haiku-20240307");
+        let fallback = prepare_fallback_body(&conv, "anthropic", "gpt-4");
+        assert_eq!(fallback.model.as_deref(), Some("claude-3-haiku-20240307"));
 
         // Keep original if compatible
-        let fallback = prepare_fallback_body(&body, "openai", "gpt-4");
-        assert_eq!(fallback["model"], "gpt-4");
+        let fallback = prepare_fallback_body(&conv, "openai", "gpt-4");
+        assert_eq!(fallback.model.as_deref(), Some("gpt-4"));
     }
 }

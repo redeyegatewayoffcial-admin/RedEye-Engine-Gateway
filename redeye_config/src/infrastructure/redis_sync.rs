@@ -74,9 +74,9 @@ pub trait RedisSync: Send + Sync {
     /// [`KeyRevocationEvent`] on [`CHANNEL_KEY_REVOCATIONS`].
     async fn invalidate_api_key(
         &self,
-        key_hash:  &str,
+        key_hash: &str,
         tenant_id: Uuid,
-        key_id:    Uuid,
+        key_id: Uuid,
     ) -> Result<(), ConfigError>;
 }
 
@@ -140,7 +140,7 @@ impl RedisSync for RedisSyncClient {
         // 3. Publish the update event.
         let event = ConfigUpdateEvent {
             tenant_id: config.tenant_id,
-            config:    config.clone(),
+            config: config.clone(),
         };
         let event_payload = serde_json::to_string(&event).map_err(|e| {
             ConfigError::Internal(format!(
@@ -165,18 +165,15 @@ impl RedisSync for RedisSyncClient {
 
     async fn invalidate_api_key(
         &self,
-        key_hash:  &str,
+        key_hash: &str,
         tenant_id: Uuid,
-        key_id:    Uuid,
+        key_id: Uuid,
     ) -> Result<(), ConfigError> {
         let mut conn = self.connection().await?;
 
         // 1. Delete the key-validation cache entry.
         let cache_key = format!("api_key:{key_hash}");
-        let del_count: i64 = conn
-            .del(&cache_key)
-            .await
-            .map_err(ConfigError::from)?;
+        let del_count: i64 = conn.del(&cache_key).await.map_err(ConfigError::from)?;
 
         if del_count > 0 {
             tracing::info!(
@@ -247,7 +244,7 @@ mod tests {
 
     #[test]
     fn channel_names_are_stable() {
-        assert_eq!(CHANNEL_CONFIG_UPDATES,  "redeye:config_updates");
+        assert_eq!(CHANNEL_CONFIG_UPDATES, "redeye:config_updates");
         assert_eq!(CHANNEL_KEY_REVOCATIONS, "redeye:key_revocations");
     }
 
@@ -274,47 +271,50 @@ mod tests {
 
         let tid = Uuid::new_v4();
         let config = ClientConfig {
-            tenant_id:               tid,
-            pii_masking_enabled:     true,
+            tenant_id: tid,
+            pii_masking_enabled: true,
             semantic_caching_enabled: false,
             routing_fallback_enabled: true,
-            rate_limit_rpm:          Some(1000),
-            preferred_model:         Some("gpt-4o-mini".into()),
-            updated_at:              Utc::now(),
+            rate_limit_rpm: Some(1000),
+            preferred_model: Some("gpt-4o-mini".into()),
+            updated_at: Utc::now(),
         };
         let event = ConfigUpdateEvent {
             tenant_id: tid,
-            config:    config.clone(),
+            config: config.clone(),
         };
 
-        let json    = serde_json::to_string(&event).expect("serialise");
+        let json = serde_json::to_string(&event).expect("serialise");
         let decoded: ConfigUpdateEvent = serde_json::from_str(&json).expect("deserialise");
 
         assert_eq!(decoded.tenant_id, tid);
-        assert_eq!(decoded.config.pii_masking_enabled, config.pii_masking_enabled);
-        assert_eq!(decoded.config.rate_limit_rpm,      config.rate_limit_rpm);
-        assert_eq!(decoded.config.preferred_model,     config.preferred_model);
+        assert_eq!(
+            decoded.config.pii_masking_enabled,
+            config.pii_masking_enabled
+        );
+        assert_eq!(decoded.config.rate_limit_rpm, config.rate_limit_rpm);
+        assert_eq!(decoded.config.preferred_model, config.preferred_model);
     }
 
     // ── KeyRevocationEvent serialisation ───────────────────────────────────
 
     #[test]
     fn key_revocation_event_round_trips_via_json() {
-        let tid  = Uuid::new_v4();
-        let kid  = Uuid::new_v4();
+        let tid = Uuid::new_v4();
+        let kid = Uuid::new_v4();
         let hash = "deadbeef1234567890abcdef".to_string();
 
         let event = KeyRevocationEvent {
             tenant_id: tid,
-            key_id:    kid,
-            key_hash:  hash.clone(),
+            key_id: kid,
+            key_hash: hash.clone(),
         };
 
-        let json    = serde_json::to_string(&event).expect("serialise");
+        let json = serde_json::to_string(&event).expect("serialise");
         let decoded: KeyRevocationEvent = serde_json::from_str(&json).expect("deserialise");
 
         assert_eq!(decoded.tenant_id, tid);
-        assert_eq!(decoded.key_id,    kid);
-        assert_eq!(decoded.key_hash,  hash);
+        assert_eq!(decoded.key_id, kid);
+        assert_eq!(decoded.key_hash, hash);
     }
 }

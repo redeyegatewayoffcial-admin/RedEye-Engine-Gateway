@@ -116,7 +116,12 @@ impl PresidioAnalyzer for PresidioGrpcClient {
             collect_matches(&self.aadhaar_regex, text, "AADHAAR", &mut entities);
             collect_matches(&self.pan_regex, text, "PAN", &mut entities);
             collect_matches(&self.ifsc_regex, text, "IFSC", &mut entities);
-            collect_matches(&self.bank_account_regex, text, "BANK_ACCOUNT", &mut entities);
+            collect_matches(
+                &self.bank_account_regex,
+                text,
+                "BANK_ACCOUNT",
+                &mut entities,
+            );
 
             Ok(entities)
         })
@@ -167,11 +172,20 @@ impl PiiEngine {
         // Keywords ordered to match pattern_categories below.
         let keywords: Vec<&str> = vec![
             // IndianId
-            "aadhaar", "aadhar", "pan card", "pan number", "ifsc",
+            "aadhaar",
+            "aadhar",
+            "pan card",
+            "pan number",
+            "ifsc",
             // Financial
-            "credit card", "debit card", "card number", "bank account", "account number",
+            "credit card",
+            "debit card",
+            "card number",
+            "bank account",
+            "account number",
             // UsId
-            "ssn", "social security",
+            "ssn",
+            "social security",
             // Contact
             "@",
         ];
@@ -231,7 +245,11 @@ impl PiiEngine {
         let tier1_hits: Vec<PiiCategory> = self
             .ac_automaton
             .find_iter(&full_text)
-            .filter_map(|mat| self.pattern_categories.get(mat.pattern().as_usize()).copied())
+            .filter_map(|mat| {
+                self.pattern_categories
+                    .get(mat.pattern().as_usize())
+                    .copied()
+            })
             .collect();
 
         // Also check for long digit sequences (potential Aadhaar/CC/bank account).
@@ -269,7 +287,10 @@ impl PiiEngine {
             });
         }
 
-        info!(entity_count = entities.len(), "Tier 2: Redacting confirmed entities");
+        info!(
+            entity_count = entities.len(),
+            "Tier 2: Redacting confirmed entities"
+        );
 
         // ── Redaction ───────────────────────────────────────────────────────
         let mut token_map = HashMap::new();
@@ -305,9 +326,9 @@ impl PiiEngine {
         }
 
         // Check entity types for Indian PII from Tier 2 as well.
-        let indian_from_tier2 = entities
-            .iter()
-            .any(|e| e.entity_type == "AADHAAR" || e.entity_type == "PAN" || e.entity_type == "IFSC");
+        let indian_from_tier2 = entities.iter().any(|e| {
+            e.entity_type == "AADHAAR" || e.entity_type == "PAN" || e.entity_type == "IFSC"
+        });
 
         // Invert token_map to (original → token) pairs for the substitution pass.
         let pii_to_token: Vec<(String, String)> = token_map
@@ -347,9 +368,8 @@ impl PiiEngine {
 
 /// Compiles a regex pattern, mapping errors to `AppError::PiiEngineFailure`.
 fn compile_regex(pattern: &str) -> Result<Regex, AppError> {
-    Regex::new(pattern).map_err(|e| {
-        AppError::PiiEngineFailure(format!("Invalid PII regex '{}': {}", pattern, e))
-    })
+    Regex::new(pattern)
+        .map_err(|e| AppError::PiiEngineFailure(format!("Invalid PII regex '{}': {}", pattern, e)))
 }
 
 /// Collects regex matches into the entity list with a high default confidence.
@@ -459,7 +479,12 @@ mod tests {
     impl MockPresidio {
         fn new() -> (Self, Arc<AtomicBool>) {
             let flag = Arc::new(AtomicBool::new(false));
-            (Self { was_called: flag.clone() }, flag)
+            (
+                Self {
+                    was_called: flag.clone(),
+                },
+                flag,
+            )
         }
     }
 
@@ -467,7 +492,8 @@ mod tests {
         fn analyze<'a>(
             &'a self,
             text: &'a str,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<PresidioEntity>, AppError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<PresidioEntity>, AppError>> + Send + 'a>>
+        {
             self.was_called.store(true, Ordering::SeqCst);
             let text = text.to_string();
             Box::pin(async move {
@@ -512,7 +538,8 @@ mod tests {
         fn analyze<'a>(
             &'a self,
             _text: &'a str,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<PresidioEntity>, AppError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<PresidioEntity>, AppError>> + Send + 'a>>
+        {
             Box::pin(async {
                 Err(AppError::PiiEngineFailure(
                     "Presidio gRPC connection refused (mock)".to_string(),
@@ -534,8 +561,7 @@ mod tests {
     async fn test_pii_tier1_fast_bypass() {
         // Clean text with zero PII keywords → Presidio should NEVER be called.
         let (mock, was_called) = MockPresidio::new();
-        let engine = PiiEngine::with_analyzer(Arc::new(mock))
-            .expect("test setup");
+        let engine = PiiEngine::with_analyzer(Arc::new(mock)).expect("test setup");
 
         let payload = json!({
             "messages": [
@@ -548,8 +574,14 @@ mod tests {
 
         let result = result.unwrap();
         assert_eq!(result.redacted_count, 0, "No PII should be redacted");
-        assert!(!was_called.load(Ordering::SeqCst), "Presidio should NOT have been called for clean text");
-        assert_eq!(result.sanitized_payload, payload, "Payload should be unmodified");
+        assert!(
+            !was_called.load(Ordering::SeqCst),
+            "Presidio should NOT have been called for clean text"
+        );
+        assert_eq!(
+            result.sanitized_payload, payload,
+            "Payload should be unmodified"
+        );
         assert!(!result.indian_pii_detected);
     }
 
@@ -557,8 +589,7 @@ mod tests {
     async fn test_pii_tier2_grpc_trigger() {
         // Text with "Aadhaar" keyword → Tier 1 triggers → Presidio IS called.
         let (mock, was_called) = MockPresidio::new();
-        let engine = PiiEngine::with_analyzer(Arc::new(mock))
-            .expect("test setup");
+        let engine = PiiEngine::with_analyzer(Arc::new(mock)).expect("test setup");
 
         let payload = json!({
             "messages": [
@@ -570,7 +601,10 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
-        assert!(was_called.load(Ordering::SeqCst), "Presidio MUST be called when Tier 1 detects keywords");
+        assert!(
+            was_called.load(Ordering::SeqCst),
+            "Presidio MUST be called when Tier 1 detects keywords"
+        );
         assert!(result.redacted_count > 0, "Entities should be redacted");
         assert!(result.indian_pii_detected, "Should flag Indian PII");
     }
@@ -579,8 +613,7 @@ mod tests {
     async fn test_pii_tier2_deep_redaction() {
         // Full redaction with SSN + email — verify correct token map.
         let (mock, _) = MockPresidio::new();
-        let engine = PiiEngine::with_analyzer(Arc::new(mock))
-            .expect("test setup");
+        let engine = PiiEngine::with_analyzer(Arc::new(mock)).expect("test setup");
 
         let payload = json!({
             "messages": [
@@ -597,20 +630,31 @@ mod tests {
 
         // Verify originals are stored in the token map.
         let originals: Vec<&String> = result.token_map.values().collect();
-        assert!(originals.contains(&&"123-45-6789".to_string()), "SSN original must be in token map");
-        assert!(originals.contains(&&"test@example.com".to_string()), "Email original must be in token map");
+        assert!(
+            originals.contains(&&"123-45-6789".to_string()),
+            "SSN original must be in token map"
+        );
+        assert!(
+            originals.contains(&&"test@example.com".to_string()),
+            "Email original must be in token map"
+        );
 
         // Verify sanitized payload does NOT contain originals.
         let sanitized_str = result.sanitized_payload.to_string();
-        assert!(!sanitized_str.contains("123-45-6789"), "SSN must be redacted from output");
-        assert!(!sanitized_str.contains("test@example.com"), "Email must be redacted from output");
+        assert!(
+            !sanitized_str.contains("123-45-6789"),
+            "SSN must be redacted from output"
+        );
+        assert!(
+            !sanitized_str.contains("test@example.com"),
+            "Email must be redacted from output"
+        );
     }
 
     #[tokio::test]
     async fn test_no_panic_on_grpc_failure() {
         // Presidio returns an error → engine must return ComplianceError, NOT panic.
-        let engine = PiiEngine::with_analyzer(Arc::new(FailingPresidio))
-            .expect("test setup");
+        let engine = PiiEngine::with_analyzer(Arc::new(FailingPresidio)).expect("test setup");
 
         let payload = json!({
             "messages": [
@@ -662,7 +706,7 @@ mod tests {
         let engine = PiiEngine::with_analyzer(Arc::new(mock)).unwrap();
         let payload = json!({ "key": "", "nested": { "val": "" } });
         let result = engine.scan(payload.clone()).await.unwrap();
-        
+
         assert_eq!(result.sanitized_payload, payload);
         assert_eq!(result.redacted_count, 0);
     }
@@ -700,6 +744,6 @@ mod tests {
         let weird_unicode = "Weird chars: \u{FFFD}\u{0000}\u{FFFF} 123-45-6789";
         let payload = json!({ "msg": weird_unicode });
         let result = engine.scan(payload).await.unwrap();
-        assert_eq!(result.redacted_count, 1); 
+        assert_eq!(result.redacted_count, 1);
     }
 }

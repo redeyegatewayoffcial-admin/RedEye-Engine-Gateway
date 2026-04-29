@@ -3,7 +3,6 @@
 //! Extracts or generates `X-Session-ID`, `X-Trace-ID`, and `X-Parent-Trace-ID`
 //! headers for every request. Injects them into Axum extensions and response headers.
 
-use std::sync::Arc;
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -11,6 +10,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::models::{AppState, TraceContext};

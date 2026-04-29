@@ -35,10 +35,7 @@ pub struct LatencyWorker {
 
 impl LatencyWorker {
     /// Creates a new `LatencyWorker`.
-    pub fn new(
-        repo: Arc<ClickHouseRepo>,
-        redis_conn: redis::aio::MultiplexedConnection,
-    ) -> Self {
+    pub fn new(repo: Arc<ClickHouseRepo>, redis_conn: redis::aio::MultiplexedConnection) -> Self {
         let interval_secs = std::env::var("LATENCY_WORKER_INTERVAL_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -61,9 +58,8 @@ impl LatencyWorker {
             "Starting latency ranking worker"
         );
 
-        let mut interval = tokio::time::interval(
-            std::time::Duration::from_secs(self.interval_secs),
-        );
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(self.interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         // Skip the first immediate tick so we don't query before data accumulates.
@@ -76,7 +72,7 @@ impl LatencyWorker {
 
             if let Err(e) = self.tick().await {
                 consecutive_failures += 1;
-                
+
                 // Log on the 1st failure, and every ~60 seconds thereafter (if interval is 10s)
                 if consecutive_failures == 1 || consecutive_failures % 6 == 0 {
                     warn!(
@@ -87,7 +83,10 @@ impl LatencyWorker {
                 }
             } else {
                 if consecutive_failures > 0 {
-                    info!("Latency worker recovered after {} failures", consecutive_failures);
+                    info!(
+                        "Latency worker recovered after {} failures",
+                        consecutive_failures
+                    );
                 }
                 consecutive_failures = 0;
             }
@@ -105,11 +104,7 @@ impl LatencyWorker {
 
         // Apply EMA smoothing to each provider.
         for (provider, raw_p95) in &raw_latencies {
-            let ema = compute_ema(
-                self.ema_state.get(provider).copied(),
-                *raw_p95,
-                self.alpha,
-            );
+            let ema = compute_ema(self.ema_state.get(provider).copied(), *raw_p95, self.alpha);
             self.ema_state.insert(provider.clone(), ema);
         }
 
@@ -126,9 +121,7 @@ impl LatencyWorker {
 
         // Atomic replace: DEL + ZADD + EXPIRE in a pipeline.
         let mut pipe = redis::pipe();
-        pipe.atomic()
-            .del(REDIS_KEY)
-            .ignore();
+        pipe.atomic().del(REDIS_KEY).ignore();
 
         // Add entries one by one via the pipeline.
         for (score, member) in &entries {
@@ -146,7 +139,11 @@ impl LatencyWorker {
         );
 
         for (score, member) in &entries {
-            debug!(provider = member, ema_p95_ms = score, "Latency ranking entry");
+            debug!(
+                provider = member,
+                ema_p95_ms = score,
+                "Latency ranking entry"
+            );
         }
 
         Ok(())
@@ -177,10 +174,7 @@ impl LatencyWorker {
             "#
         );
 
-        let resp = self
-            .repo
-            .raw_query(&query)
-            .await?;
+        let resp = self.repo.raw_query(&query).await?;
 
         let mut result = HashMap::new();
 
