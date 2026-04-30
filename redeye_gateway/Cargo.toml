@@ -55,6 +55,7 @@ thiserror = "1"
 redis = { version = "0.27", features = ["tokio-comp", "script"] }
 
 regex = "1.10"
+rayon = "1.10"
 
 # ── HTTP Primitives ────────────────────────────────────────────────────────────
 # http: Shared types for HTTP (StatusCode, HeaderMap, etc.) used across crates.
@@ -88,6 +89,7 @@ fastembed = "5.13.2"
 # prost: Protocol Buffer message encoding/decoding.
 tonic = { version = "0.12", features = ["transport"] }
 prost = "0.13"
+arc-swap = "1.7.1"
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -38,9 +38,10 @@ use redis::{aio::MultiplexedConnection, AsyncCommands, Client};
 use uuid::Uuid;
 
 use crate::{
-    domain::models::{ClientConfig, ConfigUpdateEvent, KeyRevocationEvent},
+    domain::models::{ClientConfig, ConfigUpdateEvent, KeyRevocationEvent, ModelConfig},
     error::ConfigError,
 };
+use std::collections::HashMap;
 
 // =============================================================================
 // Stable Redis key / channel constants
@@ -78,6 +79,11 @@ pub trait RedisSync: Send + Sync {
         tenant_id: Uuid,
         key_id: Uuid,
     ) -> Result<(), ConfigError>;
+
+    // Note: routing-mesh updates are published via the standalone free function
+    // `publish_routing_mesh()`, which accepts a typed `HashMap<String, ModelConfig>`.
+    // There is intentionally NO trait method for routing updates to prevent
+    // untyped `&str` payloads from being accidentally published to the channel.
 }
 
 // =============================================================================
@@ -221,6 +227,39 @@ impl RedisSync for RedisSyncClient {
 
         Ok(())
     }
+
+    // Note: `publish_routing_config` has been intentionally removed from this impl.
+    // Use the standalone `publish_routing_mesh()` free function instead, which
+    // enforces the correct `HashMap<String, ModelConfig>` type on the wire.
+}
+
+pub async fn publish_routing_mesh(
+    redis_client: &redis::Client,
+    tenant_id: Uuid,
+    routing_map: HashMap<String, ModelConfig>,
+) -> Result<(), ConfigError> {
+    let mut conn = redis_client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(ConfigError::from)?;
+
+    let payload = serde_json::to_string(&routing_map).map_err(|e| {
+        ConfigError::Internal(format!("Failed to serialize routing_map: {e}"))
+    })?;
+
+    let subscriber_count: i64 = conn
+        .publish("redeye:routing_updates", &payload)
+        .await
+        .map_err(ConfigError::from)?;
+
+    tracing::info!(
+        tenant_id = %tenant_id,
+        channel = "redeye:routing_updates",
+        subscriber_count = subscriber_count,
+        "Routing mesh update published to Pub/Sub"
+    );
+
+    Ok(())
 }
 
 // =============================================================================

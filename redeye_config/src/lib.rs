@@ -42,9 +42,10 @@ use infrastructure::{db::ConfigRepository, redis_sync::RedisSync};
 /// Shared, cheaply-cloneable state injected into every Axum handler via
 /// [`axum::extract::State`].
 ///
-/// Both fields are trait objects behind [`Arc`], which enables handler unit
-/// tests to substitute lightweight [`mockall`] mocks without touching
-/// any I/O layer.
+/// Both `repo` and `redis` are trait objects behind [`Arc`], which enables handler
+/// unit tests to substitute lightweight [`mockall`] mocks without touching
+/// any I/O layer.  `redis_client` is the raw client used for the standalone
+/// `publish_routing_mesh` free function (which opens its own connection).
 ///
 /// # Clone semantics
 ///
@@ -56,6 +57,10 @@ pub struct AppState {
     /// Postgres-backed configuration repository.
     pub repo: Arc<dyn ConfigRepository>,
 
-    /// Redis synchronisation client (cache write + Pub/Sub).
+    /// Redis synchronisation client (cache write + Pub/Sub for config updates).
     pub redis: Arc<dyn RedisSync>,
+
+    /// Raw Redis client used by `publish_routing_mesh()` to open its own
+    /// multiplexed connection for routing table Pub/Sub.
+    pub redis_client: redis::Client,
 }

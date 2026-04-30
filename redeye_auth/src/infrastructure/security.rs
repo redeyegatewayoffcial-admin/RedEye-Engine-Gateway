@@ -133,8 +133,8 @@ pub fn generate_jwt(user_id: Uuid, tenant_id: Uuid) -> Result<String, AppError> 
 }
 
 // O(1) Time, O(1) Space
-#[tracing::instrument(skip(user_id))]
-pub fn generate_refresh_token(user_id: &Uuid) -> Result<(String, String), AppError> {
+#[tracing::instrument(skip(_user_id))]
+pub fn generate_refresh_token(_user_id: &Uuid) -> Result<(String, String), AppError> {
     use rand::RngCore;
     let mut token_bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut token_bytes);

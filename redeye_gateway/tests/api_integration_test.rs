@@ -131,7 +131,7 @@ async fn setup_test_environment() -> TestEnv {
         .await
         .expect("Failed to create api_keys table");
     // provider_keys is the table queried by fetch_tenant_provider_keys in llm_router.rs
-    sqlx::query("CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, encrypted_key BYTEA, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name))")
+    sqlx::query("CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, key_alias TEXT, encrypted_key BYTEA, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name, key_alias))")
         .execute(&db_pool).await.expect("Failed to create provider_keys table");
 
     // 5. Database Fixture setup for an authorized tenant
@@ -140,10 +140,11 @@ async fn setup_test_environment() -> TestEnv {
         encrypt_test_api_key("sk-mock-openai-key-123", "01234567890123456789012345678901");
 
     sqlx::query(
-        "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)",
+        "INSERT INTO provider_keys (tenant_id, provider_name, key_alias, encrypted_key) VALUES ($1, $2, $3, $4)",
     )
     .bind(Uuid::parse_str(&tenant_id).unwrap())
     .bind("openai")
+    .bind("primary")
     .bind(&encrypted_key)
     .execute(&db_pool)
     .await
@@ -220,6 +221,25 @@ async fn setup_test_environment() -> TestEnv {
         l1_cache: Arc::new(
             redeye_gateway::infrastructure::l1_cache::L1Cache::new(1024 * 1024).unwrap(),
         ),
+        routing_state: {
+            let rs = redeye_gateway::domain::models::RoutingState::new();
+            let mut map = std::collections::HashMap::new();
+            map.insert("gpt-4o".to_string(), redeye_gateway::domain::models::ModelConfig {
+                base_url: mock_server.uri(),
+                schema_format: "openai".to_string(),
+                keys: vec![
+                    redeye_gateway::domain::models::KeyConfig {
+                        key_alias: "primary".to_string(),
+                        api_key: "sk-mock-openai-key-123".to_string(),
+                        priority: 1,
+                        weight: 1,
+                    }
+                ],
+            });
+            rs.state.store(Arc::new(map));
+            Arc::new(rs)
+        },
+        circuit_breaker: moka::future::Cache::builder().build(),
     });
 
     TestEnv {
@@ -576,45 +596,72 @@ async fn test_hot_swap_failover() {
         .await;
 
     // 3. Mount Primary Provider (OpenAI) returning 503 Service Unavailable triggering circuit break
+    // Match specifically on the primary API key to differentiate from fallback
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
+        .and(wiremock::matchers::header("authorization", "Bearer sk-mock-openai-key-123"))
         .respond_with(ResponseTemplate::new(503).set_body_string("OpenAI is overloaded"))
         .mount(&env.mock_server)
         .await;
 
-    // 4. Mount Secondary Provider (Anthropic Fallback)
-    // execute_provider_request builds: {base_url}/messages where base_url = mock_server.uri()
-    // So the effective path is /messages (not /v1/messages)
+    // 4. Mount Secondary Provider (Fallback) returning 200 OK
+    // Match specifically on the fallback API key
     Mock::given(method("POST"))
-        .and(path("/messages"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::header("authorization", "Bearer sk-mock-anthropic-key-456"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "msg_01",
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Hello from Anthropic Fallback Mock!"
-                }
-            ],
-            "model": "claude-3-opus-20240229",
-            "stop_reason": "end_turn",
+            "id": "chatcmpl-fallback",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello from Fallback Mock!"
+                },
+                "finish_reason": "stop"
+            }],
             "usage": {
-                "input_tokens": 10,
-                "output_tokens": 15
+                "prompt_tokens": 10,
+                "completion_tokens": 15,
+                "total_tokens": 25
             }
         })))
         .mount(&env.mock_server)
         .await;
 
-    // 5. Ensure Anthropic API Key is in DB for this tenant (hot-swap fallback target)
+    // 5. Update RoutingState to include both Primary and Fallback keys
+    let mut map = std::collections::HashMap::new();
+    map.insert("gpt-4o".to_string(), redeye_gateway::domain::models::ModelConfig {
+        base_url: env.mock_server.uri(),
+        schema_format: "openai".to_string(),
+        keys: vec![
+            redeye_gateway::domain::models::KeyConfig {
+                key_alias: "primary".to_string(),
+                api_key: "sk-mock-openai-key-123".to_string(),
+                priority: 1,
+                weight: 1,
+            },
+            redeye_gateway::domain::models::KeyConfig {
+                key_alias: "fallback-anthropic".to_string(),
+                api_key: "sk-mock-anthropic-key-456".to_string(),
+                priority: 2, // Higher priority number = lower priority
+                weight: 1,
+            }
+        ],
+    });
+    env.state.routing_state.state.store(Arc::new(map));
+
+    // Also ensure it's in the DB if any other logic needs it
     let encrypted_anthropic_key = encrypt_test_api_key(
         "sk-mock-anthropic-key-456",
         "01234567890123456789012345678901",
     );
-    sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3) ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3")
+    sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, key_alias, encrypted_key) VALUES ($1, $2, $3, $4) ON CONFLICT (tenant_id, provider_name, key_alias) DO UPDATE SET encrypted_key = $4")
         .bind(uuid::Uuid::parse_str(&env.tenant_id).unwrap())
         .bind("anthropic")
+        .bind("fallback-anthropic")
         .bind(&encrypted_anthropic_key)
         .execute(&env.state.db_pool)
         .await

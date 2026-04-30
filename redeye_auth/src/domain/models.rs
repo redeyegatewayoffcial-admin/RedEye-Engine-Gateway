@@ -59,6 +59,9 @@ pub struct ProviderKey {
     pub tenant_id: Uuid,
     /// The LLM provider (e.g., 'openai', 'anthropic')
     pub provider_name: String,
+    pub key_alias: String,
+    pub priority: i32,
+    pub is_active: bool,
     /// AES-256-GCM encrypted provider API key
     #[serde(skip_serializing)]
     pub encrypted_key: Vec<u8>,

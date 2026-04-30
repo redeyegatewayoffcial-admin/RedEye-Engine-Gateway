@@ -198,6 +198,35 @@ pub struct ApiKeyRecord {
 }
 
 // =============================================================================
+// LLM Model — view of `llm_models`
+// =============================================================================
+
+/// A dynamically configurable LLM model definition.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct LlmModel {
+    pub id: Uuid,
+    pub model_name: String,
+    pub provider_name: String,
+    pub base_url: String,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyConfig {
+    pub key_alias: String,
+    pub api_key: String,
+    pub priority: i32,
+    pub weight: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub base_url: String,
+    pub schema_format: String, // e.g., "openai", "gemini"
+    pub keys: Vec<KeyConfig>,
+}
+
+// =============================================================================
 // Redis Pub/Sub event payloads
 // =============================================================================
 

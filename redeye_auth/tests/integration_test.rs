@@ -53,7 +53,7 @@ async fn setup_test_environment() -> TestEnv {
         "CREATE TABLE tenant_users (tenant_id UUID, user_id UUID, role TEXT, PRIMARY KEY(tenant_id, user_id));",
         "CREATE TABLE api_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, key_hash TEXT, name TEXT, is_active BOOLEAN);",
         "CREATE TABLE llm_routes (tenant_id UUID, provider TEXT, model TEXT, is_default BOOLEAN, encrypted_api_key BYTEA, PRIMARY KEY(tenant_id, provider));",
-        "CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, encrypted_key BYTEA, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name));",
+        "CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, encrypted_key BYTEA, key_alias TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name, key_alias));",
         "CREATE TABLE auth_otps (email TEXT PRIMARY KEY, otp_code TEXT, expires_at TIMESTAMPTZ);",
         "CREATE TABLE refresh_tokens (user_id UUID, token_hash TEXT, expires_at TIMESTAMPTZ);",
     ];
@@ -107,7 +107,8 @@ async fn test_auth_pipeline() {
     // 2. Add Provider Key Test (AES Execution Verification)
     let provider_payload = json!({
         "provider_name": "mock",
-        "provider_api_key": "sk-my-super-secret-key"
+        "api_key": "sk-my-super-secret-key",
+        "key_alias": "primary"
     });
 
     let req_provider = Request::builder()

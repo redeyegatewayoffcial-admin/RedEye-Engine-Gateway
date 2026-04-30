@@ -91,7 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 5. Dependency wiring ─────────────────────────────────────────────────
     let state = AppState {
         repo: Arc::new(PgConfigRepository::new(pool)),
-        redis: Arc::new(RedisSyncClient::new(redis_client)),
+        redis: Arc::new(RedisSyncClient::new(redis_client.clone())),
+        redis_client,
     };
 
     // ── 6. Router + TCP listener ─────────────────────────────────────────────

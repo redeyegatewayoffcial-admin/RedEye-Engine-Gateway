@@ -12,8 +12,8 @@ use axum::{
 };
 use tracing::{error, info, instrument};
 
-use crate::domain::models::{AppState, GatewayError, TraceContext};
-use crate::infrastructure::llm_router;
+use crate::domain::models::{AppState, TraceContext};
+use crate::error::GatewayError;
 use crate::usecases::proxy;
 
 /// GET /health
@@ -25,24 +25,32 @@ pub async fn health_check() -> impl IntoResponse {
     }))
 }
 
+#[derive(serde::Deserialize)]
+struct ExtractModel<'a> {
+    #[serde(borrow)]
+    model: Option<std::borrow::Cow<'a, str>>,
+}
+
 /// POST /v1/chat/completions
-#[instrument(skip(state, body))]
+#[instrument(skip(state, body_bytes))]
 pub async fn chat_completions(
     State(state): State<Arc<AppState>>,
     Extension(trace_ctx): Extension<TraceContext>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body_bytes: axum::body::Bytes,
 ) -> Result<Response, GatewayError> {
     info!("Received chat completion request");
 
-    // Extract metadata
-    let model_name = llm_router::extract_model(&body).to_string();
+    // Extract metadata using zero-copy extraction
+    let extracted: ExtractModel = serde_json::from_slice(&body_bytes).unwrap_or(ExtractModel { model: None });
+    let model_name = extracted.model.as_deref().unwrap_or("gpt-4o").to_string();
+
     let tenant_id = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("anonymous")
         .to_string();
-    let raw_prompt = serde_json::to_string(&body).unwrap_or_default();
+    let raw_prompt = String::from_utf8_lossy(&body_bytes).to_string();
     let accept = headers
         .get("accept")
         .and_then(|v| v.to_str().ok())
@@ -58,7 +66,7 @@ pub async fn chat_completions(
     // Delegate to use case
     let result = proxy::execute_proxy(
         &state,
-        &body,
+        &body_bytes,
         &tenant_id,
         &model_name,
         &raw_prompt,
@@ -85,10 +93,16 @@ pub async fn chat_completions(
 
             Ok(response)
         }
-        crate::usecases::proxy::ProxyBody::SseStream(stream) => {
-            use axum::response::sse::{KeepAlive, Sse};
-            let sse = Sse::new(stream).keep_alive(KeepAlive::default());
-            let mut response = sse.into_response();
+        crate::usecases::proxy::ProxyBody::Stream(body) => {
+            let mut response = Response::builder()
+                .status(result.status)
+                .header("content-type", &result.content_type)
+                .body(body)
+                .map_err(|e| {
+                    error!(error = %e, "Failed to construct proxy streaming response");
+                    GatewayError::ResponseBuild(e.to_string())
+                })?;
+                
             if let Ok(value) = axum::http::HeaderValue::from_str(cache_header) {
                 response.headers_mut().insert("X-Cache", value);
             }

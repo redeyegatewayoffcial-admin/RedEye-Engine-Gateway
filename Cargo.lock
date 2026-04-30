@@ -3712,6 +3712,7 @@ dependencies = [
 name = "redeye_config"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "async-trait",
  "axum 0.7.9",
  "chrono",
@@ -3737,6 +3738,7 @@ name = "redeye_gateway"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "arc-swap",
  "axum 0.7.9",
  "base64 0.22.1",
  "bytes",
@@ -3752,6 +3754,7 @@ dependencies = [
  "moka",
  "prost",
  "protoc-bin-vendored",
+ "rayon",
  "redis",
  "regex",
  "reqwest 0.12.28",

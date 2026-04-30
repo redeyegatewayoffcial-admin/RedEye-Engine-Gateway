@@ -121,15 +121,16 @@ impl ChaosTestEnv {
             .execute(&db_pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, encrypted_key BYTEA, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name))").execute(&db_pool).await.unwrap();
+        sqlx::query("CREATE TABLE provider_keys (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID, provider_name TEXT, key_alias TEXT, encrypted_key BYTEA, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(tenant_id, provider_name, key_alias))").execute(&db_pool).await.unwrap();
 
         let tenant_id = Uuid::new_v4().to_string();
         let encrypted_key =
             encrypt_test_api_key("sk-mock-openai-key-123", "01234567890123456789012345678901");
 
-        sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)")
+        sqlx::query("INSERT INTO provider_keys (tenant_id, provider_name, key_alias, encrypted_key) VALUES ($1, $2, $3, $4)")
             .bind(Uuid::parse_str(&tenant_id).unwrap())
             .bind("openai")
+            .bind("primary")
             .bind(&encrypted_key)
             .execute(&db_pool)
             .await
@@ -178,6 +179,25 @@ impl ChaosTestEnv {
             l1_cache: Arc::new(
                 redeye_gateway::infrastructure::l1_cache::L1Cache::new(1024 * 1024).unwrap(),
             ),
+            routing_state: {
+                let rs = redeye_gateway::domain::models::RoutingState::new();
+                let mut map = std::collections::HashMap::new();
+                map.insert("gpt-4o".to_string(), redeye_gateway::domain::models::ModelConfig {
+                    base_url: mock_server.uri(),
+                    schema_format: "openai".to_string(),
+                    keys: vec![
+                        redeye_gateway::domain::models::KeyConfig {
+                            key_alias: "primary".to_string(),
+                            api_key: "sk-mock-openai-key-123".to_string(),
+                            priority: 1,
+                            weight: 1,
+                        }
+                    ],
+                });
+                rs.state.store(Arc::new(map));
+                Arc::new(rs)
+            },
+            circuit_breaker: moka::future::Cache::builder().build(),
         });
 
         Self {

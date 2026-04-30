@@ -2,7 +2,7 @@ use crate::{
     error::AppError,
     infrastructure::security::{
         encrypt_api_key, generate_jwt, generate_redeye_api_key, generate_refresh_token,
-        hash_password, verify_jwt, verify_password, Claims,
+        hash_password, verify_password, Claims,
     },
     AppState,
 };
@@ -446,7 +446,7 @@ pub async fn onboard(
     // Insert encrypted provider key into provider_keys table
     sqlx::query(
         "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3",
+         ON CONFLICT (tenant_id, provider_name, key_alias) DO UPDATE SET encrypted_key = $3",
     )
     .bind(tenant_id)
     .bind(&payload.provider)
@@ -538,16 +538,28 @@ pub async fn get_api_keys(
 }
 
 // --- POST /v1/auth/provider-keys ---
+//
+// Rule: Auth ONLY handles secrets. It stores the encrypted `api_key` and the
+// `key_alias` (needed for the DB unique constraint). Routing metadata
+// (`model_name`, `base_url`, `schema_format`) belongs exclusively to
+// `redeye_config` and must be sent there in a separate second call from the UI.
 #[derive(Deserialize)]
 pub struct AddProviderKeyRequest {
-    pub provider_name: String, // e.g., 'openai', 'anthropic', 'gemini', 'groq'
-    pub provider_api_key: String,
+    /// The LLM provider identifier (e.g. "openai", "anthropic", "gemini").
+    pub provider_name: String,
+    /// The raw upstream API key — will be AES-256-GCM encrypted before storage.
+    pub api_key: String,
+    /// Human-readable alias used as the unique discriminant for this key
+    /// (e.g. "primary", "backup"). Required by the DB constraint:
+    /// UNIQUE (tenant_id, provider_name, key_alias).
+    pub key_alias: String,
 }
 
 #[derive(Serialize)]
 pub struct ProviderKeyResponse {
     pub id: Uuid,
     pub provider_name: String,
+    pub key_alias: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -559,30 +571,38 @@ pub async fn add_provider_key(
     let tenant_id = Uuid::parse_str(&claims.tenant_id)
         .map_err(|_| AppError::Internal("Invalid tenant ID in token".into()))?;
 
-    // Validate the provider API key against the provider
+    // Validate that the alias is not blank
+    if payload.key_alias.trim().is_empty() {
+        return Err(AppError::BadRequest("`key_alias` must not be blank".into()));
+    }
+
+    // Validate the provider API key against the live provider endpoint
     let is_valid = crate::infrastructure::llm_validator::validate_api_key(
         &payload.provider_name,
-        &payload.provider_api_key,
+        &payload.api_key,
     )
     .await
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     if !is_valid {
         return Err(AppError::BadRequest("Invalid Provider API Key".into()));
     }
 
-    // Encrypt the validated provider API key
-    let encrypted_key = encrypt_api_key(&payload.provider_api_key)?;
+    // Encrypt the validated provider API key with AES-256-GCM
+    let encrypted_key = encrypt_api_key(&payload.api_key)?;
 
-    // Insert or update the provider key
+    // Upsert: if the same (tenant, provider, alias) already exists, rotate the key.
     let row = sqlx::query(
-        "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, provider_name) DO UPDATE SET encrypted_key = $3
-         RETURNING id, provider_name, created_at",
+        "INSERT INTO provider_keys (tenant_id, provider_name, encrypted_key, key_alias)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tenant_id, provider_name, key_alias)
+         DO UPDATE SET encrypted_key = EXCLUDED.encrypted_key
+         RETURNING id, provider_name, key_alias, created_at",
     )
     .bind(tenant_id)
     .bind(&payload.provider_name)
     .bind(&encrypted_key)
+    .bind(&payload.key_alias)
     .fetch_one(&state.db_pool)
     .await?;
 
@@ -592,19 +612,24 @@ pub async fn add_provider_key(
     let provider_name: String = row
         .try_get("provider_name")
         .map_err(|_| AppError::Internal("Failed to fetch provider name".into()))?;
+    let key_alias: String = row
+        .try_get("key_alias")
+        .map_err(|_| AppError::Internal("Failed to fetch key alias".into()))?;
     let created_at: chrono::DateTime<chrono::Utc> = row
         .try_get("created_at")
         .map_err(|_| AppError::Internal("Failed to fetch created_at".into()))?;
 
     tracing::info!(
-        "Added provider key for tenant {}: provider={}",
-        tenant_id,
-        provider_name
+        tenant_id  = %tenant_id,
+        provider   = %provider_name,
+        key_alias  = %key_alias,
+        "Provider key upserted successfully"
     );
 
     Ok(Json(ProviderKeyResponse {
         id,
         provider_name,
+        key_alias,
         created_at,
     }))
 }
@@ -618,7 +643,7 @@ pub async fn get_provider_keys(
         .map_err(|_| AppError::Internal("Invalid tenant ID in token".into()))?;
 
     let rows = sqlx::query(
-        "SELECT id, provider_name, created_at FROM provider_keys WHERE tenant_id = $1 ORDER BY created_at DESC"
+        "SELECT id, provider_name, key_alias, created_at FROM provider_keys WHERE tenant_id = $1 ORDER BY created_at DESC"
     )
     .bind(tenant_id)
     .fetch_all(&state.db_pool)
@@ -629,6 +654,7 @@ pub async fn get_provider_keys(
         .map(|row| ProviderKeyResponse {
             id: row.try_get("id").unwrap_or_default(),
             provider_name: row.try_get("provider_name").unwrap_or_default(),
+            key_alias: row.try_get("key_alias").unwrap_or_default(),
             created_at: row
                 .try_get("created_at")
                 .unwrap_or_else(|_| chrono::Utc::now()),
@@ -877,7 +903,7 @@ pub async fn google_callback(
         .fetch_optional(&mut *tx)
         .await?;
 
-    let (user_id, tenant_id, workspace_name, onboarding_complete) = if let Some(r) = user_row {
+    let (user_id, tenant_id, _workspace_name, onboarding_complete) = if let Some(r) = user_row {
         let u_id: Uuid = r.get("id");
         let t_id: Uuid = r.get("tenant_id");
         let t_row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")
@@ -1080,7 +1106,7 @@ pub async fn github_callback(
         .fetch_optional(&mut *tx)
         .await?;
 
-    let (user_id, tenant_id, workspace_name, onboarding_complete) = if let Some(r) = user_row {
+    let (user_id, tenant_id, _workspace_name, onboarding_complete) = if let Some(r) = user_row {
         let u_id: Uuid = r.get("id");
         let t_id: Uuid = r.get("tenant_id");
         let t_row = sqlx::query("SELECT name, onboarding_status FROM tenants WHERE id = $1")

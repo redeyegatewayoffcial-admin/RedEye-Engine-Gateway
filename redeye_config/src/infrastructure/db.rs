@@ -16,13 +16,33 @@
 //!   schema changes with the auth team.
 
 use async_trait::async_trait;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use uuid::Uuid;
 
 use crate::{
     domain::models::{ApiKeyRecord, ClientConfig},
     error::ConfigError,
 };
+
+// =============================================================================
+// RoutingEntry — flattened row from the routing JOIN query
+// =============================================================================
+
+/// A single row from the JOIN of `llm_models` and `provider_keys`.
+/// One row per (model, key) combination. The handler assembles these into
+/// `HashMap<model_name, ModelConfig { base_url, schema_format, keys: [...] }>`.
+#[derive(Debug, sqlx::FromRow)]
+pub struct RoutingEntry {
+    pub model_name: String,
+    pub base_url: String,
+    pub schema_format: String,
+    pub key_alias: String,
+    /// Plaintext API key — decrypted by the infrastructure layer before storage
+    /// in this struct. Never persisted after assembly.
+    pub api_key: String,
+    pub priority: i32,
+    pub weight: i32,
+}
 
 // =============================================================================
 // Repository trait
@@ -69,6 +89,37 @@ pub trait ConfigRepository: Send + Sync {
         key_id: Uuid,
         tenant_id: Uuid,
     ) -> Result<ApiKeyRecord, ConfigError>;
+
+    /// Upserts a row in `llm_models` for the given tenant.
+    ///
+    /// On conflict (same `tenant_id` + `model_name`) the `base_url` and
+    /// `schema_format` columns are updated in place.
+    async fn upsert_llm_model(
+        &self,
+        tenant_id: Uuid,
+        model_name: &str,
+        base_url: &str,
+        schema_format: &str,
+    ) -> Result<(), ConfigError>;
+
+    /// Returns all (model, key) routing pairs for `tenant_id`.
+    ///
+    /// Each [`RoutingEntry`] contains the decrypted API key and the model
+    /// metadata needed to build a `ModelConfig`.  The handler groups entries
+    /// by `model_name` to produce `HashMap<String, ModelConfig>`.
+    async fn get_routing_entries(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Vec<RoutingEntry>, ConfigError>;
+
+    /// Lists all LLM model rows registered for `tenant_id`, ordered by name.
+    ///
+    /// Used by `GET /v1/config/:tenant_id/models` to populate the routing
+    /// strategy UI in the dashboard without exposing key material.
+    async fn list_models(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Vec<crate::domain::models::LlmModel>, ConfigError>;
 }
 
 // =============================================================================
@@ -278,5 +329,117 @@ impl ConfigRepository for PgConfigRepository {
             "API key hard-deleted from Postgres"
         );
         Ok(deleted)
+    }
+
+    async fn upsert_llm_model(
+        &self,
+        tenant_id: Uuid,
+        model_name: &str,
+        base_url: &str,
+        schema_format: &str,
+    ) -> Result<(), ConfigError> {
+        // provider_name is derived from schema_format (they share the same value
+        // e.g. "openai", "anthropic", "gemini") — the model knows which provider
+        // schema it uses and that IS the provider name for key JOIN purposes.
+        sqlx::query(
+            r#"
+            INSERT INTO llm_models (id, tenant_id, model_name, provider_name, base_url, schema_format)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $3)
+            ON CONFLICT (tenant_id, model_name)
+            DO UPDATE SET
+                base_url      = EXCLUDED.base_url,
+                schema_format = EXCLUDED.schema_format,
+                provider_name = EXCLUDED.provider_name
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(model_name)
+        .bind(schema_format)   // $3 = provider_name (same value as schema_format)
+        .bind(base_url)        // $4 = base_url
+        .execute(&self.pool)
+        .await?;
+
+        tracing::debug!(
+            %tenant_id,
+            model = %model_name,
+            "llm_models row upserted"
+        );
+        Ok(())
+    }
+
+    async fn get_routing_entries(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Vec<RoutingEntry>, ConfigError> {
+        // JOIN llm_models → provider_keys via:
+        //   - same tenant
+        //   - m.provider_name = pk.provider_name  (the shared "openai"/"anthropic" discriminant)
+        // The encrypted_key is read as bytes and decrypted in Rust — never plaintext on the wire.
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                m.model_name,
+                m.base_url,
+                m.schema_format,
+                pk.key_alias,
+                pk.encrypted_key,
+                pk.priority,
+                pk.weight
+            FROM llm_models m
+            JOIN provider_keys pk
+              ON pk.tenant_id    = m.tenant_id
+             AND pk.provider_name = m.provider_name
+            WHERE m.tenant_id  = $1
+              AND pk.is_active  = true
+            ORDER BY m.model_name, pk.priority ASC
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            let encrypted_key: Vec<u8> = row
+                .try_get("encrypted_key")
+                .map_err(|_| ConfigError::Internal("Failed to read encrypted_key".into()))?;
+
+            // Decrypt using the same AES-256-GCM key the Auth service used.
+            let api_key = crate::infrastructure::crypto::decrypt_api_key(&encrypted_key)
+                .map_err(|e| ConfigError::Internal(format!("Key decryption failed: {e}")))?;
+
+            entries.push(RoutingEntry {
+                model_name:    row.try_get("model_name").unwrap_or_default(),
+                base_url:      row.try_get("base_url").unwrap_or_default(),
+                schema_format: row.try_get("schema_format").unwrap_or_default(),
+                key_alias:     row.try_get("key_alias").unwrap_or_default(),
+                api_key,
+                priority:      row.try_get("priority").unwrap_or(1),
+                weight:        row.try_get("weight").unwrap_or(100),
+            });
+        }
+
+        tracing::debug!(%tenant_id, count = entries.len(), "Routing entries loaded");
+        Ok(entries)
+    }
+
+    async fn list_models(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<Vec<crate::domain::models::LlmModel>, ConfigError> {
+        let models = sqlx::query_as::<_, crate::domain::models::LlmModel>(
+            r#"
+            SELECT id, model_name, provider_name, base_url, created_at
+            FROM   llm_models
+            WHERE  tenant_id = $1
+            ORDER  BY model_name ASC
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        tracing::debug!(%tenant_id, count = models.len(), "LLM models listed");
+        Ok(models)
     }
 }

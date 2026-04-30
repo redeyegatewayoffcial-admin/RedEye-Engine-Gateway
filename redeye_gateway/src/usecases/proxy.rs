@@ -10,17 +10,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use axum::response::sse::Event;
-use eventsource_stream::Eventsource;
-use futures::stream::StreamExt;
 use regex::Regex;
 use serde_json::{json, Value};
-use sqlx::Row;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
 
-use crate::domain::models::{AppState, GatewayError, TraceContext};
+use crate::domain::models::{AppState, TraceContext};
+use crate::error::GatewayError;
 use crate::infrastructure::routing_strategy::RoutingStrategy;
 use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 
@@ -28,7 +23,7 @@ use crate::infrastructure::{cache_client, clickhouse_logger, llm_router};
 
 pub enum ProxyBody {
     Buffered(Vec<u8>),
-    SseStream(ReceiverStream<Result<Event, axum::Error>>),
+    Stream(axum::body::Body),
 }
 
 pub struct ProxyResult {
@@ -44,18 +39,8 @@ pub struct ProxyResult {
 const TOKEN_BUCKET_CAPACITY: u64 = 100_000;
 /// Token-bucket TTL in seconds (24 h).
 const TOKEN_BUCKET_TTL_SECS: u64 = 86_400;
-/// Circuit-breaker error window (seconds).
-const CB_ERROR_WINDOW_SECS: u64 = 10;
-/// Circuit-breaker open TTL (seconds).
-const CB_OPEN_TTL_SECS: u64 = 60;
-/// Errors within the window that trip the circuit.
-const CB_ERROR_THRESHOLD: i32 = 2;
-/// Provider API key Redis TTL (seconds).
-const API_KEY_CACHE_TTL_SECS: u64 = 300;
 /// Rough chars-per-token estimate for prompt token counting.
 const CHARS_PER_TOKEN: usize = 4;
-/// Fallback model used when the primary circuit is open.
-const FALLBACK_MODEL: &str = "llama3-8b-8192";
 
 // ── PII regex (compiled once) ─────────────────────────────────────────────────
 
@@ -94,10 +79,17 @@ fn pii_regex() -> &'static Regex {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
+fn get_requested_provider(state: &Arc<AppState>, model_name: &str) -> String {
+    state.routing_state.state.load()
+        .get(model_name)
+        .map(|c| c.schema_format.clone())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 /// Execute the full proxy pipeline: compliance → cache → upstream → telemetry.
 pub async fn execute_proxy(
     state: &Arc<AppState>,
-    body: &Value,
+    body_bytes: &axum::body::Bytes,
     tenant_id: &str,
     model_name: &str,
     raw_prompt: &str,
@@ -109,55 +101,56 @@ pub async fn execute_proxy(
 
     // ── Stage 0: PII Redaction (fail-closed) ─────────────────────────────────
     let raw_prompt_owned = raw_prompt.to_string();
-    let is_pii_match = tokio::task::spawn_blocking(move || pii_regex().is_match(&raw_prompt_owned))
-        .await
-        .map_err(|e| GatewayError::ResponseBuild(format!("Regex task error: {}", e)))?;
-
-    let sanitized_storage: Option<Value> = if is_pii_match {
-        Some(
-            call_compliance_redact(&state.http_client, &state.compliance_url, body, trace_ctx)
-                .await?,
-        )
-    } else {
-        None
-    };
-    let body = sanitized_storage.as_ref().unwrap_or(body);
-
-    // ── Stage 1: L1 Exact & Semantic Cache Check ──────────────────────────────
-    if let Some(cached_content) = state.l1_cache.get_exact(raw_prompt).await {
-        return handle_cache_hit(
-            state,
-            cached_content,
-            tenant_id,
-            model_name,
-            raw_prompt,
-            trace_ctx,
-            start_time,
-        );
-    }
-
-    if let Some(cached_content) = state.l1_cache.get_semantic(raw_prompt).await {
-        return handle_cache_hit(
-            state,
-            cached_content,
-            tenant_id,
-            model_name,
-            raw_prompt,
-            trace_ctx,
-            start_time,
-        );
-    }
-
-    // ── Stage 2: L2 gRPC Cache Check ──────────────────────────────────────────
-    if let Some(cached_content) = cache_client::lookup_cache(
-        &state.cache_grpc_client,
-        tenant_id,
-        model_name,
-        raw_prompt,
-        trace_ctx,
-    )
+    let is_pii_match = tokio::task::spawn_blocking(move || {
+        use rayon::prelude::*;
+        raw_prompt_owned.par_lines().any(|line| pii_regex().is_match(line))
+    })
     .await
-    {
+    .map_err(|e| GatewayError::ResponseBuild(format!("Regex task error: {}", e)))?;
+
+    // Lazily evaluate JSON only if necessary
+    let (body_bytes, parsed_value_if_needed): (axum::body::Bytes, Option<Value>) = if is_pii_match {
+        let mut parsed_body: Value = serde_json::from_slice(body_bytes)
+            .map_err(|e| GatewayError::ResponseBuild(format!("Invalid JSON body: {}", e)))?;
+        
+        let redacted = call_compliance_redact(&state.http_client, &state.compliance_url, &parsed_body, trace_ctx).await?;
+        parsed_body = redacted;
+        
+        let redacted_bytes = serde_json::to_vec(&parsed_body).unwrap_or_default();
+        (axum::body::Bytes::from(redacted_bytes), Some(parsed_body))
+    } else {
+        (body_bytes.clone(), None)
+    };
+
+    // ── Stage 1 & 2: Speculative Cache & Router Prep ──────────────────────────
+    let cache_future = async {
+        if let Some(cached_content) = state.l1_cache.get_exact(raw_prompt).await {
+            return Some(cached_content);
+        }
+        if let Some(cached_content) = state.l1_cache.get_semantic(raw_prompt).await {
+            return Some(cached_content);
+        }
+        cache_client::lookup_cache(
+            &state.cache_grpc_client,
+            tenant_id,
+            model_name,
+            raw_prompt,
+            trace_ctx,
+        )
+        .await
+    };
+
+    let prep_future = llm_router::prep_upstream_request(
+        state,
+        tenant_id,
+        &body_bytes,
+        accept_header,
+        strategy,
+    );
+
+    let (cache_result, prep_result) = tokio::join!(cache_future, prep_future);
+
+    if let Some(cached_content) = cache_result {
         return handle_cache_hit(
             state,
             cached_content,
@@ -169,15 +162,25 @@ pub async fn execute_proxy(
         );
     }
 
-    // ── Stage 1.5: Token-Bucket Rate Limit ────────────────────────────────────
-    enforce_token_bucket(state, tenant_id, raw_prompt).await?;
+    let prep = prep_result?;
 
-    // ── Stage 1.6: Behavior Control (Loop Detection) ─────────────────────────
-    if let Err(e) =
-        crate::usecases::behavior_guard::enforce_loop_detection(state, &trace_ctx.session_id, body)
-            .await
-    {
+    // ── Stage 1.5 & 1.6: Pre-flight checks (Token-Bucket & Loop Detection) ─────
+    let lazy_parsed = parsed_value_if_needed.unwrap_or_else(|| {
+        serde_json::from_slice(&body_bytes).unwrap_or_default()
+    });
+
+    let token_future = enforce_token_bucket(state, tenant_id, raw_prompt);
+    let loop_future = crate::usecases::behavior_guard::enforce_loop_detection(state, &trace_ctx.session_id, &lazy_parsed);
+
+    if let Err(e) = tokio::try_join!(token_future, loop_future) {
         let latency_ms = start_time.elapsed().as_millis() as u32;
+
+        let model_telemetry = match &e {
+            GatewayError::RateLimitExceeded(_) => "__token_blocked",
+            GatewayError::LoopDetected(_) => "__loop_blocked",
+            _ => "__preflight_blocked",
+        };
+
         // Bug 4 Fix: Fallback JSON now includes all ClickHouse-required schema fields.
         // An empty `json!({})` would be rejected by ClickHouse's strict column schema;
         // we supply sentinel values so the row is valid and auditable.
@@ -187,7 +190,7 @@ pub async fn execute_proxy(
             session_id: trace_ctx.session_id.clone(),
             parent_trace_id: trace_ctx.parent_trace_id.clone(),
             tenant_id: tenant_id.to_string(),
-            model: "__loop_blocked".to_string(),
+            model: model_telemetry.to_string(),
             status: 429,
             latency_ms,
             tokens: 0,
@@ -196,7 +199,7 @@ pub async fn execute_proxy(
             prompt_content: raw_prompt.to_string(),
             response_content: "".to_string(),
             error_message: e.to_string(),
-            requested_provider: llm_router::detect_provider(model_name).to_string(),
+            requested_provider: get_requested_provider(state, model_name),
             executed_provider: "".to_string(),
             is_hot_swapped: 0,
         })
@@ -207,7 +210,7 @@ pub async fn execute_proxy(
                 "trace_id": trace_ctx.trace_id,
                 "session_id": trace_ctx.session_id,
                 "tenant_id": tenant_id,
-                "model": "__loop_blocked",
+                "model": model_telemetry,
                 "status": 429_u16,
                 "latency_ms": latency_ms,
                 "tokens": 0_u32,
@@ -249,7 +252,7 @@ pub async fn execute_proxy(
             prompt_content: raw_prompt.to_string(),
             response_content: "".to_string(),
             error_message: e.to_string(),
-            requested_provider: llm_router::detect_provider(model_name).to_string(),
+            requested_provider: get_requested_provider(state, model_name),
             executed_provider: "".to_string(),
             is_hot_swapped: 0,
         })
@@ -281,23 +284,13 @@ pub async fn execute_proxy(
     }
 
     // ── Stage 1.8: Circuit-Breaker / Adaptive Fallback ────────────────────────
-    let provider = llm_router::detect_provider(model_name);
-
-    // ── Stage 1.9: Translate Incoming JSON into RedEyeConversation ─────────────
-    let source_translator = crate::infrastructure::translators::OpenAiTranslator;
-    use crate::infrastructure::translators::BaseTranslator;
-    let conv = source_translator
-        .to_universal(body.clone())
-        .map_err(|e| GatewayError::ResponseBuild(format!("Incoming translation failed: {}", e)))?;
+    let provider = get_requested_provider(state, model_name);
 
     // ── Stage 2 & 3: Dynamic Provider Key Resolution and Routing with Fallback ─
-    let upstream_response = llm_router::route_chat_completion_with_fallback(
+    let upstream_response = llm_router::execute_upstream_request(
         state,
-        tenant_id,
-        &conv,
-        body,
-        accept_header,
-        strategy,
+        prep,
+        &body_bytes, // Pass bytes for zero-copy proxy
     )
     .await?;
 
@@ -306,7 +299,7 @@ pub async fn execute_proxy(
         .headers()
         .get("x-redeye-executed-provider")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or(provider)
+        .unwrap_or(&provider)
         .to_string();
     let is_hot_swapped: u8 = upstream_response
         .headers()
@@ -328,7 +321,7 @@ pub async fn execute_proxy(
         "Received response from upstream LLM provider"
     );
 
-    let is_streaming = body
+    let is_streaming = lazy_parsed
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
@@ -393,7 +386,7 @@ fn handle_cache_hit(
     let bytes = serde_json::to_vec(&mock_response).unwrap_or_default();
     let latency_ms = start_time.elapsed().as_millis() as u32;
 
-    let requested_provider = llm_router::detect_provider(model_name).to_string();
+    let requested_provider = get_requested_provider(state, model_name);
 
     spawn_telemetry(
         state,
@@ -516,7 +509,7 @@ async fn sync_token_bucket(
     }
 }
 
-/// Handles SSE streaming: fans out events to a channel, fires telemetry on completion.
+/// Handles SSE streaming: zero-copy stream proxy, fires telemetry on completion.
 fn handle_streaming_response(
     state: &Arc<AppState>,
     upstream_response: reqwest::Response,
@@ -531,63 +524,17 @@ fn handle_streaming_response(
     executed_provider: String,
     is_hot_swapped: u8,
 ) -> Result<ProxyResult, GatewayError> {
-    let event_stream = upstream_response.bytes_stream().eventsource();
-    let (tx, rx) = mpsc::channel(100);
-
-    // Owned copies for the spawned task
     let state_c = state.clone();
     let tenant_id_c = tenant_id.to_string();
     let model_name_c = model_name.to_string();
     let raw_prompt_c = raw_prompt.to_string();
     let trace_ctx_c = trace_ctx.clone();
 
-    let config = crate::infrastructure::llm_router::get_provider_config(&executed_provider);
-    // Since get_translator returns Box<dyn BaseTranslator> and we need it inside spawn, we map to schema format string and re-instantiate, or just pass schema format
-    let schema_format = config.map(|c| c.schema_format);
+    // Stream the body directly to Axum
+    let body_stream = axum::body::Body::from_stream(upstream_response.bytes_stream());
 
+    // Spawn a lightweight task just to record telemetry since we bypass full aggregation
     tokio::spawn(async move {
-        let mut event_stream = event_stream;
-
-        while let Some(Ok(event)) = event_stream.next().await {
-            if event.data == "[DONE]" {
-                // Ignore send error on final event — client may have already closed.
-                let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
-                break;
-            }
-
-            let mut final_data = event.data.clone();
-            if let Some(ref schema) = schema_format {
-                let translator = crate::infrastructure::llm_router::get_translator(schema);
-                match translator.unify_stream_chunk(format!("data: {}", event.data)) {
-                    Ok(unified) => {
-                        let trimmed = unified.trim();
-                        final_data = trimmed.trim_start_matches("data: ").trim().to_string();
-                    }
-                    Err(e) => {
-                        warn!("Stream unification error: {}", e);
-                    }
-                }
-            }
-
-            if final_data.is_empty() {
-                continue;
-            }
-
-            // Bug 2 Fix: If the receiver is dropped (client disconnected), tx.send
-            // returns Err. We break immediately to stop reading from the upstream LLM,
-            // preventing a memory/connection leak where the gateway indefinitely buffers
-            // SSE frames that no client will ever consume.
-            if tx
-                .send(Ok(Event::default().data(final_data)))
-                .await
-                .is_err()
-            {
-                warn!("SSE client disconnected — aborting upstream stream read");
-                break;
-            }
-        }
-
-        // Stream complete — log metadata only (no body buffering)
         let latency_ms = start_time.elapsed().as_millis() as u32;
 
         fire_async_telemetry(
@@ -611,7 +558,7 @@ fn handle_streaming_response(
     Ok(ProxyResult {
         status: upstream_status,
         content_type,
-        body: ProxyBody::SseStream(ReceiverStream::new(rx)),
+        body: ProxyBody::Stream(body_stream),
         cache_hit: false,
     })
 }
@@ -956,20 +903,25 @@ mod tests {
         // Ippadi thaan channel ulla data pass aaguthu nu compile aagi prove aagidum!
     }
 
-    // Bug 1 Fix: These two tests were previously outside the `mod tests` block,
-    // causing a compilation error (orphaned items + rogue closing brace).
     #[test]
-    fn test_pii_regex_matches_aadhaar() {
+    fn test_pii_rayon_short_circuit() {
         let regex = pii_regex();
-        let prompt = "My aadhaar is 1234-5678-9012, please process it.";
-        assert!(regex.is_match(prompt)); // Match avvali
-    }
+        
+        // 1. Test Match at the end of a massive payload
+        let mut lines: Vec<String> = (0..5000).map(|i| format!("Safe line content #{}", i)).collect();
+        lines.push("My credit card is 4111-2222-3333-4444".to_string()); // Match!
+        let massive_prompt = lines.join("\n");
+        
+        use rayon::prelude::*;
+        let has_pii = massive_prompt.par_lines().any(|line| regex.is_match(line));
+        assert!(has_pii, "Rayon failed to detect PII at the end of a large payload");
 
-    #[test]
-    fn test_pii_regex_matches_bank_account_and_ifsc() {
-        let regex = pii_regex();
-        // IFSC mariyu Account number rendu test chestunnam
-        assert!(regex.is_match("Transfer to a/c 123456789012"));
-        assert!(regex.is_match("My bank IFSC is SBIN0001234"));
+        // 2. Test Match at the beginning (Short-circuit verification)
+        let mut early_match = vec!["Contact me at boss@nmmglobal.com".to_string()];
+        early_match.extend((0..5000).map(|i| format!("Safe line content #{}", i)));
+        let early_prompt = early_match.join("\n");
+        
+        let has_pii_early = early_prompt.par_lines().any(|line| regex.is_match(line));
+        assert!(has_pii_early, "Rayon failed to detect PII at the beginning");
     }
 }

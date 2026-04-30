@@ -42,9 +42,10 @@ const edgeTypes: EdgeTypes = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function deriveEdgeStatus(nodeData: LLMNodeData): EdgeStatus {
+function deriveEdgeStatus(nodeData: LLMNodeData): EdgeStatus | 'powered_down' {
   if (nodeData.status === 'error' || nodeData.status === 'offline') return 'broken';
   if (nodeData.tier === 'secondary' && nodeData.status === 'active') return 'fallback';
+  if (nodeData.tier === 'secondary' && nodeData.status === 'standby') return 'powered_down';
   if (nodeData.status === 'active' || nodeData.status === 'degraded') return 'flowing';
   return 'idle';
 }
@@ -174,8 +175,8 @@ export function SmartRoutingMap({ metrics }: SmartRoutingMapProps) {
     const newEdges: Edge<AnimatedEdgeData>[] = llmNodes.map((n) => {
       const status = deriveEdgeStatus(n.data);
       const edgeData: AnimatedEdgeData = {
-        status,
-        tps: status === 'idle' || status === 'broken' ? 0 : n.data.metrics.tps,
+        status: status as EdgeStatus,
+        tps: status === 'idle' || status === 'broken' || status === 'powered_down' ? 0 : n.data.metrics.tps,
         isActive: status === 'flowing' || status === 'fallback',
       };
       return {
@@ -220,8 +221,8 @@ export function SmartRoutingMap({ metrics }: SmartRoutingMapProps) {
         <div
           className="flex items-center gap-2 px-3 py-2 rounded-xl"
           style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--glass-border)',
+            background: 'var(--surface-container)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 24px rgba(0,0,0,0.4)',
             backdropFilter: 'blur(20px)',
           }}
         >
@@ -244,8 +245,8 @@ export function SmartRoutingMap({ metrics }: SmartRoutingMapProps) {
         <div
           className="flex items-center gap-4 px-3.5 py-2.5 rounded-xl"
           style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--glass-border)',
+            background: 'var(--surface-container)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 24px rgba(0,0,0,0.4)',
             backdropFilter: 'blur(20px)',
           }}
         >
@@ -294,8 +295,8 @@ export function SmartRoutingMap({ metrics }: SmartRoutingMapProps) {
 
         <Controls
           style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--glass-border)',
+            background: 'var(--surface-container)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 24px rgba(0,0,0,0.4)',
             borderRadius: '12px',
             backdropFilter: 'blur(20px)',
           }}
@@ -313,8 +314,8 @@ export function SmartRoutingMap({ metrics }: SmartRoutingMapProps) {
             return '#334155';
           }}
           style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--glass-border)',
+            background: 'var(--surface-container)',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 24px rgba(0,0,0,0.4)',
             borderRadius: '12px',
           }}
           maskColor="rgba(0,0,0,0.3)"

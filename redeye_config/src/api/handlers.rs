@@ -26,11 +26,12 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
-    domain::models::{ApiKeyRecord, ClientConfig, UpdateConfigRequest},
+    domain::models::{ApiKeyRecord, ClientConfig, KeyConfig, ModelConfig, UpdateConfigRequest},
     error::ConfigError,
     AppState,
 };
@@ -218,6 +219,207 @@ pub async fn revoke_api_key(
 }
 
 // =============================================================================
+// POST /v1/config/:tenant_id/routing-mesh
+// =============================================================================
+
+/// Request body for registering a new model+key pair into the routing mesh.
+///
+/// These are the fields that Auth does NOT accept (Auth only stores the
+/// encrypted key). The UI calls this endpoint **after** `POST /v1/auth/provider-keys`
+/// succeeds, completing the two-phase provider key registration workflow.
+#[derive(Debug, Deserialize)]
+pub struct UpsertRoutingMeshRequest {
+    /// The LLM model identifier (e.g. "gpt-4o", "gemini-2.0-flash").
+    pub model_name: String,
+    /// Upstream provider base URL (e.g. "https://api.openai.com/v1").
+    pub base_url: String,
+    /// Schema format used for translation ("openai" | "gemini" | "anthropic").
+    pub schema_format: String,
+    /// Must match the `key_alias` sent to Auth — used to locate the provider key.
+    pub key_alias: String,
+    /// Routing priority for this key (lower = tried first). Defaults to 1.
+    pub priority: Option<i32>,
+    /// Load-balancing weight. Defaults to 100.
+    pub weight: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoutingMeshResponse {
+    pub model_name: String,
+    pub message: String,
+}
+
+/// Registers a model/key pair into the routing mesh and pushes the updated
+/// routing state to Redis so the gateway picks it up atomically.
+///
+/// # Workflow
+/// 1. Validate the request fields.
+/// 2. Upsert the LLM model record (`llm_models` table).
+/// 3. Read all active provider keys for this tenant from the DB (decrypted in-process).
+/// 4. Assemble `HashMap<model_name, ModelConfig>` from live rows.
+/// 5. Publish via `publish_routing_mesh()` → `redeye:routing_updates`.
+pub async fn upsert_routing_mesh(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    Json(request): Json<UpsertRoutingMeshRequest>,
+) -> Result<impl IntoResponse, ConfigError> {
+    // ── 1. Basic validation ──────────────────────────────────────────────────────
+    if request.model_name.trim().is_empty() {
+        return Err(ConfigError::Validation("`model_name` must not be blank".into()));
+    }
+    if request.key_alias.trim().is_empty() {
+        return Err(ConfigError::Validation("`key_alias` must not be blank".into()));
+    }
+    // base_url is only required when registering a NEW model.
+    // Priority/weight-only updates may omit it (the existing DB row is preserved).
+    let has_base_url = !request.base_url.trim().is_empty();
+
+    let priority   = request.priority.unwrap_or(1);
+    let weight     = request.weight.unwrap_or(100);
+    let model_name = request.model_name.trim().to_string();
+    let base_url   = request.base_url.trim().to_string();
+    let schema_fmt = request.schema_format.trim().to_lowercase();
+    let key_alias  = request.key_alias.trim().to_string();
+
+    // ── 2. Upsert llm_models row (only when base_url is provided) ─────────────
+    if has_base_url {
+        state
+            .repo
+            .upsert_llm_model(tenant_id, &model_name, &base_url, &schema_fmt)
+            .await?;
+        tracing::info!(%tenant_id, model = %model_name, "LLM model upserted");
+    }
+
+    // ── 3. Load the full routing table for this tenant ─────────────────────────
+    let routing_entries = state.repo.get_routing_entries(tenant_id).await?;
+
+    // ── 4. Build HashMap<model_name, ModelConfig> ────────────────────────────
+    //
+    // We also inject the freshly-registered key into its model slot so the
+    // gateway sees it immediately, even if the DB query ran before the Auth
+    // service committed (eventual-consistency guard).
+    let mut routing_map: HashMap<String, ModelConfig> = HashMap::new();
+
+    for entry in routing_entries {
+        let model_entry = routing_map
+            .entry(entry.model_name.clone())
+            .or_insert_with(|| ModelConfig {
+                base_url:      entry.base_url.clone(),
+                schema_format: entry.schema_format.clone(),
+                keys:          Vec::new(),
+            });
+
+        model_entry.keys.push(KeyConfig {
+            key_alias: entry.key_alias.clone(),
+            api_key:   entry.api_key.clone(),
+            priority:  entry.priority,
+            weight:    entry.weight,
+        });
+    }
+
+    // Ensure the just-registered (model_name, key_alias) slot exists in the map
+    // with correct priority/weight even if the DB join hasn’t landed yet.
+    {
+        let model_entry = routing_map
+            .entry(model_name.clone())
+            .or_insert_with(|| ModelConfig {
+                base_url:      base_url.clone(),
+                schema_format: schema_fmt.clone(),
+                keys:          Vec::new(),
+            });
+
+        // Update base_url / schema_format in case this is a model update
+        model_entry.base_url      = base_url.clone();
+        model_entry.schema_format = schema_fmt.clone();
+
+        // Only add a placeholder key if the real decrypted key is unavailable
+        // (avoids duplicates when DB query was up-to-date).
+        let already_present = model_entry
+            .keys
+            .iter()
+            .any(|k| k.key_alias == key_alias);
+
+        if !already_present {
+            model_entry.keys.push(KeyConfig {
+                key_alias: key_alias.clone(),
+                api_key:   String::new(), // Gateway will reject empty key gracefully
+                priority,
+                weight,
+            });
+        }
+    }
+
+    // Sort each model’s keys by priority (ascending) for deterministic ordering.
+    for mc in routing_map.values_mut() {
+        mc.keys.sort_by_key(|k| k.priority);
+    }
+
+    // ── 5. Publish to Redis → redeye:routing_updates ────────────────────────
+    // Fail-open: a Redis hiccup must not roll back a committed mesh update.
+    if let Err(e) = crate::infrastructure::redis_sync::publish_routing_mesh(
+        &state.redis_client,
+        tenant_id,
+        routing_map,
+    )
+    .await
+    {
+        tracing::error!(
+            %tenant_id,
+            model = %model_name,
+            error = %e,
+            "Redis routing mesh publish failed; gateway will pick up change on next restart"
+        );
+    } else {
+        tracing::info!(%tenant_id, model = %model_name, "Routing mesh published to Redis");
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(RoutingMeshResponse {
+            model_name,
+            message: "Routing mesh updated and published".into(),
+        }),
+    ))
+}
+
+// =============================================================================
+// GET /v1/config/:tenant_id/models
+// =============================================================================
+
+/// Response type for a single LLM model row.
+#[derive(Debug, Serialize)]
+pub struct LlmModelResponse {
+    pub id: String,
+    pub model_name: String,
+    pub provider_name: String,
+    pub base_url: String,
+}
+
+/// Lists all LLM models registered for a tenant.
+///
+/// Used by the `SettingsView` routing strategy panel to display per-model
+/// key priority controls.
+pub async fn list_models(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+) -> Result<impl IntoResponse, ConfigError> {
+    let models = state.repo.list_models(tenant_id).await?;
+
+    let resp: Vec<LlmModelResponse> = models
+        .into_iter()
+        .map(|m| LlmModelResponse {
+            id:            m.id.to_string(),
+            model_name:    m.model_name,
+            provider_name: m.provider_name,
+            base_url:      m.base_url,
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(resp)))
+}
+
+
+// =============================================================================
 // Unit Tests
 // =============================================================================
 
@@ -269,6 +471,7 @@ mod tests {
         let state = AppState {
             repo: Arc::new(mock_repo),
             redis: Arc::new(mock_redis),
+            redis_client: redis::Client::open("redis://127.0.0.1:6379").unwrap(),
         };
         create_router(state)
     }

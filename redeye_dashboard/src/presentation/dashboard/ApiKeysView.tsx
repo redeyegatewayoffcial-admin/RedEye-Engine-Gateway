@@ -24,7 +24,7 @@ import useSWR from 'swr';
 import { useAuth } from '../context/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { SUPPORTED_PROVIDERS } from '../../data/constants/providers';
+
 import { useToast, type Toast, type ToastVariant } from '../hooks/useToast';
 import { BentoCard } from '../components/ui/BentoCard';
 import { InlineSparkline } from '../components/ui/InlineSparkline';
@@ -45,8 +45,8 @@ export interface ApiKey {
   expires_at: string | null;
   is_active: boolean;
   daily_requests?: number[];
-  usage_trend_24h?: number[];
   quota_used?: number;
+  model_name?: string;
 }
 
 interface ProviderKey {
@@ -329,7 +329,10 @@ export function ApiKeysView() {
   const [isProviderModalOpen, setIsProviderModalOpen] = useState(false);
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [newProviderName, setNewProviderName] = useState('openai');
-  const [newProviderKey, setNewProviderKey] = useState('');
+  const [newModelName, setNewModelName] = useState('');
+  const [newBaseUrl, setNewBaseUrl] = useState('');
+  const [newApiKey, setNewApiKey] = useState('');
+  const [newAlias, setNewAlias] = useState('');
   const [newKeyName, setNewKeyName] = useState('');
   const [copiedGateway, setCopiedGateway] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -402,29 +405,78 @@ export function ApiKeysView() {
 
   const handleAddProvider = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProviderKey.trim()) return;
+    if (!newApiKey.trim() || !newModelName.trim() || !newAlias.trim()) return;
     setSubmitting(true);
     try {
-      const res = await fetch(`${AUTH_BASE}/provider-keys`, {
+      // ── Phase 1: Auth — store the secret (only provider_name, api_key, key_alias)
+      // model_name and base_url are intentionally NOT sent to Auth.
+      const authRes = await fetch(`${AUTH_BASE}/provider-keys`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
         body: JSON.stringify({
           provider_name: newProviderName,
-          provider_api_key: newProviderKey,
+          api_key:       newApiKey,
+          key_alias:     newAlias,
         }),
       });
-      if (!res.ok) throw new Error('Failed to add provider key');
+
+      if (!authRes.ok) {
+        const errBody: unknown = await authRes.json().catch(() => ({}));
+        const msg =
+          errBody !== null && typeof errBody === 'object' &&
+          'error' in errBody && errBody.error !== null &&
+          typeof errBody.error === 'object' && 'message' in errBody.error &&
+          typeof (errBody.error as Record<string, unknown>).message === 'string'
+            ? (errBody.error as { message: string }).message
+            : `Auth service rejected the key (HTTP ${authRes.status})`;
+        throw new Error(msg);
+      }
+
+      // ── Phase 2: Config — register the routing mesh entry
+      // Auth succeeded; now tell Config about model_name, base_url, and schema_format.
+      const configRes = await fetch(`${CONFIG_BASE}/${tenantId}/routing-mesh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': '1' },
+        body: JSON.stringify({
+          model_name:    newModelName,
+          base_url:      newBaseUrl,
+          schema_format: newProviderName,   // schema_format is inferred from the provider
+          key_alias:     newAlias,
+          priority:      1,
+          weight:        100,
+        }),
+      });
+
+      if (!configRes.ok) {
+        const errBody: unknown = await configRes.json().catch(() => ({}));
+        const msg =
+          errBody !== null && typeof errBody === 'object' &&
+          'error' in errBody && errBody.error !== null &&
+          typeof errBody.error === 'object' && 'message' in errBody.error &&
+          typeof (errBody.error as Record<string, unknown>).message === 'string'
+            ? (errBody.error as { message: string }).message
+            : `Config service failed to register the routing mesh (HTTP ${configRes.status})`;
+        throw new Error(msg);
+      }
+
+      // ── Success: reset form and re-fetch provider list
       await mutateProviders();
       setIsProviderModalOpen(false);
-      setNewProviderKey('');
-      push(`${newProviderName} provider key added.`, 'success');
+      setNewProviderName('openai');
+      setNewModelName('');
+      setNewBaseUrl('');
+      setNewApiKey('');
+      setNewAlias('');
+      push(`Key "${newAlias}" secured and routing mesh updated for ${newModelName}.`, 'success');
     } catch (err) {
       push(err instanceof Error ? err.message : 'Failed to add provider key', 'error');
     } finally {
       setSubmitting(false);
     }
-  }, [newProviderName, newProviderKey, mutateProviders, push]);
+  }, [newProviderName, newModelName, newBaseUrl, newApiKey, newAlias, tenantId, mutateProviders, push]);
+
 
   const handleGenerate = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -589,7 +641,7 @@ export function ApiKeysView() {
               </button>
             </div>
 
-            <div className="flex flex-col gap-4 mb-8">
+            <div className="flex flex-col mb-8">
               {keysLoading ? (
                 <div className="flex items-center justify-center py-12 bg-[var(--surface-container-low)] rounded-2xl">
                   <Loader2 className="w-6 h-6 animate-spin text-[var(--accent-cyan)] mr-3" />
@@ -601,7 +653,7 @@ export function ApiKeysView() {
                   <p className="text-[var(--primary-rose)] font-geist text-sm">Failed to fetch virtual API keys.</p>
                 </div>
               ) : !keys || keys.length === 0 ? (
-                <div className={`py-20 ${INDUSTRIAL_SLOT}`}>
+                <div className={`py-20 ${INDUSTRIAL_SLOT} border-none`}>
                   <div className="text-5xl mb-6 opacity-30 grayscale">🔑</div>
                   <h3 className={`text-xl font-bold mb-2 font-geist ${ENGRAVED_TEXT}`}>No Virtual Tokens</h3>
                   <p className="text-[var(--text-muted)] mb-8 font-geist text-sm">Forge a virtual key to authenticate your distributed applications.</p>
@@ -614,69 +666,91 @@ export function ApiKeysView() {
                   </button>
                 </div>
               ) : (
-                keys.map((keyItem, index) => {
-                  const isRevokingThis = revokingId === keyItem.id;
-                  const keyString = `sk_live_${keyItem.id.replace(/-/g, '')}`;
-                  return (
-                    <div
-                      key={keyItem.id}
-                      className={`${TACTILE_CARD} flex flex-col xl:flex-row xl:items-center justify-between p-7 rounded-3xl mb-4`}
-                    >
-                      <div className="flex items-center gap-6 mb-6 xl:mb-0">
-                        <StatusIndicator isActive={keyItem.is_active} quotaUsed={keyItem.quota_used ?? 0} />
-                        <div>
-                          <h3 className={`text-xl font-bold tracking-tight mb-1 font-geist ${ENGRAVED_TEXT}`}>{keyItem.name}</h3>
-                          {/* Frosted Reveal Security */}
-                          <div
-                            className="group relative cursor-pointer inline-block overflow-hidden rounded-lg"
-                            onClick={() => handleCopy(keyString, 'key')}
-                            title="Click to copy"
-                          >
-                            <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity z-10" />
-                            <span className={`${DATA_CLASS} text-[0.8rem] transition-all duration-500 block px-2 py-1 bg-black/20 rounded font-bold tracking-tighter ${copiedKey === 'key' ? 'text-emerald-400' : 'text-[var(--text-muted)]'}`}>
-                              <span className="blur-md group-hover:blur-none transition-all duration-300">
-                                {keyString}
-                              </span>
-                            </span>
-                          </div>
-                        </div>
+                <div className="flex flex-col gap-8">
+                  {Object.entries(
+                    keys.reduce((acc, key) => {
+                      const group = key.model_name || 'Global Keys';
+                      if (!acc[group]) acc[group] = [];
+                      acc[group].push(key);
+                      return acc;
+                    }, {} as Record<string, ApiKey[]>)
+                  ).map(([groupName, groupKeys]) => (
+                    <div key={groupName} className="flex flex-col">
+                      <div className="flex items-center gap-3 mb-4 pl-2">
+                        <div className="w-2 h-2 rounded-full bg-[var(--accent-cyan)] shadow-[0_0_8px_rgba(34,211,238,0.6)]" />
+                        <h3 className={`text-sm font-bold tracking-widest uppercase font-geist ${ENGRAVED_TEXT}`}>
+                          {groupName}
+                        </h3>
                       </div>
-
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-8">
-                        <div className="flex flex-col items-center">
-                          <p className={`${LABEL_CLASS} mb-2`}>24H Trend</p>
-                          <InlineSparkline data={keyItem.usage_trend_24h ?? []} />
-                        </div>
-                        <div className="flex flex-col items-center">
-                          <p className={`${LABEL_CLASS} mb-2`}>Usage Heatmap</p>
-                          <KeyUsageHeatmap dailyRequests={keyItem.daily_requests ?? []} />
-                        </div>
-                        <div className="flex flex-col items-start sm:items-end min-w-[100px]">
-                          <p className={`${LABEL_CLASS} mb-1`}>Created</p>
-                          <span className={`${DATA_CLASS} text-[0.75rem] text-[var(--text-muted)]`}>{new Date(keyItem.created_at).toLocaleDateString()}</span>
-                          {keyItem.expires_at && (
-                            <>
-                              <p className={`${LABEL_CLASS} mt-2 mb-1`}>Expires</p>
-                              <span className={`${DATA_CLASS} text-[0.75rem] text-[var(--primary-amber)]`}>{new Date(keyItem.expires_at).toLocaleDateString()}</span>
-                            </>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-4 sm:pl-4">
-                          <QuotaRadialBar quotaUsed={keyItem.quota_used ?? 0} />
-                          {keyItem.is_active && (
-                            <button
-                              onClick={() => handleRevokeClick(keyItem)}
-                              className={`${MECHANICAL_BTN} p-3 rounded-xl text-rose-400/80 hover:text-rose-400 !border-b-[4px]`}
-                              title="Revoke Key"
+                      <div className="flex flex-col rounded-3xl overflow-hidden bg-[var(--surface-lowest)] shadow-[0_12px_32px_-8px_rgba(0,0,0,0.5),inset_0_1px_1px_rgba(255,255,255,0.05)] border-t border-[rgba(255,255,255,0.05)]">
+                        {groupKeys.map((keyItem, index) => {
+                          const isRevokingThis = revokingId === keyItem.id;
+                          const keyString = `sk_live_${keyItem.id.replace(/-/g, '')}`;
+                          const zebraBg = index % 2 === 0 ? 'bg-[var(--surface-lowest)]' : 'bg-[var(--surface-container-low)]';
+                          
+                          return (
+                            <div
+                              key={keyItem.id}
+                              className={`flex flex-col xl:flex-row xl:items-center justify-between p-6 transition-colors hover:bg-[var(--surface-container)] ${zebraBg}`}
                             >
-                              {isRevokingThis ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-5 h-5" />}
-                            </button>
-                          )}
-                        </div>
+                              <div className="flex items-center gap-6 mb-6 xl:mb-0 w-full xl:w-1/3">
+                                <StatusIndicator isActive={keyItem.is_active} quotaUsed={keyItem.quota_used ?? 0} />
+                                <div>
+                                  <h4 className={`text-lg font-bold tracking-tight mb-1 font-geist ${ENGRAVED_TEXT}`}>{keyItem.name}</h4>
+                                  <div
+                                    className="group relative cursor-pointer inline-block overflow-hidden rounded-md"
+                                    onClick={() => handleCopy(keyString, 'key')}
+                                    title="Click to copy"
+                                  >
+                                    <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity z-10" />
+                                    <span className={`${DATA_CLASS} text-xs transition-all duration-500 block px-2 py-1 bg-black/40 shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)] rounded tracking-tighter ${copiedKey === 'key' ? 'text-emerald-400' : 'text-[var(--text-muted)]'}`}>
+                                      <span className="blur-md group-hover:blur-none transition-all duration-300">
+                                        {keyString}
+                                      </span>
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-8 w-full xl:w-2/3 justify-end">
+                                <div className="flex flex-col items-center min-w-[100px]">
+                                  <p className={`${LABEL_CLASS} mb-2`}>24H Trend</p>
+                                  <InlineSparkline data={keyItem.usage_trend_24h ?? []} />
+                                </div>
+                                <div className="flex flex-col items-center min-w-[120px]">
+                                  <p className={`${LABEL_CLASS} mb-2`}>Activity Matrix</p>
+                                  <KeyUsageHeatmap dailyRequests={keyItem.daily_requests ?? []} />
+                                </div>
+                                <div className="flex flex-col items-start sm:items-end min-w-[100px]">
+                                  <p className={`${LABEL_CLASS} mb-1`}>Created</p>
+                                  <span className={`${DATA_CLASS} text-[11px] text-[var(--text-muted)]`}>{new Date(keyItem.created_at).toLocaleDateString()}</span>
+                                  {keyItem.expires_at && (
+                                    <>
+                                      <p className={`${LABEL_CLASS} mt-2 mb-1`}>Expires</p>
+                                      <span className={`${DATA_CLASS} text-[11px] text-[var(--primary-amber)]`}>{new Date(keyItem.expires_at).toLocaleDateString()}</span>
+                                    </>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-4 sm:pl-4 border-l border-[rgba(255,255,255,0.02)]">
+                                  <QuotaRadialBar quotaUsed={keyItem.quota_used ?? 0} />
+                                  {keyItem.is_active && (
+                                    <button
+                                      onClick={() => handleRevokeClick(keyItem)}
+                                      className={`${MECHANICAL_BTN} p-2.5 rounded-xl text-rose-400/80 hover:text-rose-400 hover:bg-[rgba(244,63,94,0.1)]`}
+                                      title="Revoke Key"
+                                    >
+                                      {isRevokingThis ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                  );
-                })
+                  ))}
+                </div>
               )}
             </div>
 
@@ -807,36 +881,85 @@ export function ApiKeysView() {
 
                 <div className="space-y-4">
                   <div>
-                    <label htmlFor="provider-select" className={`${LABEL_CLASS} mb-2 block`}>
-                      Provider
+                    <label htmlFor="providerName" className={`${LABEL_CLASS} mb-2 block`}>
+                      Provider Name
                     </label>
                     <select
-                      id="provider-select"
+                      id="providerName"
+                      name="providerName"
+                      required
                       value={newProviderName}
                       onChange={(e) => setNewProviderName(e.target.value)}
-                      className="w-full rounded-xl bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-[var(--on-surface)] focus:outline-none focus:ghost-border transition-all"
+                      className="w-full rounded-xl bg-[#080808] shadow-[inset_0_2px_8px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--on-surface)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-cyan)] transition-all"
                     >
-                      {SUPPORTED_PROVIDERS.map((provider) => (
-                        <option key={provider.id} value={provider.id} className="bg-[var(--surface-container)]">
-                          {provider.name}
-                        </option>
-                      ))}
+                      <option value="openai" className="bg-[var(--surface-container)]">OpenAI</option>
+                      <option value="google" className="bg-[var(--surface-container)]">Google</option>
+                      <option value="anthropic" className="bg-[var(--surface-container)]">Anthropic</option>
+                      <option value="deepseek" className="bg-[var(--surface-container)]">DeepSeek</option>
+                      <option value="custom" className="bg-[var(--surface-container)]">Custom</option>
                     </select>
                   </div>
 
                   <div>
-                    <label htmlFor="provider-key-input" className={`${LABEL_CLASS} mb-2 block`}>
+                    <label htmlFor="modelName" className={`${LABEL_CLASS} mb-2 block`}>
+                      Model Name
+                    </label>
+                    <input
+                      id="modelName"
+                      name="modelName"
+                      type="text"
+                      required
+                      placeholder="e.g., gemini-2.0-flash"
+                      value={newModelName}
+                      onChange={(e) => setNewModelName(e.target.value)}
+                      className="w-full rounded-xl bg-[#080808] shadow-[inset_0_2px_8px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--on-surface)] placeholder:text-[var(--text-subtle)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-cyan)] transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="baseUrl" className={`${LABEL_CLASS} mb-2 block`}>
+                      Base URL
+                    </label>
+                    <input
+                      id="baseUrl"
+                      name="baseUrl"
+                      type="text"
+                      required
+                      placeholder="https://api.openai.com/v1"
+                      value={newBaseUrl}
+                      onChange={(e) => setNewBaseUrl(e.target.value)}
+                      className="w-full rounded-xl bg-[#080808] shadow-[inset_0_2px_8px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--on-surface)] placeholder:text-[var(--text-subtle)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-cyan)] transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="apiKey" className={`${LABEL_CLASS} mb-2 block`}>
                       API Key
                     </label>
                     <input
-                      id="provider-key-input"
+                      id="apiKey"
+                      name="apiKey"
                       type="password"
                       required
-                      autoFocus
-                      placeholder="sk-…"
-                      value={newProviderKey}
-                      onChange={(e) => setNewProviderKey(e.target.value)}
-                      className="w-full rounded-xl bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-[var(--on-surface)] font-mono placeholder:text-[var(--text-subtle)] focus:outline-none focus:ghost-border transition-all"
+                      value={newApiKey}
+                      onChange={(e) => setNewApiKey(e.target.value)}
+                      className="w-full rounded-xl bg-[#080808] shadow-[inset_0_2px_8px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--on-surface)] font-mono placeholder:text-[var(--text-subtle)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-cyan)] transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="keyAlias" className={`${LABEL_CLASS} mb-2 block`}>
+                      Key Alias
+                    </label>
+                    <input
+                      id="keyAlias"
+                      name="keyAlias"
+                      type="text"
+                      required
+                      placeholder="e.g., Primary-Key or Grok-1"
+                      value={newAlias}
+                      onChange={(e) => setNewAlias(e.target.value)}
+                      className="w-full rounded-xl bg-[#080808] shadow-[inset_0_2px_8px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--on-surface)] placeholder:text-[var(--text-subtle)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-cyan)] transition-all"
                     />
                   </div>
                 </div>
@@ -913,7 +1036,7 @@ export function ApiKeysView() {
                       placeholder="e.g. Production Frontend App"
                       value={newKeyName}
                       onChange={(e) => setNewKeyName(e.target.value)}
-                      className="w-full rounded-xl bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-[var(--on-surface)] focus:outline-none focus:ghost-border transition-all placeholder:text-[var(--text-subtle)]"
+                      className="w-full rounded-xl bg-[#080808] shadow-[inset_0_2px_8px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.02)] px-4 py-3 text-sm text-[var(--on-surface)] placeholder:text-[var(--text-subtle)] focus:outline-none focus:ring-1 focus:ring-[var(--primary-rose)] transition-all"
                     />
                   </div>
                 </div>

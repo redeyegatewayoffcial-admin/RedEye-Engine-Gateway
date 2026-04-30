@@ -10,14 +10,14 @@ interface BadgeProps {
 }
 
 const variantClasses: Record<BadgeVariant, string> = {
-  success: 'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20',
-  danger:  'bg-rose-500/10 text-rose-400 ring-1 ring-rose-500/20',
-  neutral: 'bg-slate-700/40 text-slate-400 ring-1 ring-slate-600/30',
+  success: 'bg-[rgba(16,185,129,0.15)] text-[var(--color-redeye-success)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]',
+  danger:  'bg-[rgba(244,63,94,0.15)] text-[var(--color-redeye-danger)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]',
+  neutral: 'bg-[var(--surface-bright)] text-[var(--text-muted)] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]',
 };
 
 export function Badge({ children, variant = 'neutral', className = '' }: BadgeProps) {
   return (
-    <span className={`inline-flex items-center px-2 py-1 rounded-full text-[10px] font-semibold ${variantClasses[variant]} ${className}`}>
+    <span className={`inline-flex items-center px-2 py-1 rounded-full text-[10px] font-semibold backdrop-blur-md ${variantClasses[variant]} ${className}`}>
       {children}
     </span>
   );

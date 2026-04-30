@@ -18,7 +18,7 @@ use redeye_gateway::infrastructure;
 #[allow(unused_imports)]
 use redeye_gateway::usecases;
 
-use domain::models::AppState;
+use domain::models::{AppState, RoutingState};
 use infrastructure::cache_client::CacheGrpcClient;
 
 // ── Config defaults ───────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ async fn main() {
     let rate_limit_window: u32 = parse_env("RATE_LIMIT_WINDOW_SECS", DEFAULT_RATE_LIMIT_WINDOW);
 
     // ── Infrastructure clients ────────────────────────────────────────────────
-    let redis_conn = redis::Client::open(redis_url)
+    let redis_conn = redis::Client::open(redis_url.clone())
         .expect("Failed to create Redis client")
         .get_multiplexed_tokio_connection()
         .await
@@ -124,6 +124,11 @@ async fn main() {
             .expect("Failed to initialize Hybrid L1 Cache"),
     );
 
+    let circuit_breaker = moka::future::Cache::builder()
+        .max_capacity(10_000)
+        .time_to_live(std::time::Duration::from_secs(60))
+        .build();
+
     let state = Arc::new(AppState {
         http_client: http_client.clone(),
         cache_grpc_client,
@@ -138,7 +143,14 @@ async fn main() {
         llm_api_base_url: None,
         telemetry_tx,
         l1_cache,
+        routing_state: Arc::new(RoutingState::new()),
+        circuit_breaker,
     });
+
+    infrastructure::config_subscriber::spawn_config_subscriber(
+        redis::Client::open(redis_url).expect("Failed to create Redis client for subscriber"),
+        state.routing_state.clone()
+    );
 
     // ── Background Workers ────────────────────────────────────────────────────
     let clickhouse_url_clone = clickhouse_url;

@@ -11,12 +11,16 @@ import {
   RefreshCw,
   Sliders,
   ArrowRight,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast, type Toast, type ToastVariant } from '../hooks/useToast';
 import { BentoCard } from '../components/ui/BentoCard';
+import useSWR from 'swr';
+import { configService } from '../../data/services/configService';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -212,6 +216,217 @@ function ToggleCard({ meta, enabled, isSaving, onToggle }: ToggleCardProps) {
   );
 }
 
+// ── LLM Routing Strategy Section ──────────────────────────────────────────────
+
+interface ModelKey {
+  id: string;
+  model_name: string;
+  key_alias: string;
+  priority: number;
+  weight: number;
+}
+
+function RoutingStrategySection({ tenantId }: { tenantId: string }) {
+  const { data: models } = useSWR(
+    tenantId ? `models-${tenantId}` : null,
+    () => configService.getModels(tenantId)
+  );
+  const { data: keys, mutate } = useSWR(
+    tenantId ? `provider-keys-${tenantId}` : null,
+    () => configService.getProviderKeys() as unknown as Promise<ModelKey[]>
+  );
+  
+  const [strategy, setStrategy] = useState<'manual_priority' | 'auto_weighted'>('manual_priority');
+  const [localKeys, setLocalKeys] = useState<Record<string, ModelKey[]>>({});
+  const { push } = useToast();
+  const [savingModel, setSavingModel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (keys) {
+      const grouped = keys.reduce((acc, k) => {
+        if (!acc[k.model_name]) acc[k.model_name] = [];
+        acc[k.model_name].push(k);
+        return acc;
+      }, {} as Record<string, ModelKey[]>);
+      
+      Object.keys(grouped).forEach(m => {
+        grouped[m].sort((a, b) => a.priority - b.priority);
+      });
+      
+      setLocalKeys(grouped);
+    }
+  }, [keys]);
+
+  const handleSave = async (modelName: string) => {
+    const modelKeys = localKeys[modelName] || [];
+    
+    if (strategy === 'auto_weighted') {
+      const total = modelKeys.reduce((sum, k) => sum + (k.weight || 0), 0);
+      if (total !== 100) {
+        push('Total weight must equal 100%', 'error');
+        return;
+      }
+    }
+
+    setSavingModel(modelName);
+    try {
+      await configService.updateRoutingPolicy(tenantId, {
+        model_name: modelName,
+        strategy,
+        keys: modelKeys.map(k => ({
+          key_alias: k.key_alias,
+          priority: k.priority,
+          weight: k.weight || 0
+        }))
+      });
+      push(`Routing mesh for ${modelName} updated to ${strategy.replace('_', ' ')}.`, 'success');
+      void mutate();
+    } catch (err) {
+      push(err instanceof Error ? err.message : 'Failed to update routing mesh', 'error');
+    } finally {
+      setSavingModel(null);
+    }
+  };
+
+  const moveKey = (modelName: string, index: number, direction: -1 | 1) => {
+    const list = [...(localKeys[modelName] || [])];
+    if (index + direction < 0 || index + direction >= list.length) return;
+    
+    const temp = list[index];
+    list[index] = list[index + direction];
+    list[index + direction] = temp;
+    
+    list.forEach((k, i) => k.priority = i + 1);
+    setLocalKeys(prev => ({ ...prev, [modelName]: list }));
+  };
+
+  const updateWeight = (modelName: string, index: number, weight: number) => {
+    const list = [...(localKeys[modelName] || [])];
+    list[index].weight = weight;
+    setLocalKeys(prev => ({ ...prev, [modelName]: list }));
+  };
+
+  if (!models || models.length === 0) return null;
+
+  return (
+    <div className="w-full">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+        <div className="flex items-center gap-4">
+          <div className="p-3 rounded-2xl bg-[rgba(34,211,238,0.1)] shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)] border-none">
+            <Sliders className="w-6 h-6 text-[var(--accent-cyan)]" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold font-geist tracking-tight text-[var(--on-surface)]">LLM Routing Strategy</h2>
+            <p className={`${DATA_CLASS} text-[10px] mt-1 text-[var(--text-muted)]`}>Dynamically orchestrate multi-LLM fallback and load balancing</p>
+          </div>
+        </div>
+
+        <div className="flex bg-[#131313] p-1.5 rounded-[1.25rem] w-fit relative overflow-hidden shadow-[inset_0_4px_16px_rgba(0,0,0,0.8)] border-none">
+          <div 
+            className="absolute top-1.5 bottom-1.5 w-[160px] bg-[var(--surface-bright)] shadow-[0_4px_12px_rgba(0,0,0,0.6),inset_0_1px_2px_rgba(255,255,255,0.15)] rounded-[1rem] transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]"
+            style={{ transform: `translateX(${strategy === 'manual_priority' ? '0' : '100%'})` }}
+          />
+          <button 
+            onClick={() => setStrategy('manual_priority')}
+            className={`w-[160px] py-2 z-10 text-[10px] font-black font-geist tracking-widest transition-colors duration-300 ${strategy === 'manual_priority' ? 'text-[var(--on-surface)]' : 'text-[var(--text-muted)] hover:text-white/70'}`}
+          >
+            MANUAL PRIORITY
+          </button>
+          <button 
+            onClick={() => setStrategy('auto_weighted')}
+            className={`w-[160px] py-2 z-10 text-[10px] font-black font-geist tracking-widest transition-colors duration-300 ${strategy === 'auto_weighted' ? 'text-[var(--on-surface)]' : 'text-[var(--text-muted)] hover:text-white/70'}`}
+          >
+            AUTO WEIGHTED
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {models.map(model => {
+          const mKeys = localKeys[model.model_name] || [];
+          if (mKeys.length === 0) return null;
+
+          const totalWeight = mKeys.reduce((s, k) => s + (k.weight || 0), 0);
+          const isImbalanced = strategy === 'auto_weighted' && totalWeight !== 100;
+
+          return (
+            <div key={model.id} className="bg-[#131313] rounded-[2rem] p-6 shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)] border-none flex flex-col">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-lg font-bold font-geist text-[var(--on-surface)]">{model.model_name}</h3>
+                  <p className="text-xs text-[var(--text-muted)] font-geist">Provider: {model.provider_name}</p>
+                </div>
+                
+                {isImbalanced && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[rgba(245,158,11,0.1)] shadow-[0_0_15px_rgba(245,158,11,0.3)]">
+                    <AlertTriangle className="w-3 h-3 text-amber-500" />
+                    <span className="text-[10px] font-bold text-amber-500 font-geist uppercase tracking-widest">Imbalanced</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2 mb-6 flex-1">
+                {mKeys.map((k, idx) => (
+                  <div key={k.id} className={`flex items-center justify-between p-3 rounded-xl transition-colors ${idx % 2 === 0 ? 'bg-[var(--surface-container)]' : 'bg-[var(--surface-container-low)]'}`}>
+                    
+                    <div className="flex items-center gap-3">
+                      {strategy === 'manual_priority' && (
+                        <div className="flex flex-col gap-0.5 opacity-40">
+                          <button onClick={() => moveKey(model.model_name, idx, -1)} className="hover:text-[var(--accent-cyan)] transition-colors"><ArrowUp className="w-3 h-3" /></button>
+                          <button onClick={() => moveKey(model.model_name, idx, 1)} className="hover:text-[var(--accent-cyan)] transition-colors"><ArrowDown className="w-3 h-3" /></button>
+                        </div>
+                      )}
+                      
+                      <div className="flex flex-col">
+                        <span className="text-sm font-bold font-geist text-[var(--on-surface)]">{k.key_alias || 'Unnamed Key'}</span>
+                        <span className="text-[10px] font-mono text-[var(--text-muted)]">Priority: {k.priority}</span>
+                      </div>
+                    </div>
+
+                    {strategy === 'auto_weighted' && (
+                      <div className="flex items-center gap-3 w-1/2 justify-end">
+                        <div className="h-1.5 w-20 bg-black/50 rounded-full overflow-hidden shadow-[inset_0_1px_3px_rgba(0,0,0,0.8)] hidden sm:block">
+                          <div 
+                            className="h-full bg-gradient-to-r from-[var(--accent-cyan)] to-[var(--primary-rose)] transition-all duration-300"
+                            style={{ width: `${Math.min(100, k.weight || 0)}%` }}
+                          />
+                        </div>
+                        <div className="relative">
+                          <input 
+                            type="number" 
+                            min="0" max="100" 
+                            value={k.weight || 0}
+                            onChange={e => updateWeight(model.model_name, idx, parseInt(e.target.value) || 0)}
+                            className="w-16 bg-[#080808] text-[var(--on-surface)] text-xs font-bold font-geist px-2 py-1.5 rounded-lg border-none focus:ring-1 focus:ring-[var(--accent-cyan)] text-right pr-6 shadow-[inset_0_2px_8px_rgba(0,0,0,0.8)]"
+                          />
+                          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)]">%</span>
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                ))}
+              </div>
+
+              <button 
+                onClick={() => void handleSave(model.model_name)}
+                disabled={savingModel === model.model_name || isImbalanced}
+                className={`w-full py-3 rounded-xl text-xs font-black tracking-widest uppercase transition-all duration-300 flex items-center justify-center gap-2 border-none
+                  ${isImbalanced 
+                    ? 'bg-[var(--surface-container)] text-[var(--text-muted)] opacity-50 cursor-not-allowed' 
+                    : 'bg-[var(--surface-bright)] text-[var(--on-surface)] shadow-[0_4px_12px_rgba(0,0,0,0.3),inset_0_1px_1px_rgba(255,255,255,0.1)] hover:bg-white/10 active:translate-y-0.5 active:shadow-[inset_0_2px_4px_rgba(0,0,0,0.5)]'
+                  }`}
+              >
+                {savingModel === model.model_name ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Push Routing Mesh'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function SettingsView() {
@@ -365,6 +580,15 @@ export function SettingsView() {
             />
           </motion.div>
         ))}
+
+        {/* LLM Routing Strategy Section */}
+        {config && (
+          <motion.div variants={itemVariants} className="col-span-12">
+            <BentoCard glowColor="none" className="p-8">
+               <RoutingStrategySection tenantId={tenantId} />
+            </BentoCard>
+          </motion.div>
+        )}
 
         {/* Advanced Config */}
         {config && (

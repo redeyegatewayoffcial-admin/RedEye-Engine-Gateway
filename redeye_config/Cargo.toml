@@ -50,6 +50,11 @@ tower-http = { version = "0.5", features = ["cors"] }
 # async-trait enables `dyn Trait` for async methods — required for DI + mocking.
 async-trait = "0.1"
 
+# ── Cryptography ───────────────────────────────────────────────────────────────
+# AES-256-GCM decryption — matches the encryption used by redeye_auth.
+# Must use the same version as redeye_auth to guarantee wire-format compatibility.
+aes-gcm = "0.10"
+
 [dev-dependencies]
 # ── Test Utilities ─────────────────────────────────────────────────────────────
 tower          = { version = "0.5", features = ["util"] }  # ServiceExt::oneshot

@@ -28,11 +28,11 @@ export function StatCard({
       transition={{ duration: 0.4, delay: index * 0.08, ease: 'easeOut' }}
       whileHover={{ y: -3, transition: { duration: 0.2 } }}
       whileTap={{ scale: 0.97 }}
-      className="group glass-panel p-4 sm:p-6 flex items-start space-x-3 sm:space-x-4 hover:shadow-[0_0_28px_rgba(34,211,238,0.12)] hover:border-cyan-500/25 transition-all duration-300 w-full cursor-default"
+      className="group bg-[var(--glass-bg)] backdrop-blur-xl shadow-[var(--glass-shadow)] p-4 sm:p-6 flex items-start space-x-3 sm:space-x-4 hover:shadow-[var(--glass-shadow-hover)] transition-all duration-300 w-full cursor-default rounded-2xl relative overflow-hidden"
     >
       {/* Icon Badge */}
       <div
-        className={`p-2 sm:p-3 rounded-xl bg-slate-900/70 border border-cyan-500/10 flex-shrink-0 ${accentClass} group-hover:scale-110 group-hover:border-cyan-500/25 transition-all duration-300`}
+        className={`p-2 sm:p-3 rounded-xl bg-black/40 shadow-[inset_0_2px_8px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.05)] flex-shrink-0 ${accentClass} group-hover:scale-110 transition-all duration-300`}
       >
         <Icon className="w-5 h-5 sm:w-6 sm:h-6" />
       </div>

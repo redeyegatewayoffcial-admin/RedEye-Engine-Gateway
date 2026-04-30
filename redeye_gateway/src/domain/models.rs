@@ -21,6 +21,11 @@ pub struct AppState {
     pub llm_api_base_url: Option<String>,
     pub telemetry_tx: tokio::sync::mpsc::Sender<serde_json::Value>,
     pub l1_cache: std::sync::Arc<crate::infrastructure::l1_cache::L1Cache>,
+    pub routing_state: std::sync::Arc<RoutingState>,
+    /// Proactive circuit breaker: maps a failed key alias to () with a 60-second TTL.
+    /// Keyed by `key_alias`. Presence = the key is currently blacklisted.
+    /// Uses moka's async cache so inserts/reads are non-blocking on the Tokio executor.
+    pub circuit_breaker: moka::future::Cache<String, ()>,
 }
 
 /// Trace context propagated through every request.
@@ -53,113 +58,33 @@ pub struct LogPayload {
     pub is_hot_swapped: u8,
 }
 
-/// Typed errors for the gateway.
-#[derive(Debug, thiserror::Error)]
-pub enum GatewayError {
-    #[error("Missing or invalid API key")]
-    Unauthorized,
-    #[error("Failed to build proxy request/response: {0}")]
-    ResponseBuild(String),
-    #[error("LLM Provider unreachable: {0}")]
-    UpstreamUnreachable(reqwest::Error),
-    #[error("Compliance block: {0}")]
-    ComplianceFailure(String),
-    #[error("Rate Limit Exceeded: {0}")]
-    RateLimitExceeded(String),
-    #[error("Agent loop detected: {0}")]
-    LoopDetected(String),
-    #[error("Burn rate exceeded: {0}")]
-    BurnRateExceeded(String),
-    #[error("Gateway internal error: {0}")]
-    Proxy(reqwest::Error),
+pub use crate::error::GatewayError;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyConfig {
+    pub key_alias: String,
+    pub api_key: String,
+    pub priority: i32,
+    pub weight: i32,
 }
 
-impl axum::response::IntoResponse for GatewayError {
-    fn into_response(self) -> axum::response::Response {
-        use axum::http::StatusCode;
-        use axum::Json;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    pub base_url: String,
+    pub schema_format: String,
+    pub keys: Vec<KeyConfig>,
+}
 
-        let (status, code, message) = match &self {
-            GatewayError::Unauthorized => (
-                StatusCode::UNAUTHORIZED,
-                "UNAUTHORIZED",
-                "Missing or invalid API key.",
-            ),
-            GatewayError::ResponseBuild(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "INTERNAL_ERROR",
-                "An internal error occurred while building the response.",
-            ),
-            GatewayError::UpstreamUnreachable(e) => {
-                if e.is_timeout() {
-                    (
-                        StatusCode::GATEWAY_TIMEOUT,
-                        "GATEWAY_TIMEOUT",
-                        "The upstream request timed out.",
-                    )
-                } else {
-                    (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "UPSTREAM_ERROR",
-                        "The upstream LLM service is currently unreachable.",
-                    )
-                }
-            },
-            GatewayError::ComplianceFailure(_) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "COMPLIANCE_ERROR",
-                "Request blocked: the compliance service is unavailable or rejected this payload.",
-            ),
-            GatewayError::RateLimitExceeded(_) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "RATE_LIMITED",
-                "Rate limit exceeded. Please try again later.",
-            ),
-            GatewayError::LoopDetected(_) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "AGENT_LOOP_DETECTED",
-                "Agent recursive loop detected. This session has been blocked to prevent runaway costs.",
-            ),
-            GatewayError::BurnRateExceeded(_) => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "BURN_RATE_EXCEEDED",
-                "Session burn rate exceeded. Spending has been paused to prevent runaway costs.",
-            ),
-            GatewayError::Proxy(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "INTERNAL_ERROR",
-                "An internal error occurred while communicating with backend cluster services.",
-            ),
-        };
+#[derive(Default)]
+pub struct RoutingState {
+    pub state: arc_swap::ArcSwap<std::collections::HashMap<String, ModelConfig>>,
+}
 
-        // Log internal errors with full details
-        match &self {
-            GatewayError::ResponseBuild(_) | GatewayError::Proxy(_) => {
-                tracing::error!(
-                    error_code = %code,
-                    status = %status.as_u16(),
-                    internal_details = %self,
-                    "Internal gateway error occurred"
-                );
-            }
-            _ => {
-                tracing::warn!(
-                    error_code = %code,
-                    status = %status.as_u16(),
-                    message = %message,
-                    "Gateway client error occurred"
-                );
-            }
+impl RoutingState {
+    pub fn new() -> Self {
+        Self {
+            state: arc_swap::ArcSwap::from_pointee(std::collections::HashMap::new()),
         }
-
-        let body = Json(serde_json::json!({
-            "error": {
-                "code": code,
-                "message": message,
-            }
-        }));
-
-        (status, body).into_response()
     }
 }
 
