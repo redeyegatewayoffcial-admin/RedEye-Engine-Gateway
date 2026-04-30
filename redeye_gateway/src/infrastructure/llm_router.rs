@@ -381,6 +381,10 @@ mod tests {
             .time_to_live(std::time::Duration::from_secs(60))
             .build();
 
+        let loop_fallback_cache = Cache::builder()
+            .max_capacity(100)
+            .build();
+
         let routing_state = Arc::new(RoutingState::new());
         let l1_cache = Arc::new(L1Cache::new(1024).unwrap());
         let http_client = reqwest::Client::new();
@@ -408,6 +412,7 @@ mod tests {
                 l1_cache,
                 routing_state,
                 circuit_breaker,
+                loop_fallback_cache,
             }
         };
 

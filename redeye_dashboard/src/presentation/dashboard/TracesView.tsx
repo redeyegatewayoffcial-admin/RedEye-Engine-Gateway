@@ -17,6 +17,9 @@ interface Trace {
   policy: string;
   status: number;
   path: string;
+  sessionId?: string;
+  isAgentic?: boolean;
+  loopCount?: number;
 }
 
 // ── Kinetic CSS Injection ───────────────────────────────────────────────────
@@ -269,6 +272,12 @@ function TraceDrawer({ trace, onClose }: { trace: Trace; onClose: () => void }) 
                   {trace.policy}
                 </Badge>
               </div>
+              {trace.isAgentic && (
+                <div className="flex justify-between items-center text-xs border-t border-white/5 pt-3 mt-1">
+                  <span className="text-[var(--accent-cyan)] font-geist font-bold">Agentic Loop Count</span>
+                  <span className="font-jetbrains text-[var(--accent-cyan)] font-bold">{trace.loopCount ?? 0}</span>
+                </div>
+              )}
            </div>
         </div>
       </div>
@@ -287,12 +296,23 @@ function TraceDrawer({ trace, onClose }: { trace: Trace; onClose: () => void }) 
 
 export function TracesView() {
   const [selectedTrace, setSelectedTrace] = useState<Trace | null>(null);
+  const [filterAgentic, setFilterAgentic] = useState(false);
+  const [filterSessionId, setFilterSessionId] = useState('');
 
   const { data: traces, error, isLoading } = useSWR<Trace[]>(
     'http://localhost:8080/v1/admin/traces',
     fetcher,
     { refreshInterval: 5000 }
   );
+
+  const filteredTraces = React.useMemo(() => {
+    if (!traces) return [];
+    return traces.filter(t => {
+      if (filterAgentic && !t.isAgentic) return false;
+      if (filterSessionId && (!t.sessionId || !t.sessionId.toLowerCase().includes(filterSessionId.toLowerCase()))) return false;
+      return true;
+    });
+  }, [traces, filterAgentic, filterSessionId]);
 
   return (
     <>
@@ -341,14 +361,35 @@ export function TracesView() {
         {/* Main Trace Table */}
         <motion.div variants={itemVariants} className="col-span-12 h-fit">
           <BentoCard glowColor="cyan" className="overflow-hidden flex flex-col">
-            <div className="p-6 bg-[rgba(255,255,255,0.02)] flex items-center justify-between">
+            <div className="p-6 bg-[rgba(255,255,255,0.02)] flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/5">
               <div className="flex items-center gap-4">
                 <h3 className={LABEL_CLASS}>Recent Traces</h3>
                 {isLoading && <Loader2 className="w-3 h-3 animate-spin text-[var(--accent-cyan)]" />}
               </div>
-              <span className={`${DATA_CLASS} text-[10px] uppercase tracking-widest text-[var(--on-surface-muted)]`}>
-                {traces ? `${traces.length} active spans` : 'Monitoring...'}
-              </span>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 bg-[var(--surface-container-low)] px-3 py-1.5 rounded-lg border border-white/5 hover:border-[var(--accent-cyan)]/30 transition-colors">
+                  <input 
+                    type="checkbox" 
+                    id="agentic-filter"
+                    checked={filterAgentic}
+                    onChange={(e) => setFilterAgentic(e.target.checked)}
+                    className="accent-[var(--accent-cyan)] w-3 h-3"
+                  />
+                  <label htmlFor="agentic-filter" className={`${LABEL_CLASS} cursor-pointer`}>Agentic Only</label>
+                </div>
+                <div className="flex items-center bg-[var(--surface-container-low)] px-3 py-1.5 rounded-lg border border-white/5 focus-within:border-[var(--accent-cyan)]/50 transition-colors">
+                  <input
+                    type="text"
+                    placeholder="Filter by Session ID..."
+                    value={filterSessionId}
+                    onChange={(e) => setFilterSessionId(e.target.value)}
+                    className="bg-transparent border-none outline-none font-jetbrains text-[10px] text-[var(--on-surface)] placeholder:text-white/20 w-48"
+                  />
+                </div>
+                <span className={`${DATA_CLASS} text-[10px] uppercase tracking-widest text-[var(--on-surface-muted)]`}>
+                  {traces ? `${filteredTraces.length} active spans` : 'Monitoring...'}
+                </span>
+              </div>
             </div>
 
             <div className="flex-1 overflow-x-auto overflow-y-auto custom-scrollbar p-2">
@@ -382,8 +423,8 @@ export function TracesView() {
                         <div className="w-24 h-2.5 bg-white/5 rounded-full ml-auto" />
                       </div>
                     ))
-                  ) : traces && traces.length > 0 ? (
-                    traces.map((trace, i) => (
+                  ) : filteredTraces && filteredTraces.length > 0 ? (
+                    filteredTraces.map((trace, i) => (
                       <motion.div 
                         key={trace.traceId} 
                         layout

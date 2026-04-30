@@ -26,6 +26,8 @@ pub struct AppState {
     /// Keyed by `key_alias`. Presence = the key is currently blacklisted.
     /// Uses moka's async cache so inserts/reads are non-blocking on the Tokio executor.
     pub circuit_breaker: moka::future::Cache<String, ()>,
+    /// Fallback L1 cache for agentic loop tracking when Redis is unavailable.
+    pub loop_fallback_cache: moka::future::Cache<String, std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
 
 /// Trace context propagated through every request.

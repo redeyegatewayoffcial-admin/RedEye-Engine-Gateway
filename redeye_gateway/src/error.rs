@@ -15,6 +15,8 @@ pub enum GatewayError {
     RateLimitExceeded(String),
     #[error("Agent loop detected: {0}")]
     LoopDetected(String),
+    #[error("Agent loop budget exceeded: {0}")]
+    AgentLoopBudgetExceeded(String),
     #[error("Burn rate exceeded: {0}")]
     BurnRateExceeded(String),
     #[error("Gateway internal error: {0}")]
@@ -73,6 +75,15 @@ impl axum::response::IntoResponse for GatewayError {
                 "AGENT_LOOP_DETECTED",
                 "Agent recursive loop detected. This session has been blocked to prevent runaway costs.",
             ),
+            GatewayError::AgentLoopBudgetExceeded(_) => {
+                // Return exactly the OpenAI-formatted 429 error required by the prompt,
+                // so we don't use the standard tuple mapping. We'll handle this specially below.
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "agent_loop_exceeded",
+                    "RedEye Guard: Agent loop budget exceeded...",
+                )
+            },
             GatewayError::BurnRateExceeded(_) => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "BURN_RATE_EXCEEDED",
@@ -118,6 +129,21 @@ impl axum::response::IntoResponse for GatewayError {
                     "Gateway client error occurred"
                 );
             }
+        }
+
+        // If it's specifically AgentLoopBudgetExceeded, format precisely per OpenAI spec
+        if let GatewayError::AgentLoopBudgetExceeded(_) = &self {
+            let body = Json(serde_json::json!({
+                "error": {
+                    "message": "RedEye Guard: Agent loop budget exceeded...",
+                    "type": "redeye_loop_limit",
+                    "code": "agent_loop_exceeded",
+                    "param": null
+                }
+            }));
+            let mut res = (status, body).into_response();
+            res.headers_mut().insert(axum::http::header::RETRY_AFTER, axum::http::HeaderValue::from_static("300"));
+            return res;
         }
 
         let body = Json(serde_json::json!({

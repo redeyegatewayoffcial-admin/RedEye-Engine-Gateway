@@ -45,6 +45,30 @@ pub async fn chat_completions(
     let extracted: ExtractModel = serde_json::from_slice(&body_bytes).unwrap_or(ExtractModel { model: None });
     let model_name = extracted.model.as_deref().unwrap_or("gpt-4o").to_string();
 
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let is_agentic = detect_agentic_payload(&body_bytes, content_type);
+
+    let session_id = headers
+        .get("x-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let idempotency_key = headers
+        .get("x-idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let api_key = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .unwrap_or("")
+        .to_string();
+
     let tenant_id = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
@@ -55,6 +79,48 @@ pub async fn chat_completions(
         .get("accept")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json");
+
+    let mut loop_count: Option<u64> = None;
+
+    if is_agentic {
+        let resolved_session_id = crate::usecases::agentic_tracker::resolve_session_id(
+            session_id.as_deref(),
+            idempotency_key.as_deref(),
+            &tenant_id,
+            &api_key,
+            &body_bytes,
+        );
+
+        let start_detection = tokio::time::Instant::now();
+        let budget_res = crate::usecases::behavior_guard::enforce_agentic_loop_budget(&state, &resolved_session_id).await;
+        let detection_latency = start_detection.elapsed().as_secs_f64();
+
+        let (passed, hit, count_val) = match &budget_res {
+            Ok(c) => (true, 0, *c),
+            Err(_) => (false, 1, 0),
+        };
+
+        // Offload telemetry non-blocking
+        let tx = state.telemetry_tx.clone();
+        let tid = tenant_id.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(serde_json::json!({
+                "type": "agentic_loop_detection",
+                "session_id": resolved_session_id,
+                "tenant_id": tid,
+                "agentic_requests_total": 1,
+                "loop_limit_hits": hit,
+                "detection_latency_seconds": detection_latency,
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            })).await;
+        });
+
+        loop_count = Some(count_val);
+
+        if !passed {
+            return Err(budget_res.unwrap_err());
+        }
+    }
 
     // Extract routing strategy from header
     let strategy = crate::infrastructure::routing_strategy::RoutingStrategy::from_header(
@@ -81,7 +147,7 @@ pub async fn chat_completions(
 
     match result.body {
         crate::usecases::proxy::ProxyBody::Buffered(body_bytes) => {
-            let response = Response::builder()
+            let mut response = Response::builder()
                 .status(result.status)
                 .header("content-type", &result.content_type)
                 .header("X-Cache", cache_header)
@@ -90,6 +156,12 @@ pub async fn chat_completions(
                     error!(error = %e, "Failed to construct proxy response");
                     GatewayError::ResponseBuild(e.to_string())
                 })?;
+
+            if let Some(c) = loop_count {
+                if let Ok(v) = axum::http::HeaderValue::from_str(&c.to_string()) {
+                    response.headers_mut().insert("X-RedEye-Loop-Count", v);
+                }
+            }
 
             Ok(response)
         }
@@ -106,6 +178,13 @@ pub async fn chat_completions(
             if let Ok(value) = axum::http::HeaderValue::from_str(cache_header) {
                 response.headers_mut().insert("X-Cache", value);
             }
+
+            if let Some(c) = loop_count {
+                if let Ok(v) = axum::http::HeaderValue::from_str(&c.to_string()) {
+                    response.headers_mut().insert("X-RedEye-Loop-Count", v);
+                }
+            }
+
             Ok(response)
         }
     }
@@ -799,6 +878,148 @@ pub async fn get_cache_metrics(
         "miss_ratio": miss_ratio,
         "total_lookups": total_lookups,
     })))
+}
+
+#[inline]
+pub fn detect_agentic_payload(body_bytes: &[u8], content_type: &str) -> bool {
+    // Fast-path size check & Content-Type check (max 5MB for inspection)
+    if body_bytes.len() > 5 * 1024 * 1024 || !content_type.starts_with("application/json") {
+        return false;
+    }
+    
+    let mut bytes_vec = body_bytes.to_vec();
+    let is_agentic = match simd_json::to_borrowed_value(&mut bytes_vec) {
+        Ok(simd_json::BorrowedValue::Object(obj)) => {
+            obj.contains_key("tools") || obj.contains_key("tool_choice")
+        }
+        _ => false,
+    };
+    is_agentic
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_agentic_detection_with_tools() {
+        let payload = br#"{"model": "gpt-4", "messages": [], "tools": [{"type": "function"}]}"#;
+        assert!(detect_agentic_payload(payload, "application/json"));
+
+        let payload2 = br#"{"tool_choice": "auto", "messages": []}"#;
+        assert!(detect_agentic_payload(payload2, "application/json"));
+    }
+
+    #[test]
+    fn test_agentic_detection_without_tools() {
+        let payload = br#"{"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}"#;
+        assert!(!detect_agentic_payload(payload, "application/json"));
+
+        // Large payload check (over 5MB) - mocked by just checking the size condition
+        let large_payload = vec![b' '; 5 * 1024 * 1024 + 1];
+        assert!(!detect_agentic_payload(&large_payload, "application/json"));
+        
+        // Wrong content type
+        assert!(!detect_agentic_payload(br#"{"tools": []}"#, "text/plain"));
+    }
+
+    #[test]
+    fn test_agentic_detection_malformed_json() {
+        let payload = br#"{"model": "gpt-4", "messages": ["#;
+        assert!(!detect_agentic_payload(payload, "application/json"));
+    }
+
+    #[tokio::test]
+    async fn test_mpsc_telemetry_offloading() {
+        use axum::http::{HeaderMap, HeaderValue};
+        use axum::extract::{State, Extension};
+        use std::sync::Arc;
+        use crate::domain::models::{AppState, RoutingState, TraceContext, ModelConfig, KeyConfig};
+        use moka::future::Cache;
+        use crate::infrastructure::l1_cache::L1Cache;
+        use crate::infrastructure::cache_client::CacheGrpcClient;
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers_modules::redis::Redis;
+
+        // Spin up Redis so enforce_agentic_loop_budget succeeds
+        let container = Redis::default().start().await.unwrap();
+        let host_port = container.get_host_port_ipv4(6379).await.unwrap();
+        let redis_url = format!("redis://127.0.0.1:{}", host_port);
+        let redis_client = redis::Client::open(redis_url).unwrap();
+        let redis_conn = redis_client.get_multiplexed_tokio_connection().await.unwrap();
+
+        let (telemetry_tx, mut telemetry_rx) = tokio::sync::mpsc::channel(10);
+        let circuit_breaker = Cache::builder().build();
+        let loop_fallback_cache = Cache::builder().build();
+        let routing_state = Arc::new(RoutingState::new());
+        
+        let mut map = std::collections::HashMap::new();
+        map.insert("gpt-4".into(), ModelConfig {
+            base_url: "http://localhost:12345".into(),
+            schema_format: "openai".into(),
+            keys: vec![
+                KeyConfig { key_alias: "key-1".into(), api_key: "sk-1".into(), priority: 1, weight: 1 },
+            ],
+        });
+        routing_state.state.store(Arc::new(map));
+
+        let l1_cache = Arc::new(L1Cache::new(1024).unwrap());
+        let http_client = reqwest::Client::new();
+        let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1").connect_lazy();
+        let cache_grpc_client = CacheGrpcClient::new(channel);
+
+        let state = unsafe {
+            AppState {
+                http_client,
+                cache_grpc_client,
+                compliance_url: String::new(),
+                redis_conn,
+                db_pool: std::mem::MaybeUninit::uninit().assume_init(),
+                rate_limit_max: 0,
+                rate_limit_window: 0,
+                clickhouse_url: String::new(),
+                tracer_url: String::new(),
+                dashboard_url: String::new(),
+                llm_api_base_url: None,
+                telemetry_tx,
+                l1_cache,
+                routing_state,
+                circuit_breaker,
+                loop_fallback_cache,
+            }
+        };
+
+        let state_arc = Arc::new(state);
+        let ext = Extension(TraceContext {
+            trace_id: "trace-1".into(),
+            session_id: "session-1".into(),
+            parent_trace_id: None,
+        });
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        headers.insert("x-session-id", HeaderValue::from_static("test-session"));
+        
+        // Payload with tools to trigger agentic logic
+        let body = axum::body::Bytes::from(r#"{"model": "gpt-4", "tools": [{"type": "function"}]}"#);
+
+        // Call the handler directly
+        let _res = super::chat_completions(State(state_arc.clone()), ext, headers, body).await;
+
+        // Verify MPSC received the telemetry
+        let msg = telemetry_rx.recv().await.expect("Expected a telemetry message on the MPSC channel");
+        
+        let type_field = msg.get("type").unwrap().as_str().unwrap();
+        assert_eq!(type_field, "agentic_loop_detection");
+        
+        let req_total = msg.get("agentic_requests_total").unwrap().as_i64().unwrap();
+        assert_eq!(req_total, 1);
+        
+        let hits = msg.get("loop_limit_hits").unwrap().as_i64().unwrap();
+        assert_eq!(hits, 0);
+
+        std::mem::forget(state_arc);
+    }
 }
 
 /// GET /v1/admin/metrics/compliance

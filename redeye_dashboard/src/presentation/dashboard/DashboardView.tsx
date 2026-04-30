@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import { motion } from 'framer-motion';
-import { AlertCircle, Zap, Activity } from 'lucide-react';
+import { AlertCircle, Zap, Activity, Bot } from 'lucide-react';
 import { TutorialOverlay } from '../components/TutorialOverlay';
 import { fetchUsageMetrics, USAGE_METRICS_URL, type UsageMetrics } from '../../data/services/metricsService';
 import { HotSwapLiveChart } from './HotSwapLiveChart';
@@ -11,6 +11,7 @@ import { BentoCard } from '../components/ui/BentoCard';
 import { LivePulseIndicator } from '../components/ui/LivePulseIndicator';
 import { AreaChartGradient } from '../components/ui/AreaChartGradient';
 import { SparklineChart } from '../components/ui/SparklineChart';
+import { StatCard } from '../components/ui/StatCard';
 import { ProportionalArcDonut } from '../components/ui/ProportionalArcDonut';
 import { ModelUsageHeatmap } from '../components/ui/ModelUsageHeatmap';
 import { SmartRoutingMap } from '../components/ui/routing';
@@ -30,6 +31,9 @@ interface Metrics {
   traffic_series: { timestamp: string; requests: number }[];
   model_distribution: { name: string; value: number }[];
   latency_buckets: { bucket: string; count: number }[];
+  agentic_requests_total?: string;
+  loop_limit_hits?: string;
+  detection_latency_seconds?: number;
 }
 
 // ── Fetcher ───────────────────────────────────────────────────────────────────
@@ -189,6 +193,41 @@ const COMPONENTS: Record<string, (props: ComponentProps) => JSX.Element> = {
       </BentoCard>
     </div>
   ),
+  agenticTraffic: ({ isIncidentActive, metrics }) => {
+    const totalReq = metrics?.total_requests ? parseInt(metrics.total_requests) : 0;
+    const agenticReq = metrics?.agentic_requests_total ? parseInt(metrics.agentic_requests_total) : 0;
+    const loopHits = metrics?.loop_limit_hits ? parseInt(metrics.loop_limit_hits) : 0;
+    const agenticPercent = totalReq > 0 ? (agenticReq / totalReq) * 100 : 0;
+    
+    return (
+      <div key="agenticTraffic" className={`col-span-12 grid grid-cols-12 gap-inherit ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-4 h-36">
+          <div className="h-full">
+            <StatCard
+              title="Blocked Agent Loops"
+              value={fmtMag(loopHits)}
+              icon={Bot}
+              accentClass="text-[var(--primary-rose)]"
+              subtitle={`${metrics?.detection_latency_seconds?.toFixed(4) || '0.0000'}s detection overhead`}
+            />
+          </div>
+        </div>
+        <div className="col-span-12 sm:col-span-6 lg:col-span-8 h-36">
+          <BentoCard glowColor="cyan" className="p-6 h-full flex items-center justify-between relative overflow-hidden">
+             <div className="z-10 flex flex-col justify-center">
+                <h2 className="font-geist text-[var(--on-surface-muted)] uppercase tracking-widest text-xs font-bold mb-1">Agentic Traffic Split</h2>
+                <p className="font-jetbrains text-[10px] text-white/50">
+                  <span className="text-[var(--accent-cyan)] font-bold">{fmtMag(agenticReq)} Agentic</span> / {fmtMag(totalReq)} Total
+                </p>
+             </div>
+             <div className="absolute right-[-20px] top-[-30px] opacity-80 pointer-events-none transform scale-[0.6]">
+                <ProportionalArcDonut value={agenticPercent} size={220} strokeWidth={16} />
+             </div>
+          </BentoCard>
+        </div>
+      </div>
+    );
+  },
   auditStream: ({ isIncidentActive }) => (
     <div key="auditStream" className={`col-span-12 ${isIncidentActive ? 'opacity-30 grayscale' : ''} transition-all duration-1000`}>
       <BentoCard glowColor="none" className="p-6 flex flex-col">
@@ -322,9 +361,9 @@ export function DashboardView() {
   // ── Algorithmic Layout Priority ───────────────────────────────────────────
   const layoutOrder = useMemo(() => {
     if (role === 'Engineer') {
-      return ['routingMap', 'stats', 'trafficChart', 'healthHeatmap', 'auditStream'];
+      return ['routingMap', 'stats', 'agenticTraffic', 'trafficChart', 'healthHeatmap', 'auditStream'];
     } else {
-      return ['stats', 'auditStream', 'healthHeatmap', 'trafficChart', 'routingMap'];
+      return ['stats', 'agenticTraffic', 'auditStream', 'healthHeatmap', 'trafficChart', 'routingMap'];
     }
   }, [role]);
 

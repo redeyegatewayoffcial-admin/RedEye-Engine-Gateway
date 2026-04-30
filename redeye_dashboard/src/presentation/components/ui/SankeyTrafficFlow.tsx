@@ -22,6 +22,7 @@ interface SankeyData {
 const COLORS = {
   ingress: '#22d3ee', // Cyan
   engine: '#3A3939',  // Surface Bright / Neutral
+  agentic: '#a855f7', // Purple/Amethyst
   gpt4o: '#22d3ee',   // Cyan
   claude: '#fbbf24',  // Amber
   gemini: '#fb7185',  // Rose
@@ -47,37 +48,50 @@ const MOCK_DATA: SankeyData = {
   nodes: [
     { name: 'Global Ingress' },   // 0
     { name: 'Routing Engine' },   // 1
-    { name: 'GPT-4o' },           // 2
-    { name: 'Claude 3.5' },       // 3
-    { name: 'Gemini' },           // 4
-    { name: 'Success' },          // 5
-    { name: 'Failed' },           // 6
-    { name: 'PII Redacted' },      // 7
+    { name: 'Agentic Tunnel' },   // 2
+    { name: 'GPT-4o' },           // 3
+    { name: 'Claude 3.5' },       // 4
+    { name: 'Gemini' },           // 5
+    { name: 'Success' },          // 6
+    { name: 'Failed' },           // 7
+    { name: 'PII Redacted' },     // 8
   ],
   links: [
-    { source: 0, target: 1, value: 1200000 },
+    // Ingress Splits
+    { source: 0, target: 1, value: 800000 },
+    { source: 0, target: 2, value: 400000 },
     
-    { source: 1, target: 2, value: 650000 },
-    { source: 1, target: 3, value: 350000 },
+    // Routing Engine -> Models
+    { source: 1, target: 3, value: 450000 },
     { source: 1, target: 4, value: 200000 },
+    { source: 1, target: 5, value: 150000 },
     
-    { source: 2, target: 5, value: 610000 },
-    { source: 2, target: 6, value: 30000 },
-    { source: 2, target: 7, value: 10000 },
+    // Agentic Tunnel -> Models
+    { source: 2, target: 3, value: 200000 },
+    { source: 2, target: 4, value: 150000 },
+    { source: 2, target: 5, value: 50000 },
     
-    { source: 3, target: 5, value: 330000 },
-    { source: 3, target: 6, value: 15000 },
-    { source: 3, target: 7, value: 5000 },
+    // GPT-4o Outbound
+    { source: 3, target: 6, value: 610000 },
+    { source: 3, target: 7, value: 30000 },
+    { source: 3, target: 8, value: 10000 },
     
-    { source: 4, target: 5, value: 195000 },
-    { source: 4, target: 6, value: 4000 },
-    { source: 4, target: 7, value: 1000 },
+    // Claude Outbound
+    { source: 4, target: 6, value: 330000 },
+    { source: 4, target: 7, value: 15000 },
+    { source: 4, target: 8, value: 5000 },
+    
+    // Gemini Outbound
+    { source: 5, target: 6, value: 195000 },
+    { source: 5, target: 7, value: 4000 },
+    { source: 5, target: 8, value: 1000 },
   ],
 };
 
 const getNodeColor = (name: string) => {
   if (name.includes('Ingress')) return COLORS.ingress;
   if (name.includes('Engine')) return COLORS.engine;
+  if (name.includes('Agentic')) return COLORS.agentic;
   if (name.includes('GPT')) return COLORS.gpt4o;
   if (name.includes('Claude')) return COLORS.claude;
   if (name.includes('Gemini')) return COLORS.gemini;

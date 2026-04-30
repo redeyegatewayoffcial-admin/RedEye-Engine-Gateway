@@ -129,6 +129,11 @@ async fn main() {
         .time_to_live(std::time::Duration::from_secs(60))
         .build();
 
+    let loop_fallback_cache = moka::future::Cache::builder()
+        .max_capacity(10_000)
+        .time_to_live(std::time::Duration::from_secs(300))
+        .build();
+
     let state = Arc::new(AppState {
         http_client: http_client.clone(),
         cache_grpc_client,
@@ -145,6 +150,7 @@ async fn main() {
         l1_cache,
         routing_state: Arc::new(RoutingState::new()),
         circuit_breaker,
+        loop_fallback_cache,
     });
 
     infrastructure::config_subscriber::spawn_config_subscriber(
