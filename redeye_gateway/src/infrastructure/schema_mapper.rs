@@ -14,14 +14,14 @@ pub fn map_openai_tools_to_anthropic(openai_tools: Option<Vec<Value>>) -> Option
 
         if let Some(function) = tool.get("function").and_then(|f| f.as_object()) {
             if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
-                let description = function
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
-                let parameters = function
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+                let description = match function.get("description").and_then(|d| d.as_str()) {
+                    Some(desc) => desc,
+                    None => "",
+                };
+                let parameters = match function.get("parameters") {
+                    Some(p) => p.clone(),
+                    None => json!({"type": "object", "properties": {}}),
+                };
 
                 mapped_tools.push(json!({
                     "name": name,

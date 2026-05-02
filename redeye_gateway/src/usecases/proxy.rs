@@ -102,8 +102,7 @@ pub async fn execute_proxy(
     // ── Stage 0: PII Redaction (fail-closed) ─────────────────────────────────
     let raw_prompt_owned = raw_prompt.to_string();
     let is_pii_match = tokio::task::spawn_blocking(move || {
-        use rayon::prelude::*;
-        raw_prompt_owned.par_lines().any(|line| pii_regex().is_match(line))
+        pii_regex().is_match(&raw_prompt_owned)
     })
     .await
     .map_err(|e| GatewayError::ResponseBuild(format!("Regex task error: {}", e)))?;
@@ -116,7 +115,8 @@ pub async fn execute_proxy(
         let redacted = call_compliance_redact(&state.http_client, &state.compliance_url, &parsed_body, trace_ctx).await?;
         parsed_body = redacted;
         
-        let redacted_bytes = serde_json::to_vec(&parsed_body).unwrap_or_default();
+        let redacted_bytes = serde_json::to_vec(&parsed_body)
+            .map_err(|e| GatewayError::ResponseBuild(format!("Failed to serialize redacted body: {}", e)))?;
         (axum::body::Bytes::from(redacted_bytes), Some(parsed_body))
     } else {
         (body_bytes.clone(), None)
@@ -165,9 +165,11 @@ pub async fn execute_proxy(
     let prep = prep_result?;
 
     // ── Stage 1.5 & 1.6: Pre-flight checks (Token-Bucket & Loop Detection) ─────
-    let lazy_parsed = parsed_value_if_needed.unwrap_or_else(|| {
-        serde_json::from_slice(&body_bytes).unwrap_or_default()
-    });
+    let lazy_parsed = match parsed_value_if_needed {
+        Some(v) => v,
+        None => serde_json::from_slice(&body_bytes)
+            .map_err(|e| GatewayError::ResponseBuild(format!("Invalid JSON body: {}", e)))?,
+    };
 
     let token_future = enforce_token_bucket(state, tenant_id, raw_prompt);
     let loop_future = crate::usecases::behavior_guard::enforce_loop_detection(state, &trace_ctx.session_id, &lazy_parsed);
@@ -383,7 +385,8 @@ fn handle_cache_hit(
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     });
 
-    let bytes = serde_json::to_vec(&mock_response).unwrap_or_default();
+    let bytes = serde_json::to_vec(&mock_response)
+        .map_err(|e| GatewayError::ResponseBuild(format!("Failed to serialize mock response: {}", e)))?;
     let latency_ms = start_time.elapsed().as_millis() as u32;
 
     let requested_provider = get_requested_provider(state, model_name);
@@ -530,12 +533,46 @@ fn handle_streaming_response(
     let raw_prompt_c = raw_prompt.to_string();
     let trace_ctx_c = trace_ctx.clone();
 
-    // Stream the body directly to Axum
-    let body_stream = axum::body::Body::from_stream(upstream_response.bytes_stream());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<bytes::Bytes>();
 
-    // Spawn a lightweight task just to record telemetry since we bypass full aggregation
+    use futures::StreamExt;
+    let stream = upstream_response.bytes_stream().map(move |chunk_res| {
+        if let Ok(chunk) = &chunk_res {
+            let _ = tx.send(chunk.clone());
+        }
+        chunk_res
+    });
+
+    let body_stream = axum::body::Body::from_stream(stream);
+
+    // Spawn a lightweight task to parse tokens and record telemetry
     tokio::spawn(async move {
+        let mut total_tokens = 0;
+        let mut response_bytes = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            response_bytes.extend_from_slice(&chunk);
+            if let Ok(text) = std::str::from_utf8(&chunk) {
+                if text.contains("\"usage\"") {
+                    if let Some(idx) = text.find("\"total_tokens\":") {
+                        let sub = &text[idx + 15..];
+                        let end = sub.find(|c: char| !c.is_ascii_digit()).unwrap_or(sub.len());
+                        if let Ok(t) = sub[..end].trim().parse::<u32>() {
+                            total_tokens = t;
+                        }
+                    }
+                }
+            }
+        }
+
+        if total_tokens == 0 {
+            let estimated_prompt = (raw_prompt_c.len() / CHARS_PER_TOKEN).max(1) as u32;
+            let estimated_completion = (response_bytes.len() / CHARS_PER_TOKEN).max(1) as u32;
+            total_tokens = estimated_prompt + estimated_completion;
+        }
+
         let latency_ms = start_time.elapsed().as_millis() as u32;
+
+        sync_token_bucket(&state_c, &tenant_id_c, (raw_prompt_c.len() / CHARS_PER_TOKEN).max(1) as u32, total_tokens).await;
 
         fire_async_telemetry(
             &state_c,
@@ -545,9 +582,9 @@ fn handle_streaming_response(
             &trace_ctx_c,
             upstream_status,
             latency_ms,
-            0,
+            total_tokens,
             false,
-            None,
+            Some(response_bytes),
             requested_provider,
             executed_provider,
             is_hot_swapped,
@@ -579,36 +616,40 @@ async fn handle_buffered_response(
     executed_provider: String,
     is_hot_swapped: u8,
 ) -> Result<ProxyResult, GatewayError> {
-    let mut body_bytes = upstream_response.bytes().await.unwrap_or_default().to_vec();
+    let mut body_bytes = upstream_response.bytes().await
+        .map_err(|e| GatewayError::ResponseBuild(format!("Failed to read upstream body: {}", e)))?.to_vec();
     let latency_ms = start_time.elapsed().as_millis() as u32;
 
     let config = crate::infrastructure::llm_router::get_provider_config(&executed_provider);
-    if let Some(c) = config {
-        let translator = crate::infrastructure::llm_router::get_translator(&c.schema_format);
-        if let Ok(raw_json) = serde_json::from_slice::<Value>(&body_bytes) {
-            match translator.unify_response(raw_json) {
-                Ok(unified_json) => {
-                    if let Ok(unified_bytes) = serde_json::to_vec(&unified_json) {
-                        body_bytes = unified_bytes;
-                    }
+    let translator = crate::infrastructure::llm_router::get_translator(&config.schema_format);
+    if let Ok(raw_json) = serde_json::from_slice::<Value>(&body_bytes) {
+        match translator.unify_response(raw_json) {
+            Ok(unified_json) => {
+                if let Ok(unified_bytes) = serde_json::to_vec(&unified_json) {
+                    body_bytes = unified_bytes;
                 }
-                Err(e) => {
-                    warn!("Response unification error: {}", e);
-                }
+            }
+            Err(e) => {
+                warn!("Response unification error: {}", e);
             }
         }
     }
 
+    let estimated_tokens = (raw_prompt.len() / CHARS_PER_TOKEN).max(1) as u32;
+
     let actual_tokens = serde_json::from_slice::<Value>(&body_bytes)
         .ok()
         .and_then(|v| v["usage"]["total_tokens"].as_u64())
-        .unwrap_or(0) as u32;
+        .map(|v| v as u32)
+        .unwrap_or_else(|| {
+            let estimated_completion = (body_bytes.len() / CHARS_PER_TOKEN).max(1) as u32;
+            estimated_tokens + estimated_completion
+        });
 
     // Bug 3 Fix: Reconcile the Redis token bucket with the actual usage reported by
     // the LLM provider. The rate-limiter deducted an *estimate* at request time;
     // now we compute the delta and credit any overestimation back, preventing drift
     // that would cause tenants to be incorrectly throttled over time.
-    let estimated_tokens = (raw_prompt.len() / CHARS_PER_TOKEN).max(1) as u32;
     sync_token_bucket(state, tenant_id, estimated_tokens, actual_tokens).await;
 
     spawn_telemetry(

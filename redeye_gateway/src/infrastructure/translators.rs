@@ -555,10 +555,9 @@ impl BaseTranslator for AnthropicTranslator {
                     "finish_reason": serde_json::Value::Null
                 }]
             });
-            return Ok(format!(
-                "data: {}",
-                serde_json::to_string(&mock_openai_chunk).unwrap_or_default()
-            ));
+            let chunk_str = serde_json::to_string(&mock_openai_chunk)
+                .map_err(|e| AppError::TranslationError(format!("Failed to serialize chunk: {}", e)))?;
+            return Ok(format!("data: {}", chunk_str));
         }
 
         if event_type == "message_stop" {

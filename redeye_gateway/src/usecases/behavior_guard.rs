@@ -43,7 +43,7 @@ const BURN_KEY_TTL_SECS: i64 = 120;
 fn current_epoch_minute() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs()
         / 60
 }
@@ -147,7 +147,10 @@ pub async fn enforce_agentic_loop_budget(
     state: &Arc<AppState>,
     session_id: &str,
 ) -> Result<u64, GatewayError> {
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|e| GatewayError::AgentLoopBudgetExceeded(format!("System time drift: {}", e)))?
+        .as_millis() as u64;
     let window_start = now.saturating_sub(300_000); // 5 minutes
     
     let key = format!("session:{}:agent_loops", session_id);
@@ -213,7 +216,10 @@ pub async fn enforce_burn_rate(
     let mut conn = state.redis_conn.clone();
 
     let current_spend: f64 = match conn.get::<_, Option<String>>(&key).await {
-        Ok(Some(v)) => v.parse::<f64>().unwrap_or(0.0),
+        Ok(Some(v)) => v.parse::<f64>().map_err(|e| {
+            error!(error = %e, "Burn rate: Redis value corrupted — failing closed");
+            GatewayError::BurnRateExceeded("Burn rate limit enforcement failed due to corrupted tracking data".into())
+        })?,
         Ok(None) => 0.0,
         Err(e) => {
             error!(error = %e, "Burn rate: Redis GET failed — failing open");

@@ -147,7 +147,7 @@ async fn handle_jwt(
     })?;
 
     req.headers_mut()
-        .insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
+        .insert("x-tenant-id", tenant_id.to_string().parse().expect("UUID string is always a valid header value"));
 
     // CRUCIAL: Inject decoded claims into request extensions
     req.extensions_mut().insert(claims);
@@ -185,7 +185,7 @@ async fn handle_api_key(
 
     let tenant_id: Uuid = tenant_row.get("tenant_id");
     req.headers_mut()
-        .insert("x-tenant-id", tenant_id.to_string().parse().unwrap());
+        .insert("x-tenant-id", tenant_id.to_string().parse().expect("UUID string is always a valid header value"));
 
     // Inject synthetic claims into extensions for API keys
     req.extensions_mut().insert(Claims {

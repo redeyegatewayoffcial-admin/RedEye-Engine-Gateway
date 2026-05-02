@@ -41,7 +41,7 @@ pub fn get_translator(schema: &SchemaFormat) -> Box<dyn BaseTranslator> {
     }
 }
 
-pub fn get_provider_config(provider_name: &str) -> Option<ProviderConfig> {
+pub fn get_provider_config(provider_name: &str) -> ProviderConfig {
     let provider = provider_name.to_lowercase();
     let (schema, auth) = if provider.contains("anthropic") {
         (SchemaFormat::Anthropic, AuthScheme::XApiKey)
@@ -51,12 +51,12 @@ pub fn get_provider_config(provider_name: &str) -> Option<ProviderConfig> {
         (SchemaFormat::OpenAI, AuthScheme::Bearer)
     };
 
-    Some(ProviderConfig {
+    ProviderConfig {
         id: provider.clone(),
         base_url: String::new(), // Dynamic base_url used directly from model config
         auth_scheme: auth,
         schema_format: schema,
-    })
+    }
 }
 
 fn is_retryable_error(status: u16) -> bool {
@@ -89,8 +89,9 @@ pub async fn prep_upstream_request(
         #[serde(borrow)]
         model: Option<std::borrow::Cow<'a, str>>,
     }
-    let extracted: ExtractModel = serde_json::from_slice(body_bytes).unwrap_or(ExtractModel { model: None });
-    let model_owned = extracted.model.as_deref().unwrap_or("gpt-4o").to_string();
+    let extracted: ExtractModel = serde_json::from_slice(body_bytes)
+        .map_err(|e| GatewayError::ResponseBuild(format!("Invalid JSON request: {}", e)))?;
+    let model_owned = extracted.model.as_deref().ok_or_else(|| GatewayError::ResponseBuild("Missing 'model' field in JSON request".to_string()))?.to_string();
     let model = model_owned.as_str();
 
     // 2. Load the lock-free state
@@ -129,12 +130,7 @@ pub async fn prep_upstream_request(
 
     // 5. Apply the Base URL and API Key dynamically
     let provider_id = model_config.schema_format.as_str();
-    let config = get_provider_config(provider_id).unwrap_or_else(|| ProviderConfig {
-        id: provider_id.to_string(),
-        base_url: model_config.base_url.clone(),
-        auth_scheme: AuthScheme::Bearer,
-        schema_format: SchemaFormat::OpenAI,
-    });
+    let config = get_provider_config(provider_id);
 
     let requested_provider = config.id.clone();
     let executed_provider = config.id.clone();
@@ -300,7 +296,9 @@ fn build_provider_request(
         // Quick extraction to check stream flag for Gemini
         #[derive(serde::Deserialize)]
         struct ExtractStream { stream: Option<bool> }
-        let is_stream = serde_json::from_slice::<ExtractStream>(body_bytes).unwrap_or(ExtractStream { stream: None }).stream.unwrap_or(false);
+        let extracted_stream = serde_json::from_slice::<ExtractStream>(body_bytes)
+            .map_err(|e| GatewayError::ResponseBuild(format!("Invalid JSON body for stream check: {}", e)))?;
+        let is_stream = extracted_stream.stream.unwrap_or(false);
         if is_stream {
             format!("{}/{}:streamGenerateContent", base_url, model)
         } else {
