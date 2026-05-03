@@ -198,6 +198,9 @@ impl ChaosTestEnv {
                 Arc::new(rs)
             },
             circuit_breaker: moka::future::Cache::builder().build(),
+            loop_fallback_cache: moka::future::Cache::builder().build(),
+            mcp_registry: redeye_gateway::infrastructure::mcp_registry::McpConnectionRegistry::empty(),
+            tool_registry: redeye_gateway::usecases::tool_router::ToolRegistry::empty(),
         });
 
         Self {

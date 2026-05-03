@@ -134,6 +134,16 @@ async fn main() {
         .time_to_live(std::time::Duration::from_secs(300))
         .build();
 
+    // ── Tunnel 3 Phase 1: MCP Connection Registry ─────────────────────────────
+    // Loaded from MCP_TOOL_REGISTRY env var (JSON object). Returns an empty
+    // registry (pre-fetching disabled) if the variable is unset or malformed.
+    let mcp_registry = infrastructure::mcp_registry::McpConnectionRegistry::from_env();
+
+    // ── Tunnel 3 Phase 2: MCP Tool Schema Registry ────────────────────────────
+    // Loaded from MCP_TOOL_SCHEMA_REGISTRY env var (JSON array of descriptors).
+    // Returns an empty registry (injection disabled) if unset or malformed.
+    let tool_registry = usecases::tool_router::ToolRegistry::from_env();
+
     let state = Arc::new(AppState {
         http_client: http_client.clone(),
         cache_grpc_client,
@@ -151,6 +161,8 @@ async fn main() {
         routing_state: Arc::new(RoutingState::new()),
         circuit_breaker,
         loop_fallback_cache,
+        mcp_registry,
+        tool_registry,
     });
 
     infrastructure::config_subscriber::spawn_config_subscriber(

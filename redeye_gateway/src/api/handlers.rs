@@ -129,6 +129,67 @@ pub async fn chat_completions(
             .and_then(|v| v.to_str().ok()),
     );
 
+    // ── Tunnel 3 Phase 1: Speculative MCP Pre-Fetching (Hardened) ────────────
+    // FSM-based scan (zero-allocation, chunk-boundary safe).
+    // Backpressure: try_acquire_owned() on a 20-slot semaphore.  If all slots
+    // are busy the warm-up is silently dropped — this is best-effort advisory.
+    // Stateful handoff: warm_connection writes its result into registry.warmed
+    // so Phase 4 fan-out can skip redundant TCP handshakes.
+    if !state.mcp_registry.is_empty() {
+        if let Some(tool_name) = state.mcp_registry.find_tool_hint(&body_bytes) {
+            if let Some(sse_url) = state.mcp_registry.get_url(&tool_name) {
+                match Arc::clone(&state.mcp_registry.prefetch_sem).try_acquire_owned() {
+                    Ok(permit) => {
+                        let registry = Arc::clone(&state.mcp_registry);
+                        let warm_client = state.http_client.clone();
+                        tokio::spawn(async move {
+                            crate::infrastructure::mcp_registry::McpConnectionRegistry::warm_connection(
+                                registry,
+                                warm_client,
+                                tool_name,
+                                sse_url,
+                                permit,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            "Tunnel 3 Phase 1 — prefetch semaphore full (20 in-flight); \
+                             dropping warm-up (best-effort)"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Tunnel 3 Phase 2: Lazy Schema Loading ──────────────────────────────
+    // Create a per-request bumpalo arena on the stack.  The arena holds
+    // intermediate byte allocations during JSON serialisation; it is freed
+    // in O(1) when this block scope ends.
+    //
+    // `body_bytes` is shadowed: if schemas were stripped the binding now
+    // points to the modified bytes; otherwise it points to the original
+    // allocation (zero-copy pass-through).
+    let body_bytes: axum::body::Bytes = if !state.tool_registry.is_empty() {
+        let arena = bumpalo::Bump::new();
+        match state.tool_registry.inject_lazy_summaries(&body_bytes, &arena) {
+            Some(modified) => {
+                tracing::debug!(
+                    original_len = body_bytes.len(),
+                    modified_len = modified.len(),
+                    "Tunnel 3 Phase 2 — using schema-stripped body for upstream LLM call"
+                );
+                axum::body::Bytes::from(modified)
+            }
+            // No registered tools found or no schemas present — forward unchanged.
+            None => body_bytes,
+        }
+    } else {
+        body_bytes
+    };
+
     // Delegate to use case
     let result = proxy::execute_proxy(
         &state,
@@ -986,6 +1047,8 @@ mod tests {
                 routing_state,
                 circuit_breaker,
                 loop_fallback_cache,
+                mcp_registry: crate::infrastructure::mcp_registry::McpConnectionRegistry::empty(),
+                tool_registry: crate::usecases::tool_router::ToolRegistry::empty(),
             }
         };
 

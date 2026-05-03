@@ -28,6 +28,14 @@ pub struct AppState {
     pub circuit_breaker: moka::future::Cache<String, ()>,
     /// Fallback L1 cache for agentic loop tracking when Redis is unavailable.
     pub loop_fallback_cache: moka::future::Cache<String, std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Tunnel 3 Phase 1: Lock-free MCP tool registry.
+    /// Maps registered MCP tool names → SSE endpoint URLs for speculative pre-fetching.
+    /// Populated from `MCP_TOOL_REGISTRY` env var at startup; empty registry = pre-fetching disabled.
+    pub mcp_registry: std::sync::Arc<crate::infrastructure::mcp_registry::McpConnectionRegistry>,
+    /// Tunnel 3 Phase 2: Immutable MCP tool schema registry.
+    /// Holds tool descriptors (name + 1-line summary + full schema) for lazy schema injection.
+    /// Populated from `MCP_TOOL_SCHEMA_REGISTRY` env var at startup; empty = injection disabled.
+    pub tool_registry: std::sync::Arc<crate::usecases::tool_router::ToolRegistry>,
 }
 
 /// Trace context propagated through every request.

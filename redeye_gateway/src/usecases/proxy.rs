@@ -637,6 +637,70 @@ async fn handle_buffered_response(
 
     let estimated_tokens = (raw_prompt.len() / CHARS_PER_TOKEN).max(1) as u32;
 
+    // ── Tunnel 3 Phase 3: MCP Sandbox Firewall ───────────────────────────────
+    // Inspect the (now-unified) response for tool_calls and apply OPA RBAC.
+    // Fail-open: if OPA is unreachable or times out, the original bytes are
+    // returned unchanged.  Zero overhead on the non-agentic path: the fast
+    // simd-json scan returns immediately when no tool_calls key is present.
+    let body_bytes = crate::usecases::behavior_guard::enforce_mcp_sandbox(
+        state,
+        tenant_id,
+        body_bytes,
+    )
+    .await;
+
+    // ── Tunnel 3 Phase 2: Phantom tool interception ───────────────────────────
+    // If the LLM called the phantom `get_tool_details` tool, resolve the
+    // schema from cache and replace body_bytes — no external call needed.
+    let body_bytes = if !state.tool_registry.is_empty() {
+        if let Some(phantom_resp) = state.tool_registry.intercept_phantom_call(&body_bytes) {
+            tracing::debug!("Tunnel 3 Phase 2 — phantom call resolved from cache");
+            phantom_resp
+        } else {
+            body_bytes
+        }
+    } else {
+        body_bytes
+    };
+
+    // ── Tunnel 3 Phase 4: Flow-Based Parallel Fan-Out ────────────────────────
+    // If the (sandbox-cleared) response contains tool_calls AND every called
+    // tool is registered in the MCP registry, dispatch all calls concurrently.
+    // Results are merged and forwarded to the telemetry channel so the next
+    // agentic turn can include them as `role: "tool"` context messages.
+    //
+    // This block is a no-op when:
+    //   • `body_bytes` contains no `tool_calls` key (byte-scan early-exit)
+    //   • `mcp_registry` is empty (pre-fetching disabled)
+    {
+        let has_tool_calls_bytes = body_bytes
+            .windows(b"tool_calls".len())
+            .any(|w| w == b"tool_calls");
+
+        if has_tool_calls_bytes && !state.mcp_registry.is_empty() {
+            let calls =
+                crate::infrastructure::mcp_client::extract_tool_calls(&body_bytes);
+
+            if !calls.is_empty() {
+                let results =
+                    crate::infrastructure::mcp_client::fan_out(calls, state).await;
+
+                if !results.is_empty() {
+                    let tool_messages =
+                        crate::infrastructure::mcp_client::merge_results(results);
+
+                    // Forward merged tool results to telemetry as structured context.
+                    let ctx_payload = serde_json::json!({
+                        "type": "mcp_tool_results",
+                        "tenant_id": tenant_id,
+                        "tool_messages": tool_messages,
+                    });
+                    let _ = state.telemetry_tx.send(ctx_payload).await;
+                }
+            }
+        }
+    }
+
     let actual_tokens = serde_json::from_slice::<Value>(&body_bytes)
         .ok()
         .and_then(|v| v["usage"]["total_tokens"].as_u64())

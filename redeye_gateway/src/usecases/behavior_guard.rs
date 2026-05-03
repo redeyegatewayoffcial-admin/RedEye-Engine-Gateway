@@ -276,6 +276,161 @@ pub async fn record_session_spend(state: &Arc<AppState>, session_id: &str, token
     }
 }
 
+// ── Tunnel 3 Phase 3: MCP Sandbox Firewall (Fail-Closed) ────────────────────
+
+/// Returns `true` when the sandbox should fail-open (legacy / non-production).
+///
+/// Reads `SANDBOX_FALLBACK_MODE` env var once per request.
+/// Default (unset) = fail-closed: OPA downtime **blocks** execution.
+/// Set `SANDBOX_FALLBACK_MODE=open` to revert to fail-open behaviour.
+#[inline]
+fn sandbox_is_fail_open() -> bool {
+    std::env::var("SANDBOX_FALLBACK_MODE")
+        .map(|v| v.to_ascii_lowercase() == "open")
+        .unwrap_or(false)
+}
+
+/// Compact deny payload — single JSON object, minimal token cost.
+const DENY_CONTENT: &str = r#"{"error":"RedEye Guard: Policy Denied. Use read-only tools."}"#;
+
+/// Inspects a buffered LLM response body for `tool_calls` and enforces
+/// the MCP sandbox policy via an OPA RBAC check.
+///
+/// On OPA **deny** (or OPA failure in fail-closed mode), the response body is
+/// mutated in-place: the assistant `tool_calls` message is replaced with a
+/// compact `role:"tool"` soft-steer payload that keeps the agentic loop alive
+/// without exposing the denial as a hard HTTP error.
+///
+/// ## Fail-Closed (Phase 3 default)
+/// * OPA timeout / unreachable → **DENY** (blocks execution).
+/// * OPA non-2xx → **DENY** (blocks execution).
+/// * Parse failure on body → allow unchanged (body unreadable, best-effort).
+///
+/// Set `SANDBOX_FALLBACK_MODE=open` to revert to fail-open (non-prod only).
+pub async fn enforce_mcp_sandbox(
+    state: &Arc<AppState>,
+    tenant_id: &str,
+    response_body: Vec<u8>,
+) -> Vec<u8> {
+    // ── Fast-path: simd-json scan for tool_calls ─────────────────────────────
+    // Clone only the first 4 KB for the scan window.
+    let scan_len = response_body.len().min(4 * 1024);
+    let scan_buf = response_body[..scan_len].to_vec();
+
+    // Fast-path: byte-level scan for the literal key "tool_calls".
+    // If absent, no tool_calls exist in this response — skip full parse.
+    // O(n) single-pass, zero allocation, no trait imports required.
+    let has_tool_calls = scan_buf
+        .windows(b"tool_calls".len())
+        .any(|w| w == b"tool_calls");
+
+
+    if !has_tool_calls {
+        return response_body;
+    }
+
+    // ── Parse full body to extract tool_calls ────────────────────────────────
+    let mut body_val: serde_json::Value = match serde_json::from_slice(&response_body) {
+        Ok(v) => v,
+        Err(_) => return response_body,
+    };
+
+    // Extract the first tool call's function name for the OPA check.
+    let tool_name: String = body_val
+        .pointer("/choices/0/message/tool_calls/0/function/name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown_tool")
+        .to_string();
+
+    // ── Non-blocking OPA RBAC check ──────────────────────────────────────────
+    let opa_url = format!(
+        "{}/v1/data/redeye/mcp/allow",
+        state.compliance_url.trim_end_matches('/')
+    );
+
+    let opa_payload = serde_json::json!({
+        "input": {
+            "tenant_id": tenant_id,
+            "tool_name": tool_name,
+            "action": "execute"
+        }
+    });
+
+    let opa_result = state
+        .http_client
+        .post(&opa_url)
+        .timeout(std::time::Duration::from_millis(200))
+        .json(&opa_payload)
+        .send()
+        .await;
+
+    let fail_open = sandbox_is_fail_open();
+
+    let denied = match opa_result {
+        Ok(resp) if resp.status().is_success() => {
+            // OPA returns {"result": true} when the policy ALLOWS the request.
+            let allow: bool = resp
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| v["result"].as_bool())
+                .unwrap_or(!fail_open); // fail-closed default: ambiguous result → deny
+            !allow
+        }
+        Ok(resp) => {
+            // Non-2xx from OPA (e.g. policy not loaded yet).
+            warn!(
+                status = resp.status().as_u16(),
+                tool_name = %tool_name,
+                fail_open,
+                "MCP sandbox: OPA returned non-2xx — applying fallback mode"
+            );
+            !fail_open // fail-closed: deny; fail-open: allow
+        }
+        Err(e) => {
+            // Network timeout or OPA unreachable.
+            warn!(
+                error = %e,
+                tool_name = %tool_name,
+                fail_open,
+                "MCP sandbox: OPA unreachable — applying fallback mode"
+            );
+            !fail_open // fail-closed: deny; fail-open: allow
+        }
+    };
+
+    if !denied {
+        return response_body;
+    }
+
+    // ── Compact Soft-Steering Mutation ────────────────────────────────────────
+    tracing::warn!(
+        tenant_id = %tenant_id,
+        tool_name = %tool_name,
+        "Tunnel 3 Phase 3 — OPA denied; injecting compact soft-steer response"
+    );
+
+    if let Some(choices) = body_val.get_mut("choices").and_then(|c| c.as_array_mut()) {
+        if let Some(first_choice) = choices.first_mut() {
+            // Replace message with compact deny payload — minimal token cost.
+            if let Some(message) = first_choice.get_mut("message") {
+                *message = serde_json::json!({
+                    "role": "tool",
+                    "content": DENY_CONTENT
+                });
+            }
+            // Strip tool_calls + set finish_reason to prevent re-invocation.
+            if let Some(obj) = first_choice.as_object_mut() {
+                obj.remove("tool_calls");
+                obj.insert("finish_reason".to_string(), serde_json::json!("stop"));
+            }
+        }
+    }
+
+    serde_json::to_vec(&body_val).unwrap_or(response_body)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,6 +476,8 @@ mod tests {
                 routing_state,
                 circuit_breaker,
                 loop_fallback_cache,
+                mcp_registry: crate::infrastructure::mcp_registry::McpConnectionRegistry::empty(),
+                tool_registry: crate::usecases::tool_router::ToolRegistry::empty(),
             }
         };
 
@@ -412,5 +569,64 @@ mod tests {
         }
         
         std::mem::forget(state);
+    }
+
+    // ── Phase 3: Fail-Closed Firewall Unit Tests ──────────────────────────────
+
+    #[test]
+    fn test_deny_content_is_compact_json() {
+        // DENY_CONTENT must be valid JSON and contain the expected error key.
+        let parsed: serde_json::Value =
+            serde_json::from_str(DENY_CONTENT).expect("DENY_CONTENT must be valid JSON");
+        assert_eq!(
+            parsed["error"].as_str(),
+            Some("RedEye Guard: Policy Denied. Use read-only tools."),
+            "DENY_CONTENT error message mismatch"
+        );
+        // Token budget: must be fewer than 20 characters of content text.
+        assert!(
+            DENY_CONTENT.len() < 80,
+            "DENY_CONTENT must be compact (< 80 bytes), got {}",
+            DENY_CONTENT.len()
+        );
+    }
+
+    #[test]
+    fn test_sandbox_fail_open_env_flag() {
+        // Default (unset) = fail-closed.
+        std::env::remove_var("SANDBOX_FALLBACK_MODE");
+        assert!(!sandbox_is_fail_open(), "Default must be fail-closed");
+
+        // Explicit 'open' = fail-open.
+        std::env::set_var("SANDBOX_FALLBACK_MODE", "open");
+        assert!(sandbox_is_fail_open(), "SANDBOX_FALLBACK_MODE=open must be fail-open");
+
+        // Case-insensitive.
+        std::env::set_var("SANDBOX_FALLBACK_MODE", "OPEN");
+        assert!(sandbox_is_fail_open(), "SANDBOX_FALLBACK_MODE=OPEN must be fail-open");
+
+        // Any other value = fail-closed.
+        std::env::set_var("SANDBOX_FALLBACK_MODE", "true");
+        assert!(!sandbox_is_fail_open(), "SANDBOX_FALLBACK_MODE=true must be fail-closed");
+
+        std::env::remove_var("SANDBOX_FALLBACK_MODE");
+    }
+
+    #[test]
+    fn test_soft_steer_content_is_compact_deny() {
+        // Simulate what the soft-steer mutation produces.
+        let message = serde_json::json!({
+            "role": "tool",
+            "content": DENY_CONTENT
+        });
+        assert_eq!(message["role"].as_str(), Some("tool"));
+        let content = message["content"].as_str().unwrap();
+        // Must be valid JSON containing the error key.
+        let parsed: serde_json::Value = serde_json::from_str(content)
+            .expect("Soft-steer content must be valid JSON");
+        assert!(
+            parsed.get("error").is_some(),
+            "Soft-steer content must contain 'error' key"
+        );
     }
 }

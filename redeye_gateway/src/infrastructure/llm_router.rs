@@ -411,6 +411,8 @@ mod tests {
                 routing_state,
                 circuit_breaker,
                 loop_fallback_cache,
+                mcp_registry: crate::infrastructure::mcp_registry::McpConnectionRegistry::empty(),
+                tool_registry: crate::usecases::tool_router::ToolRegistry::empty(),
             }
         };
 
